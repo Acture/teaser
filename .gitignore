@@ -1,0 +1,23 @@
+# Local agent/session handoff
+.codex/
+
+# macOS
+.DS_Store
+
+# Rust
+target/
+!Cargo.lock
+
+# Zig / Ghostty
+.zig-cache/
+zig-out/
+
+# Xcode / Swift
+DerivedData/
+.build/
+*.xcuserstate
+xcuserdata/
+
+# Local runtime state
+*.sqlite-shm
+*.sqlite-wal

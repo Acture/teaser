@@ -1,0 +1,12 @@
+TACO — Terminal Application Composition & Orchestration
+Copyright (C) 2026 TACO contributors
+
+Licensed under the GNU Affero General Public License, version 3 or (at your option)
+any later version. See LICENSE.
+
+The TACO name and project branding are not licensed under the AGPL. See
+TRADEMARKS.md.
+
+This repository currently contains design and planning documents only. Accurate
+third-party notices will be added when third-party source or binaries are actually
+vendored or distributed.

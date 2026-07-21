@@ -1,0 +1,53 @@
+diff --git a/src/terminal/Screen.zig b/src/terminal/Screen.zig
+index ea8ca1445..50524c6b8 100644
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -8706,6 +8706,48 @@ test "Screen: selectOutput" {
+     }
+ }
+ 
++test "Screen: tracked semantic output survives reflow" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var s = try init(alloc, .{ .cols = 80, .rows = 24, .max_scrollback = 0 });
++    defer s.deinit();
++
++    s.cursorSetSemanticContent(.{ .prompt = .initial });
++    try s.testWriteString("$ ");
++    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
++    try s.testWriteString("printf alpha-beta-gamma\n");
++    s.cursorSetSemanticContent(.output);
++    try s.testWriteString("alpha-beta-gamma\nsecond-line\n");
++    s.cursorSetSemanticContent(.{ .prompt = .initial });
++    try s.testWriteString("$ ");
++
++    const output_pin = s.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?;
++    const output = s.selectOutput(output_pin).?;
++    var tracked = try output.track(&s);
++    defer tracked.deinit(&s);
++
++    {
++        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        defer alloc.free(actual);
++        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++    }
++
++    try s.resize(.{ .cols = 7, .rows = 24, .reflow = true });
++    {
++        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        defer alloc.free(actual);
++        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++    }
++
++    try s.resize(.{ .cols = 80, .rows = 24, .reflow = true });
++    {
++        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        defer alloc.free(actual);
++        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++    }
++}
++
+ test "Screen: selectionString basic" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
