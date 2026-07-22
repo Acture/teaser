@@ -17,14 +17,22 @@ TACO.app
 │   ├── DesktopLayout                          TACO windows + external companions
 │   └── focus, actions, clipboard, permissions
 ├── TerminalSurfaceAdapter
-│   └── pinned libghostty                      PTY + Metal + IME + selection
+│   └── pinned libghostty                      VT state + Metal + IME + selection
+├── AttachmentClient                           bounded local binary frames
+└── low-frequency typed control
+
+tacod
+├── SessionRegistry                            exact Session / Surface leases
+├── PTY session workers                        child + master + replay + resize
+├── control.sock                               JSON handshake → binary attach
 ├── TacoCore                                   Rust, low-frequency UniFFI boundary
 │   ├── WorkspaceStore / BlockStore            SQLite WAL
 │   ├── ACP client                             Claude + Codex
 │   ├── tmux control parser
 │   ├── taco-bridge                            pane byte-stream helper
 │   └── CLI IPC                                per-user Unix socket
-└── taco CLI
+
+taco CLI                                       low-frequency control client
 ```
 
 The host is macOS-first because AppKit already supplies the hard parts TACO should
@@ -36,38 +44,57 @@ window lifecycle, and native view composition.
 Swift/AppKit owns live view lifetime, window and pane geometry, focus, native input,
 clipboard, image preview, and Accessibility permission UX.
 
-Rust owns the authoritative persistent workspace model, capabilities, block
-metadata, ACP state, tmux parsing, backend lifecycle, CLI IPC, and diagnostics.
+`tacod` owns each TACO Session's canonical child process, PTY master, attachment
+lease, replay offsets, backend lifecycle, and eventual block state. Rust also owns
+the authoritative persistent workspace model, capabilities, ACP state, tmux
+parsing, CLI IPC, and diagnostics.
 
 Raw PTY output, keystrokes, pointer motion, IME composition, and render callbacks
-must never cross UniFFI. Swift sends only low-frequency commands and semantic
-events to Rust. This prevents serialization and scheduling from entering the
-terminal hot path.
+must never cross UniFFI, JSON, or SQLite. A TerminalSurface attaches to one exact
+Session through a bounded binary Unix-socket stream; JSON is used only for the
+initial handshake. Swift sends only low-frequency model commands and semantic
+events through the typed control boundary.
 
 ## 3. Terminal foundation
 
-TACO consumes the full Ghostty embedding API rather than `libghostty-vt` alone.
-The full API owns the PTY, terminal state, renderer, input, selection, and platform
-surface. Its header explicitly says it is not yet a general-purpose stable API and
-that the Ghostty macOS app is its current consumer, so TACO isolates it behind one
-adapter and pins an exact revision.
+TACO consumes the full Ghostty embedding API rather than implementing a second VT
+renderer. Upstream's full surface currently owns its PTY together with terminal
+state, renderer, input, selection, and platform surface. TACO's architecture instead
+requires `tacod` to own the canonical PTY, so an external-input/output surface mode
+is an explicit unproven gate, not an assumed feature. The adapter pins one exact
+revision because Ghostty's header says the API is not yet general-purpose or stable.
 
 Initial baseline:
 
 - Ghostty tag: `v1.3.1`
 - commit: `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`
-- future source location: `vendor/ghostty`
-- future TACO-only changes: `patches/ghostty`, applied and tested explicitly
+- source location: a pinned Git submodule under `vendor/ghostty`
+- provenance and parent-owned TACO patches: documented in `vendor/README.md`
 
-The TACO codebase contains no Zig except a minimal patch at the Ghostty boundary.
-No TACO workspace or agent behavior is implemented inside Ghostty.
+The submodule remains clean. TACO keeps narrow Zig experiments under
+`patches/ghostty`; no workspace or agent behavior is implemented inside Ghostty.
 
 The M0 spike must prove a clean-clone build, bundled runtime resources, AppKit
 main-thread/lifetime rules, Ghostty tick/wakeup handling, IME, 120 Hz drawing, and a
-signed app bundle. The proposed semantic patch is an assumption, not an established
-fact. If semantic block support requires changing Ghostty's terminal model, reflow,
-or renderer rather than exporting existing state, implementation stops and the fork
-cost is reassessed.
+signed app bundle. It must also prove that externally supplied Session bytes can
+drive the full surface and that surface input/resize can return to `tacod` without a
+second PTY. CP-M0.6 proves only the daemon-owned PTY and detachable binary data plane.
+If external transport or semantic blocks require redesigning Ghostty's terminal
+model, reflow, or renderer, implementation stops and the fork cost is reassessed.
+
+CP-M0.6 uses `portable-pty` 0.9.0 only to validate the macOS data-plane shape.
+CP-M0.7 verifies that its initial child is both the process-group and session
+leader, then explicitly terminates that owning group with bounded
+`SIGTERM`-to-`SIGKILL` escalation. Non-reaping exit observation keeps the PGID
+reserved while natural leader exit cleans up remaining members. The gate covers
+stubborn descendants that remain in that PGID. It does not claim to reach
+foreground or background jobs moved into other PGIDs by interactive shell job
+control.
+
+The foreground daemon does not yet expose PTY creation. Before a user shell is
+wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
+risk, bounded input backpressure, and cross-PGID session cleanup. Working-directory
+selection is intentionally absent until the Checkout resolver can enforce it.
 
 ## 4. Surface and layout model
 
@@ -180,26 +207,24 @@ ACP does not replace PTY, LSP, DAP, workspace, or multiplexer protocols.
 
 ## 8. Multiplexing and remote sessions
 
-TACO owns visible layout. tmux is initially a persistence backend through its
-documented control mode.
+TACO owns visible layout. Every TACO-owned Session passes through `tacod`, even
+when it has only one Surface. This means lifecycle and byte-stream multiplexing,
+not simultaneous mirroring: a Session has at most one live Surface lease.
 
-The full Ghostty surface owns its PTY, so structured tmux sessions use a small Rust
-helper rather than forcing raw bytes through UniFFI:
+The direct Session path is:
 
 ```text
-tmux -CC or ssh host tmux -CC
-        ↕ control protocol
-TacoCore / taco-tmux
-        ↕ per-pane Unix byte stream
-taco-bridge child process
-        ↕ stdin/stdout on Ghostty-owned PTY
-TerminalSurface
+child process ↔ PTY slave
+                 ↕
+tacod PTY master → bounded replay / absolute offsets
+                 ↕ taco.attach.v1
+TerminalSurfaceAdapter ↔ pinned libghostty external transport gate
 ```
 
-`taco-bridge` reports `SIGWINCH` size changes and forwards arbitrary bytes without
-interpreting terminal data. Its feasibility gate covers Unicode, IME-produced input,
-bracketed paste, mouse protocol, resize, backpressure, `%pause/%continue`, and
-`capture-pane` repair.
+tmux remains a future persistence backend through documented control mode. Its
+helper must sit behind the same Session abstraction and report `SIGWINCH`, arbitrary
+bytes, backpressure, `%pause/%continue`, and `capture-pane` repair without sending
+terminal bytes through UniFFI.
 
 Remote modes are intentionally distinct:
 
@@ -218,7 +243,7 @@ also supplies its own UI for tmux modes that control mode does not render.
 
 Mosh synchronizes terminal state rather than providing a transparent byte stream,
 so TACO does not carry tmux control semantics through it. Mosh handles network
-roaming only while the owning TACO direct PTY remains alive; a TACO crash/restart
+roaming only while the owning `tacod` PTY remains alive; a daemon crash/restart
 terminates that Mosh session. Running `tmux attach` inside Mosh remains usable but
 opaque.
 
@@ -240,9 +265,10 @@ taco open <PATH>
 ```
 
 Workspace persistence includes pane layout, bounded block history, resources, and
-backend identity. Direct PTYs cannot survive app termination and restore as
-terminated placeholders. tmux-backed sessions reconnect to surviving pane IDs, with
-the semantic-degraded recovery rule above.
+backend identity. Direct PTYs survive Surface or GUI disconnection while their
+owning `tacod` process remains alive, but cannot survive daemon termination and
+restore as terminated placeholders. tmux-backed sessions reconnect to surviving
+pane IDs, with the semantic-degraded recovery rule above.
 
 ## 10. Distribution and maintenance
 

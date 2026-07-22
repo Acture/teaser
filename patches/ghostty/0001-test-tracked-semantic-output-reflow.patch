@@ -1,53 +1,74 @@
-diff --git a/src/terminal/Screen.zig b/src/terminal/Screen.zig
-index ea8ca1445..50524c6b8 100644
---- a/src/terminal/Screen.zig
-+++ b/src/terminal/Screen.zig
-@@ -8706,6 +8706,48 @@ test "Screen: selectOutput" {
+diff --git a/src/terminal/Terminal.zig b/src/terminal/Terminal.zig
+index 706f235..afbf6ed 100644
+--- a/src/terminal/Terminal.zig
++++ b/src/terminal/Terminal.zig
+@@ -11990,6 +11990,69 @@ test "Terminal: semantic prompt" {
      }
  }
  
-+test "Screen: tracked semantic output survives reflow" {
-+    const testing = std.testing;
++test "Terminal: tracked semantic output survives reflow through OSC 133" {
 +    const alloc = testing.allocator;
 +
-+    var s = try init(alloc, .{ .cols = 80, .rows = 24, .max_scrollback = 0 });
-+    defer s.deinit();
++    var t = try init(alloc, .{
++        .cols = 80,
++        .rows = 24,
++        .max_scrollback = 0,
++    });
++    defer t.deinit(alloc);
 +
-+    s.cursorSetSemanticContent(.{ .prompt = .initial });
-+    try s.testWriteString("$ ");
-+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
-+    try s.testWriteString("printf alpha-beta-gamma\n");
-+    s.cursorSetSemanticContent(.output);
-+    try s.testWriteString("alpha-beta-gamma\nsecond-line\n");
-+    s.cursorSetSemanticContent(.{ .prompt = .initial });
-+    try s.testWriteString("$ ");
++    var stream = t.vtStream();
++    defer stream.deinit();
 +
-+    const output_pin = s.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?;
-+    const output = s.selectOutput(output_pin).?;
-+    var tracked = try output.track(&s);
-+    defer tracked.deinit(&s);
++    try stream.nextSlice("\x1b]133;A\x07");
++    try stream.nextSlice("$ ");
++    try stream.nextSlice("\x1b]133;B\x07");
++    try stream.nextSlice("printf alpha-beta-gamma");
++    try stream.nextSlice("\r\n");
++    try stream.nextSlice("\x1b]133;C\x07");
++    try stream.nextSlice("alpha-beta-gamma\r\nsecond-line\r\n");
++    try stream.nextSlice("\x1b]133;D;0\x07");
++    try stream.nextSlice("\x1b]133;A\x07");
++    try stream.nextSlice("$ ");
++
++    const screen = t.screens.active;
++    const output_pin = screen.pages.pin(.{ .active = .{
++        .x = 0,
++        .y = 1,
++    } }).?;
++    const output = screen.selectOutput(output_pin).?;
++    var tracked = try output.track(screen);
++    defer tracked.deinit(screen);
 +
 +    {
-+        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        const actual = try screen.selectionString(alloc, .{ .sel = tracked });
 +        defer alloc.free(actual);
-+        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++        try testing.expectEqualStrings(
++            "alpha-beta-gamma\nsecond-line",
++            actual,
++        );
 +    }
 +
-+    try s.resize(.{ .cols = 7, .rows = 24, .reflow = true });
++    try t.resize(alloc, 7, 24);
 +    {
-+        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        const actual = try screen.selectionString(alloc, .{ .sel = tracked });
 +        defer alloc.free(actual);
-+        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++        try testing.expectEqualStrings(
++            "alpha-beta-gamma\nsecond-line",
++            actual,
++        );
 +    }
 +
-+    try s.resize(.{ .cols = 80, .rows = 24, .reflow = true });
++    try t.resize(alloc, 80, 24);
 +    {
-+        const actual = try s.selectionString(alloc, .{ .sel = tracked });
++        const actual = try screen.selectionString(alloc, .{ .sel = tracked });
 +        defer alloc.free(actual);
-+        try testing.expectEqualStrings("alpha-beta-gamma\nsecond-line", actual);
++        try testing.expectEqualStrings(
++            "alpha-beta-gamma\nsecond-line",
++            actual,
++        );
 +    }
 +}
 +
- test "Screen: selectionString basic" {
-     const testing = std.testing;
+ test "Terminal: semantic prompt continuations" {
      const alloc = testing.allocator;
+     var t = try init(alloc, .{ .cols = 10, .rows = 5 });

@@ -68,7 +68,7 @@ impl DaemonRuntime {
 	}
 
 	/// Accepts and handles one local control connection.
-	pub fn serve_next(&self, registry: &mut SessionRegistry) -> Result<(), IpcServerError> {
+	pub fn serve_next(&self, registry: &SessionRegistry) -> Result<(), IpcServerError> {
 		self.server.serve_next(registry)
 	}
 }

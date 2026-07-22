@@ -41,9 +41,9 @@ foundation by adding a second renderer.
 - **CON-003**: Write TACO application logic in typed Rust and Swift; restrict Zig changes to the Ghostty embedding boundary.
 - **CON-004**: Use tabs in new project-owned source where the language formatter permits; otherwise follow rustfmt and Swift format conventions.
 - **CON-005**: Use AGPL-3.0-or-later for TACO and preserve every bundled dependency notice.
-- **CON-006**: Do not claim arbitrary block folding/reordering, native Zed embedding, or direct PTY survival across app termination in v1.
+- **CON-006**: Do not claim arbitrary block folding/reordering, native Zed embedding, or direct PTY survival across `tacod` termination in v1.
 - **CON-007**: Treat tmux text recovered after a control disconnect as semantic-degraded when OSC 133 lifecycle or exit status was missed.
-- **CON-008**: Treat Mosh roaming as valid only while its owning TACO direct PTY remains alive; TACO restart does not restore that Mosh process.
+- **CON-008**: Treat Mosh roaming as valid only while its owning `tacod` direct PTY remains alive; daemon restart does not restore that Mosh process.
 - **GUD-001**: Use closed enums for built-in surfaces and introduce traits only for seams with multiple implementations, including `SessionBackend` and `AgentBackend`.
 - **GUD-002**: Log lifecycle transitions, reconnects, adapter failures, and expensive operations at INFO; do not log raw prompts, PTY contents, or credentials by default.
 - **GUD-003**: Display progress and elapsed time for dependency builds, packaging, and benchmark suites that exceed five seconds.
@@ -61,14 +61,25 @@ foundation by adding a second renderer.
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
 | TASK-001 | Create a Cargo workspace in `Cargo.toml` containing `crates/taco-core`, `crates/taco-cli`, `crates/taco-bridge`, `crates/taco-acp`, and `crates/taco-tmux`; create the Swift macOS app under `app/macos` with bundle identifier `com.acture.taco`; add `scripts/bootstrap.fish` and `scripts/check.fish` using fish syntax only. | | |
-| TASK-002 | Add Ghostty as `vendor/ghostty` pinned to CON-002 and create `patches/ghostty/README.md` documenting patch application, upstream source, and update procedure; copy required MIT notices into a newly created `THIRD_PARTY_NOTICES.md`; add no product code to the Ghostty tree. | | |
-| TASK-003 | Implement `TerminalSurfaceAdapter` in `app/macos/TACO/Terminal/TerminalSurfaceAdapter.swift`; host one Ghostty surface in an `NSView`; verify clean-clone resources, app tick/wakeup, main-thread and lifetime behavior, resize, focus, selection, clipboard, English input, Chinese IME, process exit, 120 Hz, and a signed development bundle. | | |
+| TASK-002 | Register Ghostty as a clean Git submodule under `vendor/ghostty`, pinned to CON-002; keep TACO deltas in parent-owned patches; document provenance, verification, and explicit updates in `vendor/README.md`; copy required MIT notices into `THIRD_PARTY_NOTICES.md`. | Yes | 2026-07-23 |
+| TASK-003 | Implement `TerminalSurfaceAdapter` in `app/macos/TACO/Terminal/TerminalSurfaceAdapter.swift`; host one Ghostty surface in an `NSView` and attach it to a `tacod`-owned Session without creating a second PTY; verify clean-clone resources, binary flow control, app tick/wakeup, main-thread and lifetime behavior, resize, focus, selection, clipboard, English input, Chinese IME, process exit, 120 Hz, and a signed development bundle. | | |
 | TASK-004 | Add `benchmarks/terminal` with reproducible direct-Ghostty and TACO harnesses using the same Ghostty revision, config, hardware, workload, and display rate; measure p50/p95 input-to-present, sustained output, CPU, memory, and dropped frames; record the methodology and initial 10% direct-terminal target before v0.1. | | |
 | TASK-005 | Extend only the Ghostty embedding/query boundary to expose semantic-zone begin/update/end/evict callbacks, opaque range handles, and plain-text range reads; add C/Zig tests proving OSC 133 prompt/input/output classification survives wrapping and resize. Stop the plan if terminal-model, reflow, or renderer redesign is required. | | |
 | TASK-006 | Implement the UniFFI boundary in `crates/taco-core/src/ffi.rs` and `app/macos/TACO/Core/TacoCoreBridge.swift` with `TacoCore`, `WorkspaceSnapshot`, `CoreAction`, and `CoreEvent`; add a guard test that no terminal byte-buffer type is exported. | | |
 | TASK-007 | In `crates/taco-acp/tests/smoke.rs`, start pinned Claude and Codex ACP adapters, negotiate `protocolVersion` and capabilities, initialize one session, submit one prompt, collect updates, and terminate cleanly; compare advertised features with native CLI mode and record exact adapter revisions/notices. | | |
-| TASK-008 | In `crates/taco-tmux`, parse one local tmux control session and connect one pane through `crates/taco-bridge` to a Ghostty-owned PTY; test arbitrary bytes, Unicode, IME-produced input, bracketed paste, mouse protocol, resize, `%pause/%continue`, `capture-pane` repair, malformed messages, and flow control; record the initial 20% bridge target. | | |
+| TASK-008 | In `crates/taco-tmux`, parse one local tmux control session and connect one pane through `crates/taco-bridge` to the same `tacod` Session data plane used by a TerminalSurface; test arbitrary bytes, Unicode, IME-produced input, bracketed paste, mouse protocol, resize, `%pause/%continue`, `capture-pane` repair, malformed messages, and flow control; record the initial 20% bridge target. | | |
 | TASK-009 | Implement a `ManagedExternalWindow` spike in `app/macos/TACO/ExternalWindows`; locate one Zed window through AX on the current Space, tile it beside TACO, observe move/close events, and best-effort restore the original frame while the same window remains identifiable. | | |
+
+CP-M0.6 now proves a real daemon-owned PTY, exclusive attachment leases, bounded
+binary frames, monotonic replay offsets, replay-gap reporting, detach/reattach with
+one unchanged child PID, and resize. It deliberately leaves PTY creation out of the
+foreground daemon until Checkout resolution exists. CP-M0.7 additionally verifies
+the initial child as its session and process-group leader and reaps a stubborn
+same-PGID descendant after both explicit termination and natural leader exit. It
+uses non-reaping exit observation to preserve PGID identity through cleanup, but
+does not cover job-control processes moved into other PGIDs. Before TASK-003 starts
+a user shell, replace or isolate the checkpoint `portable-pty` multithreaded
+`pre_exec` path, bound input backpressure, and provide cross-PGID session cleanup.
 
 ### Implementation Phase 1 — Native terminal workspace
 
@@ -78,7 +89,7 @@ foundation by adding a second renderer.
 |------|-------------|-----------|------|
 | TASK-010 | Implement immutable `PaneTree`, `PaneNode`, `SplitAxis`, `SurfaceID`, and `WorkspaceID` types plus split/close/move/resize/focus reducers in `crates/taco-core/src/workspace`; add property tests for tree invariants and focus validity. | | |
 | TASK-011 | Implement `WorkspaceHost`, `PaneContainerView`, and action routing under `app/macos/TACO/Workspace`; render terminal panes without adding per-frame host work; add tabs, splits, zoom, focus, resize, and command palette. | | |
-| TASK-012 | Implement workspace SQLite persistence in `crates/taco-core/src/store`; store schema version, pane tree, surface descriptors, backend identity, and restoration state at the architecture-defined path with mode `0600`; restore direct PTYs as terminated placeholders rather than pretending they survived. | | |
+| TASK-012 | Implement workspace SQLite persistence in `crates/taco-core/src/store`; store schema version, pane tree, surface descriptors, backend identity, and restoration state at the architecture-defined path with mode `0600`; reattach a direct PTY only while its exact owning `tacod` Session remains live, otherwise restore a terminated placeholder. | | |
 | TASK-013 | Implement `HistoryPolicy` with maximum database bytes, retention duration, persistence enabled/disabled, clear-on-exit, and explicit clear-now action; enforce bounds transactionally and expose the controls in native settings. | | |
 | TASK-014 | Implement `ImageSurfaceController` under `app/macos/TACO/Images` using `QLPreviewView` with Image I/O metadata fallback; route `taco open <PATH>` to image preview for supported media and to a terminal editor command for text. | | |
 | TASK-015 | Promote the AX spike into `DesktopLayoutCoordinator`; support one external Zed companion adjacent to one TACO workspace window, explicit permission UX, focus, close observation, and best-effort frame restoration; do not represent Zed as a `Surface`. | | |
@@ -128,9 +139,9 @@ foundation by adding a second renderer.
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
 | TASK-033 | Add structured logging and diagnostic export across Swift and Rust; record timings and lifecycle metadata while redacting prompt text, terminal output, tokens, environment secrets, and file contents by default. | | |
-| TASK-034 | Add crash recovery for workspace metadata, block transactions, adapter processes, tmux connections, and external-window frame restoration; test forced termination at each persistence boundary and document that direct PTY/Mosh processes do not survive app exit. | | |
+| TASK-034 | Add crash recovery for workspace metadata, block transactions, adapter processes, tmux connections, and external-window frame restoration; test forced termination at each persistence boundary and document that direct PTY/Mosh processes survive GUI detach but not `tacod` exit. | | |
 | TASK-035 | Add VoiceOver labels, keyboard-only navigation, contrast checks, reduced-motion behavior, permission education, and IME/accessibility regression tests for every native surface. | | |
-| TASK-036 | Add CI for Rust format/clippy/tests, Swift build/tests, Ghostty patch application, license/notice verification, shell-integration tests, and benchmark smoke thresholds; cache only reproducible build artifacts. | | |
+| TASK-036 | Add CI for Rust format/clippy/tests, Swift build/tests, Ghostty submodule-pin and patch-application verification, license/notice verification, shell-integration tests, and benchmark smoke thresholds; cache only reproducible build artifacts. | | |
 | TASK-037 | Create Developer ID signing/notarization and release packaging, generate GitHub release archives and a Homebrew cask, produce checksums, and document manual credential steps without storing secrets in the repository. | | |
 | TASK-038 | Complete `docs/user-guide.md`, `CONTRIBUTING.md`, `docs/benchmark-report.md`, and exact `THIRD_PARTY_NOTICES.md`; verify all v1 release criteria in `ROADMAP.md` and mark this plan Completed only after every task and test is recorded. | | |
 
@@ -165,10 +176,10 @@ foundation by adding a second renderer.
 - **FILE-005**: `crates/taco-bridge` contains the terminal-pane byte-stream helper.
 - **FILE-006**: `crates/taco-acp` contains ACP sessions and built-in Claude/Codex adapter supervision.
 - **FILE-007**: `crates/taco-tmux` contains tmux control-mode parsing and backend lifecycle.
-- **FILE-008**: `vendor/ghostty` and `patches/ghostty` contain the pinned dependency and narrow embedding patchset.
+- **FILE-008**: `vendor/ghostty` is the pinned Ghostty submodule; `vendor/README.md` records provenance and parent-owned patches.
 - **FILE-009**: `shell-integration` contains fish, zsh, and bash OSC integration and tests.
 - **FILE-010**: `benchmarks/terminal` contains comparative terminal performance harnesses and methodology.
-- **FILE-011**: `docs`, `ROADMAP.md`, `README.md`, `LICENSE`, `NOTICE`, `TRADEMARKS.md`, and the future generated `THIRD_PARTY_NOTICES.md` contain public documentation and legal notices.
+- **FILE-011**: `docs`, `ROADMAP.md`, `README.md`, `LICENSE`, `NOTICE`, `TRADEMARKS.md`, and `THIRD_PARTY_NOTICES.md` contain public documentation and legal notices.
 - **FILE-012**: `.codex/HANDOFF.md` contains local session state and must remain ignored and untracked.
 
 ## 6. Testing
@@ -178,7 +189,7 @@ foundation by adding a second renderer.
 - **TEST-003**: Block tests cover OSC 133/OSC 7, multiline prompts, wrapping, resize, scrollback, eviction, signals, exit status, nested shells, alternate screen, snapshot limits, retention controls, confirmed rerun, and search scope.
 - **TEST-004**: ACP tests cover protocol negotiation, capability gaps, Claude/Codex initialization, updates, tools, permissions, plans, resources, cancellation, auth failure, malformed messages, adapter crash, and restart limits.
 - **TEST-005**: tmux tests cover parser fuzzing, arbitrary bytes, Unicode, bracketed paste, mouse protocol, pane mapping, escaped output, pause/continue, backpressure, resize, capture repair, reconnect, and degraded semantics.
-- **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on app exit, ordinary terminal use, and absence of structured tmux/block capabilities.
+- **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on `tacod` exit, ordinary terminal use, and absence of structured tmux/block capabilities.
 - **TEST-007**: Accessibility tests cover permission denied, Zed launch/find, move/resize/focus, user movement, close, multiple windows, current-Space behavior, identity loss, and best-effort frame restoration.
 - **TEST-008**: IPC/security tests cover ownership, mode `0600`, stale sockets, oversized frames, invalid paths, malformed versions, process impersonation, and redacted logs.
 - **TEST-009**: Persistence tests cover schema migration, WAL recovery, interrupted writes, permissions, capacity/retention, disable/clear, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
@@ -189,7 +200,7 @@ foundation by adding a second renderer.
 
 - **RISK-001**: The full Ghostty embedding API is explicitly unstable. Mitigation: exact pin, one adapter, narrow patch, compile gate, comparative tests, and no automatic updates.
 - **RISK-002**: The proposed semantic-range export may not remain narrow. Mitigation: M0 stops if it touches terminal model, reflow, or renderer rather than hiding the cost.
-- **RISK-003**: tmux bridging adds a process/socket hop and cannot reconstruct missed command lifecycles. Mitigation: bypass it for direct PTYs, benchmark binary flow, and mark repaired intervals semantic-degraded.
+- **RISK-003**: every attached Session adds a local binary socket hop, while tmux adds another bridge and cannot reconstruct missed command lifecycles. Mitigation: benchmark both paths, apply bounded backpressure, and mark repaired intervals semantic-degraded.
 - **RISK-004**: AX external-window control depends on permission and unstable external window identity. Mitigation: adjacent current-Space tiling, permission-on-use, visible degradation, and best-effort restoration only.
 - **RISK-005**: ACP adapters may expose fewer or different capabilities than native vendor CLIs. Mitigation: negotiate capabilities, pin revisions, retain native CLI mode, and never claim equivalence.
 - **RISK-006**: SQLite history may capture secrets. Mitigation: mode `0600`, bounded payloads, configurable retention/capacity, disable/clear controls, and redacted logs.

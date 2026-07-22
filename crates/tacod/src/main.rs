@@ -30,11 +30,11 @@ fn run() -> Result<(), String> {
 		}
 	};
 	let runtime = DaemonRuntime::acquire(&runtime_dir).map_err(|error| error.to_string())?;
-	let mut registry = SessionRegistry::new();
+	let registry = SessionRegistry::new();
 
 	eprintln!("tacod: listening on {}", runtime.socket_path().display());
 	loop {
-		if let Err(error) = runtime.serve_next(&mut registry) {
+		if let Err(error) = runtime.serve_next(&registry) {
 			eprintln!("tacod: control request failed: {error}");
 		}
 	}

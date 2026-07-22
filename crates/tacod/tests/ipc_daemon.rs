@@ -101,6 +101,29 @@ fn oversized_request_is_rejected_without_stopping_the_daemon() {
 }
 
 #[test]
+fn incomplete_connection_does_not_block_later_control_requests() {
+	let runtime = TestRuntime::new();
+	let daemon = TestDaemon::spawn(&runtime);
+	let mut incomplete = UnixStream::connect(daemon.socket_path()).unwrap();
+	incomplete.write_all(b"{").unwrap();
+	thread::sleep(Duration::from_millis(20));
+
+	let response = request_with_timeout(
+		daemon.socket_path(),
+		&json!({
+			"version": PROTOCOL_VERSION,
+			"request_id": 2,
+			"method": "session.create",
+			"checkout_id": 7,
+		})
+		.to_string(),
+		Duration::from_secs(1),
+	);
+
+	parse_session_id(&response);
+}
+
+#[test]
 fn second_daemon_cannot_take_over_a_live_runtime() {
 	let runtime = TestRuntime::new();
 	let primary = TestDaemon::spawn(&runtime);
@@ -129,7 +152,13 @@ fn killed_daemon_recovers_stale_socket_without_reusing_session_id() {
 }
 
 fn request(socket_path: &Path, payload: &str) -> Value {
+	request_with_timeout(socket_path, payload, Duration::from_secs(5))
+}
+
+fn request_with_timeout(socket_path: &Path, payload: &str, timeout: Duration) -> Value {
 	let mut stream = UnixStream::connect(socket_path).unwrap();
+	stream.set_read_timeout(Some(timeout)).unwrap();
+	stream.set_write_timeout(Some(timeout)).unwrap();
 	stream.write_all(payload.as_bytes()).unwrap();
 	stream.write_all(b"\n").unwrap();
 

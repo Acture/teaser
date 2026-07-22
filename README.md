@@ -6,8 +6,9 @@ TACO is a macOS-first, terminal-centric workspace. Shells, agents, image preview
 and editors are peers inside one orchestration model; the editor is not the root
 abstraction and agent CLIs do not each need to reinvent terminal UI.
 
-> Status: foundation prototype. The Rust session registry is testable, but there
-> is no runnable application yet.
+> Status: foundation prototype. The Rust control plane, detachable PTY data
+> plane, and owning-process-group teardown are testable, but there is no
+> runnable GUI application yet.
 
 ## Product thesis
 
@@ -37,8 +38,9 @@ TACO-specific rewrite.
 - **External environments:** cmux and IDEs remain provider-owned federated panels
   or companion windows instead of entering TACO's session registry.
 
-The terminal render/input hot path stays entirely inside AppKit and `libghostty`.
-Rust/Swift bridging is reserved for low-frequency state and semantic events.
+Terminal parsing, rendering, and native input stay inside AppKit and `libghostty`.
+Canonical PTY bytes use the bounded local attachment stream; UniFFI remains
+reserved for low-frequency state and semantic events.
 
 See [Architecture](docs/architecture.md), [Roadmap](ROADMAP.md), and the
 [implementation plan](plan/architecture-taco-platform-1.md).
@@ -62,8 +64,11 @@ cargo run -p tacod
 It uses `~/Library/Application Support/TACO/runtime` by default. Pass
 `--runtime-dir PATH` only for development or tests.
 
-The daemon currently supports only the versioned `session.create` control request.
-See [Local control protocol](docs/ipc.md) for its wire format and current limits.
+The daemon supports metadata-only `session.create` plus an internal
+`session.attach` upgrade for already-resolved PTY Sessions. The public protocol
+does not accept arbitrary commands or working directories before the Checkout
+catalog exists. See [Local control and attachment protocol](docs/ipc.md) for the
+wire format and current limits.
 
 ## Agent integration has two modes
 
