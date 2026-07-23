@@ -1,0 +1,902 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 40ff55c..2e57b5e 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -437,6 +437,25 @@ typedef enum {
+   GHOSTTY_SURFACE_CONTEXT_SPLIT = 2,
+ } ghostty_surface_context_e;
+ 
++typedef enum {
++  GHOSTTY_SURFACE_IO_EXEC = 0,
++  GHOSTTY_SURFACE_IO_EXTERNAL = 1,
++} ghostty_surface_io_e;
++
++// External I/O callbacks run synchronously on Ghostty's termio thread. The
++// byte pointer passed to the write callback is only valid for the duration of
++// the callback. Callbacks must copy or enqueue bytes promptly and must not call
++// any ghostty_* function, wait on the surface, or free it. external_userdata
++// must remain valid until ghostty_surface_free returns.
++typedef void (*ghostty_surface_external_write_cb)(void*,
++                                                  const uint8_t*,
++                                                  size_t);
++typedef void (*ghostty_surface_external_resize_cb)(void*,
++                                                   uint16_t,
++                                                   uint16_t,
++                                                   uint32_t,
++                                                   uint32_t);
++
+ typedef struct {
+   ghostty_platform_e platform_tag;
+   ghostty_platform_u platform;
+@@ -450,6 +469,10 @@ typedef struct {
+   const char* initial_input;
+   bool wait_after_command;
+   ghostty_surface_context_e context;
++  ghostty_surface_io_e io_mode;
++  void* external_userdata;
++  ghostty_surface_external_write_cb external_write_cb;
++  ghostty_surface_external_resize_cb external_resize_cb;
+ } ghostty_surface_config_s;
+ 
+ typedef struct {
+@@ -1073,9 +1096,14 @@ ghostty_surface_config_s ghostty_surface_config_new();
+ 
+ ghostty_surface_t ghostty_surface_new(ghostty_app_t,
+                                       const ghostty_surface_config_s*);
++// All feed calls must finish and producer threads must be quiesced before
++// freeing an external surface.
+ void ghostty_surface_free(ghostty_surface_t);
++void ghostty_surface_feed_output(ghostty_surface_t, const uint8_t*, size_t);
+ void* ghostty_surface_userdata(ghostty_surface_t);
+ ghostty_app_t ghostty_surface_app(ghostty_surface_t);
++// Inherited external configs retain external mode but clear userdata and
++// callbacks. The host must bind a distinct transport before creating a surface.
+ ghostty_surface_config_s ghostty_surface_inherited_config(ghostty_surface_t, ghostty_surface_context_e);
+ void ghostty_surface_update_config(ghostty_surface_t, ghostty_config_t);
+ bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 4d66622..4593f92 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -620,32 +620,45 @@ pub fn init(
+     // This separate block ({}) is important because our errdefers must
+     // be scoped here to be valid.
+     {
+-        var env = rt_surface.defaultTermioEnv() catch |err| env: {
+-            // If an error occurs, we don't want to block surface startup.
+-            log.warn("error getting env map for surface err={}", .{err});
+-            break :env internal_os.getEnvMap(alloc) catch
+-                std.process.EnvMap.init(alloc);
++        var io_backend: termio.Backend = backend: {
++            // Embedded hosts may provide their own process transport. Feature
++            // detection keeps non-embedded runtimes on the existing exec path.
++            if (comptime @hasDecl(apprt.runtime.Surface, "externalTermioConfig")) {
++                if (rt_surface.externalTermioConfig()) |external| {
++                    break :backend .{ .external = termio.External.init(.{
++                        .userdata = external.userdata,
++                        .write = external.write,
++                        .resize = external.resize,
++                    }) };
++                }
++            }
++
++            var env = rt_surface.defaultTermioEnv() catch |err| env: {
++                // If an error occurs, we don't want to block surface startup.
++                log.warn("error getting env map for surface err={}", .{err});
++                break :env internal_os.getEnvMap(alloc) catch
++                    std.process.EnvMap.init(alloc);
++            };
++            errdefer env.deinit();
++
++            // don't leak GHOSTTY_LOG to any subprocesses
++            env.remove("GHOSTTY_LOG");
++
++            break :backend .{ .exec = try termio.Exec.init(alloc, .{
++                .command = command,
++                .env = env,
++                .env_override = config.env,
++                .shell_integration = config.@"shell-integration",
++                .shell_integration_features = config.@"shell-integration-features",
++                .cursor_blink = config.@"cursor-style-blink",
++                .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
++                .resources_dir = global_state.resources_dir.host(),
++                .term = config.term,
++                .rt_pre_exec_info = .init(config),
++                .rt_post_fork_info = .init(config),
++            }) };
+         };
+-        errdefer env.deinit();
+-
+-        // don't leak GHOSTTY_LOG to any subprocesses
+-        env.remove("GHOSTTY_LOG");
+-
+-        // Initialize our IO backend
+-        var io_exec = try termio.Exec.init(alloc, .{
+-            .command = command,
+-            .env = env,
+-            .env_override = config.env,
+-            .shell_integration = config.@"shell-integration",
+-            .shell_integration_features = config.@"shell-integration-features",
+-            .cursor_blink = config.@"cursor-style-blink",
+-            .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
+-            .resources_dir = global_state.resources_dir.host(),
+-            .term = config.term,
+-            .rt_pre_exec_info = .init(config),
+-            .rt_post_fork_info = .init(config),
+-        });
+-        errdefer io_exec.deinit();
++        errdefer io_backend.deinit();
+ 
+         // Initialize our IO mailbox
+         var io_mailbox = try termio.Mailbox.initSPSC(alloc);
+@@ -655,7 +668,7 @@ pub fn init(
+             .size = size,
+             .full_config = config,
+             .config = try termio.Termio.DerivedConfig.init(alloc, config),
+-            .backend = .{ .exec = io_exec },
++            .backend = io_backend,
+             .mailbox = io_mailbox,
+             .renderer_state = &self.renderer_state,
+             .renderer_wakeup = render_thread.wakeup,
+@@ -1291,6 +1304,7 @@ fn childExitedAbnormally(
+     // Build up our command for the error message
+     const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
+         .exec => |*exec| exec.subprocess.args,
++        .external => return,
+     });
+     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
+ 
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 0d5a4f8..0287ecd 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -269,6 +269,15 @@ pub const App = struct {
+         comptime action: apprt.Action.Key,
+         value: apprt.Action.Value(action),
+     ) !bool {
++        // An external surface belongs to one host transport. Ghostty must not
++        // implicitly create a sibling that either aliases that transport or
++        // falls back to the exec backend.
++        switch (target) {
++            .app => {},
++            .surface => |surface| if (surface.rt_surface.io
++                .blocksImplicitSurfaceCreation(action)) return false,
++        }
++
+         // Special case certain actions before they are sent to the
+         // embedded apprt.
+         self.performPreAction(target, action, value);
+@@ -406,9 +415,90 @@ pub const EnvVar = extern struct {
+ };
+ 
+ pub const Surface = struct {
++    pub const ExternalWriteFn = *const fn (
++        ?*anyopaque,
++        [*]const u8,
++        usize,
++    ) callconv(.c) void;
++
++    pub const ExternalResizeFn = *const fn (
++        ?*anyopaque,
++        u16,
++        u16,
++        u32,
++        u32,
++    ) callconv(.c) void;
++
++    pub const ExternalIO = struct {
++        userdata: ?*anyopaque,
++        write: ExternalWriteFn,
++        resize: ExternalResizeFn,
++    };
++
++    pub const IOMode = enum(c_int) {
++        exec = 0,
++        external = 1,
++    };
++
++    const IO = union(IOMode) {
++        exec,
++        external: ExternalIO,
++
++        fn init(opts: Options) !IO {
++            const mode = std.meta.intToEnum(IOMode, opts.io_mode) catch
++                return error.InvalidSurfaceIOMode;
++
++            return switch (mode) {
++                .exec => .exec,
++                .external => external: {
++                    if (opts.command != null) {
++                        return error.ExternalIOCommandUnsupported;
++                    }
++                    if (opts.initial_input != null) {
++                        return error.ExternalIOInitialInputUnsupported;
++                    }
++
++                    break :external .{ .external = .{
++                        .userdata = opts.external_userdata,
++                        .write = opts.external_write orelse
++                            return error.ExternalIOWriteCallbackRequired,
++                        .resize = opts.external_resize orelse
++                            return error.ExternalIOResizeCallbackRequired,
++                    } };
++                },
++            };
++        }
++
++        fn applyInherited(self: IO, result: *Options) void {
++            switch (self) {
++                .exec => {},
++                .external => {
++                    // A new surface requires a distinct host transport.
++                    // Preserve the mode so creation fails until rebound.
++                    result.io_mode = @intFromEnum(IOMode.external);
++                    result.external_userdata = null;
++                    result.external_write = null;
++                    result.external_resize = null;
++                },
++            }
++        }
++
++        fn blocksImplicitSurfaceCreation(
++            self: IO,
++            action: apprt.Action.Key,
++        ) bool {
++            if (self == .exec) return false;
++            return switch (action) {
++                .new_window, .new_tab, .new_split => true,
++                else => false,
++            };
++        }
++    };
++
+     app: *App,
+     platform: Platform,
+     userdata: ?*anyopaque = null,
++    io: IO = .exec,
+     core_surface: CoreSurface,
+     content_scale: apprt.ContentScale,
+     size: apprt.SurfaceSize,
+@@ -460,13 +550,30 @@ pub const Surface = struct {
+ 
+         /// Context for the new surface
+         context: apprt.surface.NewSurfaceContext = .window,
++
++        /// The terminal I/O provider. External mode never creates a PTY or
++        /// child process. In external mode, command and initial_input must be
++        /// unset and both callbacks below must be provided.
++        io_mode: c_int = @intFromEnum(IOMode.exec),
++
++        /// Userdata passed to the external I/O callbacks.
++        external_userdata: ?*anyopaque = null,
++
++        /// Receives bytes encoded from terminal input.
++        external_write: ?ExternalWriteFn = null,
++
++        /// Receives terminal grid and pixel size changes.
++        external_resize: ?ExternalResizeFn = null,
+     };
+ 
+     pub fn init(self: *Surface, app: *App, opts: Options) !void {
++        const io = try IO.init(opts);
++
+         self.* = .{
+             .app = app,
+             .platform = try .init(opts.platform_tag, opts.platform),
+             .userdata = opts.userdata,
++            .io = io,
+             .core_surface = undefined,
+             .content_scale = .{
+                 .x = @floatCast(opts.scale_factor),
+@@ -941,11 +1048,25 @@ pub const Surface = struct {
+             break :wd self.app.core_app.alloc.dupeZ(u8, cwd) catch null;
+         };
+ 
+-        return .{
++        var result: apprt.Surface.Options = .{
+             .font_size = font_size,
+             .working_directory = working_directory,
+             .context = context,
+         };
++
++        self.io.applyInherited(&result);
++
++        return result;
++    }
++
++    /// Return the external terminal I/O configuration, if this surface is
++    /// host-driven. Core Surface feature-detects this method so non-embedded
++    /// application runtimes continue using the exec backend.
++    pub fn externalTermioConfig(self: *const Surface) ?ExternalIO {
++        return switch (self.io) {
++            .exec => null,
++            .external => |external| external,
++        };
+     }
+ 
+     pub fn defaultTermioEnv(self: *const Surface) !std.process.EnvMap {
+@@ -987,6 +1108,139 @@ pub const Surface = struct {
+     }
+ };
+ 
++const ExternalIOTestCallbacks = struct {
++    fn write(
++        userdata: ?*anyopaque,
++        data: [*]const u8,
++        len: usize,
++    ) callconv(.c) void {
++        _ = userdata;
++        _ = data;
++        _ = len;
++    }
++
++    fn resize(
++        userdata: ?*anyopaque,
++        columns: u16,
++        rows: u16,
++        width_px: u32,
++        height_px: u32,
++    ) callconv(.c) void {
++        _ = userdata;
++        _ = columns;
++        _ = rows;
++        _ = width_px;
++        _ = height_px;
++    }
++};
++
++test "embedded surface external I/O options validate callbacks" {
++    const opts: Surface.Options = .{
++        .io_mode = @intFromEnum(Surface.IOMode.external),
++        .external_write = &ExternalIOTestCallbacks.write,
++        .external_resize = &ExternalIOTestCallbacks.resize,
++    };
++    const io = try Surface.IO.init(opts);
++    try std.testing.expect(io == .external);
++
++    try std.testing.expectError(
++        error.ExternalIOWriteCallbackRequired,
++        Surface.IO.init(.{
++            .io_mode = @intFromEnum(Surface.IOMode.external),
++            .external_resize = &ExternalIOTestCallbacks.resize,
++        }),
++    );
++    try std.testing.expectError(
++        error.ExternalIOResizeCallbackRequired,
++        Surface.IO.init(.{
++            .io_mode = @intFromEnum(Surface.IOMode.external),
++            .external_write = &ExternalIOTestCallbacks.write,
++        }),
++    );
++}
++
++test "embedded surface external I/O rejects process options" {
++    const callbacks: Surface.Options = .{
++        .io_mode = @intFromEnum(Surface.IOMode.external),
++        .external_write = &ExternalIOTestCallbacks.write,
++        .external_resize = &ExternalIOTestCallbacks.resize,
++    };
++
++    var command = callbacks;
++    command.command = "printf unsupported";
++    try std.testing.expectError(
++        error.ExternalIOCommandUnsupported,
++        Surface.IO.init(command),
++    );
++
++    var initial_input = callbacks;
++    initial_input.initial_input = "unsupported";
++    try std.testing.expectError(
++        error.ExternalIOInitialInputUnsupported,
++        Surface.IO.init(initial_input),
++    );
++}
++
++test "embedded surface external I/O requires a new inherited transport" {
++    const io = try Surface.IO.init(.{
++        .io_mode = @intFromEnum(Surface.IOMode.external),
++        .external_userdata = @ptrFromInt(1),
++        .external_write = &ExternalIOTestCallbacks.write,
++        .external_resize = &ExternalIOTestCallbacks.resize,
++    });
++    var inherited: Surface.Options = .{};
++    io.applyInherited(&inherited);
++
++    try std.testing.expectEqual(
++        @as(c_int, @intFromEnum(Surface.IOMode.external)),
++        inherited.io_mode,
++    );
++    try std.testing.expect(inherited.external_userdata == null);
++    try std.testing.expect(inherited.external_write == null);
++    try std.testing.expect(inherited.external_resize == null);
++    try std.testing.expect(io.blocksImplicitSurfaceCreation(.new_window));
++    try std.testing.expect(io.blocksImplicitSurfaceCreation(.new_tab));
++    try std.testing.expect(io.blocksImplicitSurfaceCreation(.new_split));
++    try std.testing.expect(!io.blocksImplicitSurfaceCreation(.set_title));
++}
++
++test "embedded surface external I/O matches pinned C ABI layout" {
++    const c = @import("ghostty.h");
++    const opts: Surface.Options = .{};
++    try std.testing.expectEqual(
++        @as(c_int, @intFromEnum(Surface.IOMode.exec)),
++        opts.io_mode,
++    );
++    try std.testing.expect(opts.external_userdata == null);
++    try std.testing.expect(opts.external_write == null);
++    try std.testing.expect(opts.external_resize == null);
++
++    try std.testing.expectEqual(
++        @sizeOf(c.ghostty_surface_config_s),
++        @sizeOf(Surface.Options),
++    );
++    try std.testing.expectEqual(
++        @alignOf(c.ghostty_surface_config_s),
++        @alignOf(Surface.Options),
++    );
++    try std.testing.expectEqual(
++        @offsetOf(c.ghostty_surface_config_s, "io_mode"),
++        @offsetOf(Surface.Options, "io_mode"),
++    );
++    try std.testing.expectEqual(
++        @offsetOf(c.ghostty_surface_config_s, "external_userdata"),
++        @offsetOf(Surface.Options, "external_userdata"),
++    );
++    try std.testing.expectEqual(
++        @offsetOf(c.ghostty_surface_config_s, "external_write_cb"),
++        @offsetOf(Surface.Options, "external_write"),
++    );
++    try std.testing.expectEqual(
++        @offsetOf(c.ghostty_surface_config_s, "external_resize_cb"),
++        @offsetOf(Surface.Options, "external_resize"),
++    );
++}
++
+ /// Inspector is the state required for the terminal inspector. A terminal
+ /// inspector is 1:1 with a Surface.
+ pub const Inspector = struct {
+@@ -1559,6 +1813,29 @@ pub const CAPI = struct {
+         ptr.app.closeSurface(ptr);
+     }
+ 
++    /// Feed host-owned process output into an external I/O surface. A null
++    /// pointer with a zero length is a valid no-op.
++    export fn ghostty_surface_feed_output(
++        surface: *Surface,
++        ptr: ?[*]const u8,
++        len: usize,
++    ) void {
++        switch (surface.io) {
++            .exec => {
++                log.warn("ignoring output fed to an exec surface", .{});
++                return;
++            },
++            .external => {},
++        }
++
++        if (len == 0) return;
++        const bytes = ptr orelse {
++            log.warn("ignoring external output with null pointer and nonzero length", .{});
++            return;
++        };
++        surface.core_surface.io.processOutput(bytes[0..len]);
++    }
++
+     /// Returns the userdata associated with the surface.
+     export fn ghostty_surface_userdata(surface: *Surface) ?*anyopaque {
+         return surface.userdata;
+@@ -1675,7 +1952,8 @@ pub const CAPI = struct {
+         return true;
+     }
+ 
+-    export fn ghostty_surface_free_text(ptr: *Text) void {
++    export fn ghostty_surface_free_text(surface: *Surface, ptr: *Text) void {
++        _ = surface;
+         ptr.deinit();
+     }
+ 
+diff --git a/src/termio.zig b/src/termio.zig
+index b168851..f0dab45 100644
+--- a/src/termio.zig
++++ b/src/termio.zig
+@@ -23,6 +23,7 @@ const message = @import("termio/message.zig");
+ pub const backend = @import("termio/backend.zig");
+ pub const mailbox = @import("termio/mailbox.zig");
+ pub const Exec = @import("termio/Exec.zig");
++pub const External = @import("termio/External.zig");
+ pub const Options = @import("termio/Options.zig");
+ pub const Termio = @import("termio/Termio.zig");
+ pub const Thread = @import("termio/Thread.zig");
+diff --git a/src/termio/External.zig b/src/termio/External.zig
+new file mode 100644
+index 0000000..e4f4463
+--- /dev/null
++++ b/src/termio/External.zig
+@@ -0,0 +1,268 @@
++//! External implements terminal I/O owned by the embedding host.
++//!
++//! Unlike the exec backend, this backend never opens a PTY or starts a
++//! subprocess. Ghostty forwards encoded terminal input and resize events to
++//! synchronous host callbacks. Callback byte buffers are borrowed and only
++//! valid for the duration of the call. Callbacks must copy or enqueue data and
++//! return without calling Ghostty APIs or waiting on the surface.
++const External = @This();
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const renderer = @import("../renderer.zig");
++const terminal = @import("../terminal/main.zig");
++const termio = @import("../termio.zig");
++
++pub const WriteCallback = *const fn (
++    userdata: ?*anyopaque,
++    data: [*]const u8,
++    len: usize,
++) callconv(.c) void;
++
++pub const ResizeCallback = *const fn (
++    userdata: ?*anyopaque,
++    columns: renderer.GridSize.Unit,
++    rows: renderer.GridSize.Unit,
++    width_px: u32,
++    height_px: u32,
++) callconv(.c) void;
++
++pub const Config = struct {
++    userdata: ?*anyopaque = null,
++    write: WriteCallback,
++    resize: ResizeCallback,
++};
++
++config: Config,
++
++pub fn init(config: Config) External {
++    return .{ .config = config };
++}
++
++pub fn deinit(self: *External) void {
++    _ = self;
++}
++
++pub fn initTerminal(self: *External, term: *terminal.Terminal) void {
++    _ = self;
++    _ = term;
++}
++
++pub fn threadEnter(
++    self: *External,
++    alloc: Allocator,
++    io: *termio.Termio,
++    td: *termio.Termio.ThreadData,
++) !void {
++    _ = self;
++    _ = alloc;
++    _ = io;
++
++    td.backend = .{ .external = .{} };
++}
++
++pub fn threadExit(self: *External, td: *termio.Termio.ThreadData) void {
++    _ = self;
++    std.debug.assert(td.backend == .external);
++}
++
++pub fn focusGained(
++    self: *External,
++    td: *termio.Termio.ThreadData,
++    focused: bool,
++) !void {
++    _ = self;
++    _ = td;
++    _ = focused;
++}
++
++pub fn resize(
++    self: *External,
++    grid_size: renderer.GridSize,
++    screen_size: renderer.ScreenSize,
++) !void {
++    self.config.resize(
++        self.config.userdata,
++        grid_size.columns,
++        grid_size.rows,
++        screen_size.width,
++        screen_size.height,
++    );
++}
++
++pub fn queueWrite(
++    self: *External,
++    alloc: Allocator,
++    td: *termio.Termio.ThreadData,
++    data: []const u8,
++    linefeed: bool,
++) !void {
++    _ = td;
++    if (data.len == 0) return;
++
++    if (!linefeed or std.mem.indexOfScalar(u8, data, '\r') == null) {
++        self.config.write(self.config.userdata, data.ptr, data.len);
++        return;
++    }
++
++    const carriage_returns = std.mem.count(u8, data, "\r");
++    const len = try std.math.add(usize, data.len, carriage_returns);
++    const normalized = try alloc.alloc(u8, len);
++    defer alloc.free(normalized);
++
++    var source_index: usize = 0;
++    var destination_index: usize = 0;
++    while (source_index < data.len) : (source_index += 1) {
++        const byte = data[source_index];
++        normalized[destination_index] = byte;
++        destination_index += 1;
++        if (byte == '\r') {
++            normalized[destination_index] = '\n';
++            destination_index += 1;
++        }
++    }
++
++    std.debug.assert(destination_index == normalized.len);
++    self.config.write(
++        self.config.userdata,
++        normalized.ptr,
++        normalized.len,
++    );
++}
++
++pub fn childExitedAbnormally(
++    self: *External,
++    alloc: Allocator,
++    term: *terminal.Terminal,
++    exit_code: u32,
++    runtime_ms: u64,
++) !void {
++    _ = self;
++    _ = alloc;
++    _ = term;
++    _ = exit_code;
++    _ = runtime_ms;
++}
++
++/// External backends keep no process, PTY, or event-loop state.
++pub const ThreadData = struct {
++    pub fn deinit(self: *ThreadData, alloc: Allocator) void {
++        _ = self;
++        _ = alloc;
++    }
++};
++
++const TestState = struct {
++    bytes: [64]u8 = undefined,
++    byte_count: usize = 0,
++    write_lengths: [4]usize = undefined,
++    write_count: usize = 0,
++    resize_count: usize = 0,
++    columns: renderer.GridSize.Unit = 0,
++    rows: renderer.GridSize.Unit = 0,
++    width_px: u32 = 0,
++    height_px: u32 = 0,
++
++    fn write(
++        userdata: ?*anyopaque,
++        data: [*]const u8,
++        len: usize,
++    ) callconv(.c) void {
++        const self: *TestState = @ptrCast(@alignCast(userdata.?));
++        std.debug.assert(self.byte_count + len <= self.bytes.len);
++        std.debug.assert(self.write_count < self.write_lengths.len);
++
++        @memcpy(
++            self.bytes[self.byte_count..][0..len],
++            data[0..len],
++        );
++        self.byte_count += len;
++        self.write_lengths[self.write_count] = len;
++        self.write_count += 1;
++    }
++
++    fn resize(
++        userdata: ?*anyopaque,
++        columns: renderer.GridSize.Unit,
++        rows: renderer.GridSize.Unit,
++        width_px: u32,
++        height_px: u32,
++    ) callconv(.c) void {
++        const self: *TestState = @ptrCast(@alignCast(userdata.?));
++        self.resize_count += 1;
++        self.columns = columns;
++        self.rows = rows;
++        self.width_px = width_px;
++        self.height_px = height_px;
++    }
++};
++
++test "external termio forwards writes in order" {
++    var state: TestState = .{};
++    var external: External = .init(.{
++        .userdata = &state,
++        .write = &TestState.write,
++        .resize = &TestState.resize,
++    });
++    var td: termio.Termio.ThreadData = undefined;
++
++    try external.threadEnter(
++        std.testing.allocator,
++        undefined,
++        &td,
++    );
++    try external.queueWrite(std.testing.allocator, &td, "one", false);
++    try external.queueWrite(std.testing.allocator, &td, "two\r", true);
++    try external.queueWrite(std.testing.allocator, &td, "three", false);
++
++    try std.testing.expectEqual(@as(usize, 3), state.write_count);
++    try std.testing.expectEqualSlices(
++        usize,
++        &.{ 3, 5, 5 },
++        state.write_lengths[0..state.write_count],
++    );
++    try std.testing.expectEqualStrings(
++        "onetwo\r\nthree",
++        state.bytes[0..state.byte_count],
++    );
++}
++
++test "external termio forwards resize" {
++    var state: TestState = .{};
++    var external: External = .init(.{
++        .userdata = &state,
++        .write = &TestState.write,
++        .resize = &TestState.resize,
++    });
++
++    try external.resize(
++        .{ .columns = 120, .rows = 40 },
++        .{ .width = 1440, .height = 900 },
++    );
++
++    try std.testing.expectEqual(@as(usize, 1), state.resize_count);
++    try std.testing.expectEqual(@as(renderer.GridSize.Unit, 120), state.columns);
++    try std.testing.expectEqual(@as(renderer.GridSize.Unit, 40), state.rows);
++    try std.testing.expectEqual(@as(u32, 1440), state.width_px);
++    try std.testing.expectEqual(@as(u32, 900), state.height_px);
++}
++
++test "external termio has no exec thread state" {
++    var state: TestState = .{};
++    var external: External = .init(.{
++        .userdata = &state,
++        .write = &TestState.write,
++        .resize = &TestState.resize,
++    });
++    var td: termio.Termio.ThreadData = undefined;
++
++    try external.threadEnter(
++        std.testing.allocator,
++        undefined,
++        &td,
++    );
++    defer external.threadExit(&td);
++
++    try std.testing.expect(td.backend == .external);
++    try std.testing.expectEqual(@as(usize, 0), @sizeOf(ThreadData));
++}
+diff --git a/src/termio/backend.zig b/src/termio/backend.zig
+index ae0e200..eda0b2f 100644
+--- a/src/termio/backend.zig
++++ b/src/termio/backend.zig
+@@ -1,37 +1,38 @@
+ const std = @import("std");
+ const Allocator = std.mem.Allocator;
+-const posix = std.posix;
+ const renderer = @import("../renderer.zig");
+ const terminal = @import("../terminal/main.zig");
+ const termio = @import("../termio.zig");
+ 
+-// The preallocation size for the write request pool. This should be big
+-// enough to satisfy most write requests. It must be a power of 2.
+-const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
+-
+ /// The kinds of backends.
+-pub const Kind = enum { exec };
++pub const Kind = enum { exec, external };
+ 
+ /// Configuration for the various backend types.
+ pub const Config = union(Kind) {
+     /// Exec uses posix exec to run a command with a pty.
+     exec: termio.Exec.Config,
++
++    /// External delegates input and resize events to the embedding host.
++    external: termio.External.Config,
+ };
+ 
+ /// Backend implementations. A backend is responsible for owning the pty
+ /// behavior and providing read/write capabilities.
+ pub const Backend = union(Kind) {
+     exec: termio.Exec,
++    external: termio.External,
+ 
+     pub fn deinit(self: *Backend) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(),
++            .external => |*external| external.deinit(),
+         }
+     }
+ 
+     pub fn initTerminal(self: *Backend, t: *terminal.Terminal) void {
+         switch (self.*) {
+             .exec => |*exec| exec.initTerminal(t),
++            .external => |*external| external.initTerminal(t),
+         }
+     }
+ 
+@@ -43,12 +44,14 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.threadEnter(alloc, io, td),
++            .external => |*external| try external.threadEnter(alloc, io, td),
+         }
+     }
+ 
+     pub fn threadExit(self: *Backend, td: *termio.Termio.ThreadData) void {
+         switch (self.*) {
+             .exec => |*exec| exec.threadExit(td),
++            .external => |*external| external.threadExit(td),
+         }
+     }
+ 
+@@ -59,6 +62,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.focusGained(td, focused),
++            .external => |*external| try external.focusGained(td, focused),
+         }
+     }
+ 
+@@ -69,6 +73,7 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.resize(grid_size, screen_size),
++            .external => |*external| try external.resize(grid_size, screen_size),
+         }
+     }
+ 
+@@ -81,6 +86,12 @@ pub const Backend = union(Kind) {
+     ) !void {
+         switch (self.*) {
+             .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
++            .external => |*external| try external.queueWrite(
++                alloc,
++                td,
++                data,
++                linefeed,
++            ),
+         }
+     }
+ 
+@@ -98,6 +109,12 @@ pub const Backend = union(Kind) {
+                 exit_code,
+                 runtime_ms,
+             ),
++            .external => |*external| try external.childExitedAbnormally(
++                gpa,
++                t,
++                exit_code,
++                runtime_ms,
++            ),
+         }
+     }
+ };
+@@ -105,10 +122,12 @@ pub const Backend = union(Kind) {
+ /// Termio thread data. See termio.ThreadData for docs.
+ pub const ThreadData = union(Kind) {
+     exec: termio.Exec.ThreadData,
++    external: termio.External.ThreadData,
+ 
+     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
+         switch (self.*) {
+             .exec => |*exec| exec.deinit(alloc),
++            .external => |*external| external.deinit(alloc),
+         }
+     }
+ 

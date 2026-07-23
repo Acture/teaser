@@ -91,6 +91,15 @@ stubborn descendants that remain in that PGID. It does not claim to reach
 foreground or background jobs moved into other PGIDs by interactive shell job
 control.
 
+CP-M0.8 establishes the narrow Ghostty code seam for daemon-owned transport:
+an external full-surface backend has no exec, PTY, or child state; accepts
+ordered host output; and returns encoded input and resize events through C
+callbacks. The parent-owned patch touches only the embedding/backend boundary
+and includes focused Zig and ABI tests. It is not yet a passed AppKit gate.
+Native rendering and readback are blocked on this development machine because
+Xcode's optional Metal Toolchain is not installed. TASK-003 remains gated on a
+real AppKit probe proving render, input, resize, no child process, and teardown.
+
 The foreground daemon does not yet expose PTY creation. Before a user shell is
 wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
 risk, bounded input backpressure, and cross-PGID session cleanup. Working-directory

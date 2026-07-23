@@ -81,6 +81,14 @@ does not cover job-control processes moved into other PGIDs. Before TASK-003 sta
 a user shell, replace or isolate the checkpoint `portable-pty` multithreaded
 `pre_exec` path, bound input backpressure, and provide cross-PGID session cleanup.
 
+CP-M0.8 adds a parent-owned Ghostty external-I/O patch: the full surface can select
+a backend with no `Exec`, PTY, or child state; host output enters through the C ABI;
+and encoded input plus resize return through callbacks. Focused tests and
+cross-target type checks pass, but the native AppKit/Metal probe is blocked because
+this machine lacks Xcode's optional Metal Toolchain. Do not mark TASK-003 complete
+until a native probe verifies rendering/readback, input ordering, resize, absence of
+child processes, and teardown.
+
 ### Implementation Phase 1 — Native terminal workspace
 
 - **GOAL-002**: Deliver a reliable local shell/TUI workspace with images, external Zed tiling, persistence, and CLI control.

@@ -8,8 +8,9 @@ set expected_zig_version 0.15.2
 set zig_bin /opt/homebrew/opt/zig@0.15/bin/zig
 set ghostty_dir $repo_root/vendor/ghostty
 set vendor_readme $repo_root/vendor/README.md
-set semantic_patch \
-    $repo_root/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
+set ghostty_patches \
+    $repo_root/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch \
+    $repo_root/patches/ghostty/0002-external-surface-io.patch
 
 cd $repo_root
 or exit 1
@@ -87,10 +88,13 @@ if not rg -Fq -- $expected_ghostty_commit $vendor_readme
     printf 'error: vendor/README.md does not record the pinned Ghostty commit\n' >&2
     exit 1
 end
-git -C $ghostty_dir apply --check $semantic_patch
-or begin
-    printf 'error: Ghostty semantic-range patch no longer applies cleanly\n' >&2
-    exit 1
+for ghostty_patch in $ghostty_patches
+    git -C $ghostty_dir apply --check $ghostty_patch
+    or begin
+        printf 'error: Ghostty patch no longer applies cleanly: %s\n' \
+            (path basename $ghostty_patch) >&2
+        exit 1
+    end
 end
 set zig_version unavailable
 if test -x $zig_bin

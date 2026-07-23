@@ -41,6 +41,41 @@ stay in the disposable checkout. Do not use `test-lib-vt` at this pin: it also
 compiles Ghostty's C ABI target, which fails on the upstream
 `semantic_prompt.Command` union before reaching the filtered Terminal test.
 
+### Verify the external-surface I/O gate
+
+The second patch adds host-driven I/O to the full surface without constructing
+Ghostty's exec backend. Apply it in a fresh disposable checkout:
+
+```fish
+set probe_dir (mktemp -d /tmp/taco-ghostty-external.XXXXXX)
+git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
+git -C $probe_dir/ghostty checkout --quiet --detach \
+	332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
+git -C $probe_dir/ghostty apply \
+	$PWD/patches/ghostty/0002-external-surface-io.patch
+cd $probe_dir/ghostty
+```
+
+With Xcode's Metal Toolchain installed, run the focused tests and build the
+native-only framework:
+
+```fish
+set -lx ZIG_GLOBAL_CACHE_DIR $probe_dir/zig-global-cache
+set -lx ZIG_LOCAL_CACHE_DIR $probe_dir/zig-local-cache
+/opt/homebrew/opt/zig@0.15/bin/zig build test \
+	-Dapp-runtime=none \
+	'-Dtest-filter=external'
+/opt/homebrew/opt/zig@0.15/bin/zig build \
+	-Dapp-runtime=none \
+	-Dxcframework-target=native \
+	-Demit-xcframework=true \
+	-Demit-macos-app=false
+```
+
+On a new Xcode installation, `xcodebuild -downloadComponent MetalToolchain`
+installs the required optional component. This download is intentionally not
+part of `scripts/check.fish`.
+
 ### Update the pin
 
 Fetch an explicitly verified upstream tag, check out its exact commit in the
