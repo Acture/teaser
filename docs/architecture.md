@@ -60,9 +60,11 @@ events through the typed control boundary.
 TACO consumes the full Ghostty embedding API rather than implementing a second VT
 renderer. Upstream's full surface currently owns its PTY together with terminal
 state, renderer, input, selection, and platform surface. TACO's architecture instead
-requires `tacod` to own the canonical PTY, so an external-input/output surface mode
-is an explicit unproven gate, not an assumed feature. The adapter pins one exact
-revision because Ghostty's header says the API is not yet general-purpose or stable.
+requires `tacod` to own the canonical PTY. The pinned TACO patch now proves an
+external-input/output surface mode with no `Exec`, PTY, or child state. This is a
+narrow feasibility result, not a stable upstream API. The adapter therefore pins one
+exact revision because Ghostty's header says the API is not yet general-purpose or
+stable.
 
 Initial baseline:
 
@@ -95,10 +97,14 @@ CP-M0.8 establishes the narrow Ghostty code seam for daemon-owned transport:
 an external full-surface backend has no exec, PTY, or child state; accepts
 ordered host output; and returns encoded input and resize events through C
 callbacks. The parent-owned patch touches only the embedding/backend boundary
-and includes focused Zig and ABI tests. It is not yet a passed AppKit gate.
-Native rendering and readback are blocked on this development machine because
-Xcode's optional Metal Toolchain is not installed. TASK-003 remains gated on a
-real AppKit probe proving render, input, resize, no child process, and teardown.
+and includes focused Zig and ABI tests. With Metal Toolchain 17F109, the native
+Apple Silicon XCFramework builds and links. `app/macos/TACOProbe` passes real
+AppKit/Metal draw plumbing to a live `IOSurfaceLayer`, full-screen readback,
+exact `probe\r` input forwarding, resize consistency, direct-child snapshots,
+and ordered teardown. The source-level backend tests remain the authoritative
+proof that no process or PTY state exists; the process snapshot is only
+corroborating runtime evidence. This closes CP-M0.8, but not TASK-003's broader
+clean-clone host, resources, IME, 120 Hz, and signed-bundle gates.
 
 The foreground daemon does not yet expose PTY creation. Before a user shell is
 wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`

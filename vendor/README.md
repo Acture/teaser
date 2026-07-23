@@ -47,6 +47,7 @@ The second patch adds host-driven I/O to the full surface without constructing
 Ghostty's exec backend. Apply it in a fresh disposable checkout:
 
 ```fish
+set taco_root $PWD
 set probe_dir (mktemp -d /tmp/taco-ghostty-external.XXXXXX)
 git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
 git -C $probe_dir/ghostty checkout --quiet --detach \
@@ -56,10 +57,15 @@ git -C $probe_dir/ghostty apply \
 cd $probe_dir/ghostty
 ```
 
-With Xcode's Metal Toolchain installed, run the focused tests and build the
-native-only framework:
+Install Xcode's optional Metal toolchain once. Metal Toolchain 17F109 uses the
+identifier below; use the identifier reported by
+`xcodebuild -showComponent MetalToolchain -json` if it differs.
 
 ```fish
+xcodebuild -downloadComponent MetalToolchain
+set -lx TOOLCHAINS com.apple.dt.toolchain.Metal.32023.883
+xcrun -sdk macosx metal --version
+
 set -lx ZIG_GLOBAL_CACHE_DIR $probe_dir/zig-global-cache
 set -lx ZIG_LOCAL_CACHE_DIR $probe_dir/zig-local-cache
 /opt/homebrew/opt/zig@0.15/bin/zig build test \
@@ -69,12 +75,50 @@ set -lx ZIG_LOCAL_CACHE_DIR $probe_dir/zig-local-cache
 	-Dapp-runtime=none \
 	-Dxcframework-target=native \
 	-Demit-xcframework=true \
-	-Demit-macos-app=false
+	-Demit-macos-app=false \
+	-Demit-themes=false \
+	-Di18n=false
 ```
 
-On a new Xcode installation, `xcodebuild -downloadComponent MetalToolchain`
-installs the required optional component. This download is intentionally not
-part of `scripts/check.fish`.
+The patch runs Apple `ranlib` before `libtool`; this is required because an
+otherwise successful build can omit unaligned Zig archive members and produce
+an unlinkable framework. Confirm the final archive contains the C API, compile
+the AppKit probe, and run it:
+
+```fish
+set xc $probe_dir/ghostty/macos/GhosttyKit.xcframework/macos-arm64
+nm -g $xc/libghostty-fat.a | rg '_ghostty_(app_new|surface_new)'
+
+cd $taco_root
+mkdir -p .build
+set -lx CLANG_MODULE_CACHE_PATH $probe_dir/clang-module-cache
+set -lx SWIFT_MODULECACHE_PATH $probe_dir/swift-module-cache
+xcrun swiftc -swift-version 6 -strict-concurrency=complete \
+	app/macos/TACOProbe/main.swift \
+	-I $xc/Headers \
+	$xc/libghostty-fat.a \
+	-framework AppKit \
+	-framework Carbon \
+	-framework CoreFoundation \
+	-framework CoreGraphics \
+	-framework CoreText \
+	-framework CoreVideo \
+	-framework IOSurface \
+	-framework Metal \
+	-framework MetalKit \
+	-framework QuartzCore \
+	-lc++ \
+	-lproc \
+	-o .build/TACOProbe
+
+set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
+.build/TACOProbe
+```
+
+A pass covers a synchronous Metal draw to a live IOSurface-backed layer,
+readback, exact input ordering, resize consistency, direct-child snapshots, and
+ordered teardown. It does not compare captured pixels. The Metal download and
+GUI probe are intentionally not part of `scripts/check.fish`.
 
 ### Update the pin
 

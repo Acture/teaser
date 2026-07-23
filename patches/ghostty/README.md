@@ -43,12 +43,21 @@ ordering and CRLF conversion, resize forwarding, exact C/Zig ABI layout, and the
 absence of exec thread state. External surfaces reject implicit window, tab, and
 split creation; inherited configurations require the host to bind a distinct
 transport rather than aliasing a Session or falling back to `Exec`. Zig 0.15.2
-cross-target compilation and C header checks pass. The native AppKit/Metal gate
-is not complete: this machine lacks Xcode's optional Metal Toolchain, so the
-build stops before Zig compilation.
+cross-target compilation and C header checks pass. The patch also normalizes
+Zig-produced Darwin archives with Apple `ranlib` before `libtool`; otherwise
+`libtool` can omit unaligned members while still exiting successfully.
+This checkpoint implementation rewrites inputs inside its isolated disposable
+Zig cache. Do not share that cache across concurrent builds; production
+integration should normalize private archive copies instead.
+
+With Metal Toolchain 17F109, the native Apple Silicon XCFramework builds and
+links. `app/macos/TACOProbe` passes a synchronous Metal draw to a live
+IOSurface-backed layer, full-screen readback, exact `probe\r` input forwarding,
+resize consistency, direct-child snapshots, and ordered surface/app/config
+teardown. It does not perform pixel capture or comparison.
 
 The host callback must copy or enqueue bytes promptly and must not synchronously
 re-enter the surface. Producers must stop and all feed calls must finish before
-the surface is freed. Before this patch is connected to `tacod`, a native probe
-must prove rendered output/readback, input ordering, resize, no child process,
-and clean surface teardown.
+the surface is freed. The Zig backend tests are the authoritative proof that
+external mode has no process or PTY state; the runtime child snapshot is only
+corroborating evidence. Connecting this surface to `tacod` remains separate work.

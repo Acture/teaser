@@ -900,3 +900,29 @@ index ae0e200..eda0b2f 100644
          }
      }
  
+diff --git a/src/build/LibtoolStep.zig b/src/build/LibtoolStep.zig
+index d2b5149..465020f 100644
+--- a/src/build/LibtoolStep.zig
++++ b/src/build/LibtoolStep.zig
+@@ -33,7 +33,20 @@ pub fn create(b: *std.Build, opts: Options) *LibtoolStep {
+     const run_step = RunStep.create(b, b.fmt("libtool {s}", .{opts.name}));
+     run_step.addArgs(&.{ "libtool", "-static", "-o" });
+     const output = run_step.addOutputFileArg(opts.out_name);
+-    for (opts.sources) |source| run_step.addFileArg(source);
++    for (opts.sources, 0..) |source, index| {
++        // Zig archives may contain Mach-O members that are not 8-byte
++        // aligned. Apple libtool warns and silently omits those members,
++        // producing an XCFramework that builds but cannot be linked. ranlib
++        // rewrites the archive with the alignment Apple tooling requires.
++        const ranlib = RunStep.create(
++            b,
++            b.fmt("ranlib {s} source {d}", .{ opts.name, index }),
++        );
++        ranlib.addArgs(&.{ "ranlib", "-D" });
++        ranlib.addFileArg(source);
++        run_step.step.dependOn(&ranlib.step);
++        run_step.addFileArg(source);
++    }
+ 
+     self.* = .{
+         .step = &run_step.step,

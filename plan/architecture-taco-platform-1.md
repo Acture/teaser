@@ -83,11 +83,15 @@ a user shell, replace or isolate the checkpoint `portable-pty` multithreaded
 
 CP-M0.8 adds a parent-owned Ghostty external-I/O patch: the full surface can select
 a backend with no `Exec`, PTY, or child state; host output enters through the C ABI;
-and encoded input plus resize return through callbacks. Focused tests and
-cross-target type checks pass, but the native AppKit/Metal probe is blocked because
-this machine lacks Xcode's optional Metal Toolchain. Do not mark TASK-003 complete
-until a native probe verifies rendering/readback, input ordering, resize, absence of
-child processes, and teardown.
+and encoded input plus resize return through callbacks. Focused tests, exact ABI
+checks, a native Apple Silicon XCFramework build/link, and
+`app/macos/TACOProbe` pass. The probe covers IOSurface-backed Metal draw plumbing,
+readback, exact input ordering, resize consistency, direct-child snapshots, and
+ordered teardown. It checks a live IOSurface draw target, not captured pixels.
+Source-level tests prove the backend contains no process or PTY state; the runtime
+snapshot is corroborating rather than exhaustive. CP-M0.8 is closed, but TASK-003
+remains open for the clean-clone host, bundled resources, IME, clipboard,
+selection, 120 Hz, and signed-app gates.
 
 ### Implementation Phase 1 — Native terminal workspace
 
