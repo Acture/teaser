@@ -94,6 +94,8 @@ mkdir -p .build
 set -lx CLANG_MODULE_CACHE_PATH $probe_dir/clang-module-cache
 set -lx SWIFT_MODULECACHE_PATH $probe_dir/swift-module-cache
 xcrun swiftc -swift-version 6 -strict-concurrency=complete \
+	app/macos/TACO/Terminal/AttachmentClient.swift \
+	app/macos/TACO/Terminal/TerminalSurfaceAdapter.swift \
 	app/macos/TACOProbe/main.swift \
 	-I $xc/Headers \
 	$xc/libghostty-fat.a \
@@ -111,14 +113,21 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete \
 	-lproc \
 	-o .build/TACOProbe
 
+cargo build -p tacod
 set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
+set -lx TACO_TACOD_BIN $taco_root/target/debug/tacod
 .build/TACOProbe
 ```
 
-A pass covers a synchronous Metal draw to a live IOSurface-backed layer,
-readback, exact input ordering, resize consistency, direct-child snapshots, and
-ordered teardown. It does not compare captured pixels. The Metal download and
-GUI probe are intentionally not part of `scripts/check.fish`.
+A pass connects a fixed `tacod`-owned PTY Session through `taco.attach.v1`,
+rejects a second live Surface, forwards output/input/resize through Ghostty,
+detaches and reattaches the same child PID, replays output produced while
+detached, and completes a synchronous Metal draw to a live IOSurface-backed
+layer. It also checks full-screen readback, child exit, and ordered teardown.
+It does not compare captured pixels. `--probe-session` accepts no program or
+working directory and is only an integration fixture; it is not the production
+Session creation path or asynchronous terminal pump. The Metal download and GUI
+probe are intentionally not part of `scripts/check.fish`.
 
 ### Update the pin
 

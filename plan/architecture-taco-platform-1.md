@@ -93,6 +93,16 @@ snapshot is corroborating rather than exhaustive. CP-M0.8 is closed, but TASK-00
 remains open for the clean-clone host, bundled resources, IME, clipboard,
 selection, 120 Hz, and signed-app gates.
 
+CP-M0.9 connects a fixed daemon-owned PTY fixture to the native Ghostty surface
+through the production-shaped `taco.attach.v1` binary stream. The probe proves
+exclusive attachment, output/input/resize forwarding, detach with a live child,
+offline replay, same-PID reattachment, Metal draw plumbing, full-screen readback,
+and ordered exit/teardown. It deliberately creates the fixed child before
+threaded IPC accept begins and exposes no configurable program or cwd. It does
+not close the interactive-shell spawn, cross-PGID cleanup, clean-clone bundle,
+IME, clipboard, selection, 120 Hz, or production asynchronous input-pump
+portions of TASK-003.
+
 ### Implementation Phase 1 — Native terminal workspace
 
 - **GOAL-002**: Deliver a reliable local shell/TUI workspace with images, external Zed tiling, persistence, and CLI control.

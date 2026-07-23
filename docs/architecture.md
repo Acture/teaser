@@ -106,6 +106,18 @@ proof that no process or PTY state exists; the process snapshot is only
 corroborating runtime evidence. This closes CP-M0.8, but not TASK-003's broader
 clean-clone host, resources, IME, 120 Hz, and signed-bundle gates.
 
+CP-M0.9 joins the previously separate proofs through the real attachment
+protocol. A fixed, non-user-configurable `tacod --probe-session` child owns the
+PTY while `TerminalSurfaceAdapter` forwards Ghostty output, input, and resize
+over `taco.attach.v1`. The native probe verifies exclusive attachment, real
+PTY output readback, resize observed by the child, synchronous input, detach
+without child exit, bounded-offset offline replay, same-PID reattachment,
+Metal draw plumbing, process exit, and ordered teardown. The probe Session is
+created before `tacod` accepts threaded IPC work, so this checkpoint does not
+claim that production interactive-shell spawning is safe. Its synchronous,
+bounded-frame Swift bridge is a feasibility harness, not the production
+asynchronous attachment pump or final paste/backpressure policy.
+
 The foreground daemon does not yet expose PTY creation. Before a user shell is
 wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
 risk, bounded input backpressure, and cross-PGID session cleanup. Working-directory
