@@ -41,32 +41,34 @@ enum TerminalSurfaceAdapterError: Error, CustomStringConvertible {
 	var description: String {
 		switch self {
 		case .alreadyAttached:
-			return "terminal Surface adapter already owns an attachment"
+			return "terminal Surface adapter already owns an attachment enqueuer"
 		case .quiesced:
 			return "terminal Surface adapter is quiesced"
 		}
 	}
 }
 
-/// Bridges Ghostty's synchronous EXTERNAL callbacks to one exclusive tacod
-/// attachment. Writes remain synchronous and bounded, so this probe seam never
-/// grows an unbounded input queue. A production host can replace this transport
-/// policy without changing the Ghostty callback boundary.
+/// Copies Ghostty's synchronous EXTERNAL callbacks into a nonblocking,
+/// production-shaped attachment pump. The adapter owns no socket or Session
+/// lifetime.
 final class TerminalSurfaceAdapter: @unchecked Sendable {
+	private static let maximumRecordedFailures: Int = 64
+
 	private let condition: NSCondition = .init()
 	private var acceptingCallbacks: Bool = true
 	private var activeCallbacks: Int = 0
-	private var client: AttachmentClient?
-	private var resizeHistory: [TerminalResizeEvent] = []
+	private var enqueuer: (any TerminalAttachmentEnqueuing)?
+	private var lastResizeEvent: TerminalResizeEvent?
+	private var resizeRevision: UInt64 = 0
 	private var lastForwardableSize: AttachmentTerminalSize?
 	private var callbackFailures: [String] = []
 
 	private struct CallbackLease {
-		let client: AttachmentClient?
+		let enqueuer: (any TerminalAttachmentEnqueuing)?
 	}
 
-	init(client: AttachmentClient) {
-		self.client = client
+	init(enqueuer: (any TerminalAttachmentEnqueuing)? = nil) {
+		self.enqueuer = enqueuer
 	}
 
 	@MainActor
@@ -113,7 +115,8 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 		return config
 	}
 
-	func install(client: AttachmentClient) throws {
+	@MainActor
+	func install(enqueuer: any TerminalAttachmentEnqueuing) throws {
 		condition.lock()
 		guard acceptingCallbacks else {
 			condition.unlock()
@@ -122,51 +125,59 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 		while activeCallbacks > 0 {
 			condition.wait()
 		}
-		guard self.client == nil else {
+		guard self.enqueuer == nil else {
 			condition.unlock()
 			throw TerminalSurfaceAdapterError.alreadyAttached
 		}
-		let size: AttachmentTerminalSize? = lastForwardableSize
 
-		do {
-			if let size {
-				try client.sendResize(size)
-			}
-		} catch {
+		while true {
+			let observedResizeRevision: UInt64 = resizeRevision
+			let size: AttachmentTerminalSize? = lastForwardableSize
 			condition.unlock()
-			client.close()
-			throw error
+			if let size {
+				_ = enqueuer.enqueueResize(size)
+			}
+			condition.lock()
+			while activeCallbacks > 0 {
+				condition.wait()
+			}
+			guard acceptingCallbacks else {
+				condition.unlock()
+				throw TerminalSurfaceAdapterError.quiesced
+			}
+			if resizeRevision == observedResizeRevision {
+				self.enqueuer = enqueuer
+				condition.unlock()
+				return
+			}
 		}
-		self.client = client
-		condition.unlock()
 	}
 
+	@MainActor
 	func detach() {
 		condition.lock()
 		while activeCallbacks > 0 {
 			condition.wait()
 		}
-		let detachedClient: AttachmentClient? = client
-		client = nil
+		enqueuer = nil
 		condition.unlock()
-		detachedClient?.close()
 	}
 
-	func quiesceAndDetach() {
+	@MainActor
+	func quiesce() {
 		condition.lock()
 		acceptingCallbacks = false
 		while activeCallbacks > 0 {
 			condition.wait()
 		}
-		let detachedClient: AttachmentClient? = client
-		client = nil
+		enqueuer = nil
 		condition.unlock()
-		detachedClient?.close()
 	}
 
 	func resetResizes() {
 		condition.lock()
-		resizeHistory.removeAll(keepingCapacity: true)
+		lastResizeEvent = nil
+		resizeRevision &+= 1
 		lastForwardableSize = nil
 		condition.unlock()
 	}
@@ -174,7 +185,7 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 	func lastResize() -> TerminalResizeEvent? {
 		condition.lock()
 		defer { condition.unlock() }
-		return resizeHistory.last
+		return lastResizeEvent
 	}
 
 	func failures() -> [String] {
@@ -198,29 +209,14 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 			return
 		}
 		guard let bytes, count > 0 else { return }
-		guard let currentClient = lease.client else {
+		guard let currentEnqueuer = lease.enqueuer else {
 			recordFailure("input callback arrived without an attached Session")
 			return
 		}
-		do {
-			var offset: Int = 0
-			while offset < count {
-				let chunkCount: Int = min(
-					attachmentMaximumFramePayloadBytes,
-					count - offset
-				)
-				let chunk: [UInt8] = Array(
-					UnsafeBufferPointer(
-						start: bytes.advanced(by: offset),
-						count: chunkCount
-					)
-				)
-				try currentClient.sendInput(chunk)
-				offset += chunkCount
-			}
-		} catch {
-			recordFailure("input forwarding failed: \(error)")
-		}
+		let payload: [UInt8] = Array(
+			UnsafeBufferPointer(start: bytes, count: count)
+		)
+		_ = currentEnqueuer.enqueueInput(payload)
 	}
 
 	private func receiveResize(
@@ -259,17 +255,14 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 			pixelHeight: pixelHeight
 		)
 		condition.lock()
-		resizeHistory.append(event)
+		lastResizeEvent = event
+		resizeRevision &+= 1
 		lastForwardableSize = size
 		condition.broadcast()
 		condition.unlock()
 
-		guard let currentClient = lease.client else { return }
-		do {
-			try currentClient.sendResize(size)
-		} catch {
-			recordFailure("resize forwarding failed: \(error)")
-		}
+		guard let currentEnqueuer = lease.enqueuer else { return }
+		_ = currentEnqueuer.enqueueResize(size)
 	}
 
 	private func beginCallback() -> CallbackLease? {
@@ -277,7 +270,7 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 		defer { condition.unlock() }
 		guard acceptingCallbacks else { return nil }
 		activeCallbacks += 1
-		return CallbackLease(client: client)
+		return CallbackLease(enqueuer: enqueuer)
 	}
 
 	private func endCallback() {
@@ -289,7 +282,9 @@ final class TerminalSurfaceAdapter: @unchecked Sendable {
 
 	private func recordFailure(_ message: String) {
 		condition.lock()
-		callbackFailures.append(message)
+		if callbackFailures.count < Self.maximumRecordedFailures {
+			callbackFailures.append(message)
+		}
 		condition.broadcast()
 		condition.unlock()
 	}

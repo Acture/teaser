@@ -16,7 +16,7 @@ Deliverables:
   selection, clipboard, resize, and 120 Hz smoke tests;
 - minimal Ghostty semantic-range API experiment and one persisted shell block;
 - daemon-owned PTY Session with exclusive detach/reattach, bounded replay, and a
-  binary Surface data plane;
+  bounded asynchronous binary Surface data plane;
 - Swift/Rust UniFFI control-path spike with no raw terminal data crossing it;
 - Claude and Codex ACP capability smoke tests, explicitly compared with native CLI
   mode rather than treated as equivalent;
@@ -33,8 +33,12 @@ Exit gates:
 - semantic blocks require only a narrow embedding/query patch, not a new terminal
   model, reflow implementation, or renderer;
 - terminal hot paths contain no UniFFI, JSON, or SQLite calls;
+- Ghostty callbacks perform no socket I/O, blocking waits, or AppKit work; queue
+  overflow and post-reconnect input uncertainty are explicit;
 - one real child keeps the same PID across Surface detach/reattach, while a second
   live Surface is rejected and replay gaps are explicit;
+- reconnect resumes from committed output without replaying input, and teardown
+  completes only after socket workers and Surface feeds are quiescent;
 - explicit Session termination reaps a stubborn descendant in the verified owning
   process group before the attachment closes;
 - all spikes have repeatable automated or scripted checks.

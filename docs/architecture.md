@@ -2,7 +2,7 @@
 
 Status: design baseline
 
-Last updated: 2026-07-21
+Last updated: 2026-07-27
 
 ## 1. System boundary
 
@@ -18,7 +18,8 @@ TACO.app
 │   └── focus, actions, clipboard, permissions
 ├── TerminalSurfaceAdapter
 │   └── pinned libghostty                      VT state + Metal + IME + selection
-├── AttachmentClient                           bounded local binary frames
+├── TerminalAttachmentPump                    bounded asynchronous data plane
+│   └── AttachmentClient                       taco.attach.v1 transport
 └── low-frequency typed control
 
 tacod
@@ -118,10 +119,31 @@ claim that production interactive-shell spawning is safe. Its synchronous,
 bounded-frame Swift bridge is a feasibility harness, not the production
 asynchronous attachment pump or final paste/backpressure policy.
 
+CP-M0.10 replaces that synchronous bridge with the production-shaped
+`TerminalAttachmentPump`. Ghostty callbacks only copy and enqueue data; they
+perform no socket I/O and never wait. One reader continuously feeds ordered
+output into the Surface, while one writer preserves input/resize order. The
+outbound queue is capped at 1 MiB of input and 4,096 events. Only consecutive
+tail resize events coalesce. Overflow rejects the whole callback payload,
+discards input whose delivery is uncertain, reports that state, and reconnects
+rather than silently truncating input.
+
+The pump reconnects under one five-second monotonic deadline from the last
+output offset committed after a completed Surface feed. It never retransmits
+old input; it may resend only the latest resize. Output resumes after
+reconnection with input paused until explicit user confirmation acknowledges
+that recovery generation; a stale confirmation cannot unlock a later
+reconnect. A replay gap is a fatal desynchronization: the current Surface
+receives no later output. Normal detach stops accepting input and drains queued
+input for at most five seconds; a timeout aborts the transport and reports
+uncertain delivery. Teardown quiesces callbacks, drains or stops the pump,
+closes the socket to unblock both workers, joins them, waits for any Surface
+feed to finish, and only then frees the Surface on the main thread.
+
 The foreground daemon does not yet expose PTY creation. Before a user shell is
 wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
-risk, bounded input backpressure, and cross-PGID session cleanup. Working-directory
-selection is intentionally absent until the Checkout resolver can enforce it.
+risk and cross-PGID session cleanup. Working-directory selection is intentionally
+absent until the Checkout resolver can enforce it.
 
 ## 4. Surface and layout model
 

@@ -4,6 +4,50 @@ import Foundation
 let attachmentProtocolVersion: UInt32 = 1
 let attachmentMaximumFramePayloadBytes: Int = 65_536
 
+struct AttachmentConnectionDeadline: Sendable {
+	let uptimeNanoseconds: UInt64
+
+	init(timeout: TimeInterval) {
+		precondition(timeout.isFinite && timeout > 0)
+		let intervalNanosecondsValue: TimeInterval =
+			(timeout * 1_000_000_000).rounded(.up)
+		let intervalNanoseconds: UInt64 =
+			intervalNanosecondsValue >= TimeInterval(UInt64.max)
+			? UInt64.max
+			: UInt64(intervalNanosecondsValue)
+		let (deadline, overflow): (UInt64, Bool) =
+			DispatchTime.now().uptimeNanoseconds
+			.addingReportingOverflow(intervalNanoseconds)
+		uptimeNanoseconds = overflow ? UInt64.max : deadline
+	}
+
+	private init(uptimeNanoseconds: UInt64) {
+		self.uptimeNanoseconds = uptimeNanoseconds
+	}
+
+	var remainingTimeInterval: TimeInterval {
+		let now: UInt64 = DispatchTime.now().uptimeNanoseconds
+		guard now < uptimeNanoseconds else { return 0 }
+		return TimeInterval(uptimeNanoseconds - now) / 1_000_000_000
+	}
+
+	var isExpired: Bool {
+		DispatchTime.now().uptimeNanoseconds >= uptimeNanoseconds
+	}
+
+	var dispatchTime: DispatchTime {
+		.init(uptimeNanoseconds: uptimeNanoseconds)
+	}
+
+	func capped(to timeout: TimeInterval) -> AttachmentConnectionDeadline {
+		precondition(timeout.isFinite && timeout > 0)
+		let cap: AttachmentConnectionDeadline = .init(timeout: timeout)
+		return .init(
+			uptimeNanoseconds: min(uptimeNanoseconds, cap.uptimeNanoseconds)
+		)
+	}
+}
+
 enum AttachmentClientError: Error, CustomStringConvertible, Equatable {
 	case invalidSocketPath(String)
 	case invalidRequest(String)
@@ -136,31 +180,34 @@ final class AttachmentClient: @unchecked Sendable {
 		sessionID: String,
 		surfaceID: UInt64,
 		nextOffset: UInt64,
-		timeoutSeconds: Int = 5,
-		frameReadTimeoutSeconds: Int? = nil
+		timeoutSeconds: TimeInterval = 5,
+		deadline suppliedDeadline: AttachmentConnectionDeadline? = nil,
+		frameReadTimeoutSeconds: TimeInterval? = nil
 	) throws -> AttachmentClient {
 		guard UUID(uuidString: sessionID) != nil else {
 			throw AttachmentClientError.invalidRequest(
 				"session_id must be an opaque UUID"
 			)
 		}
-		guard timeoutSeconds > 0 else {
+		guard timeoutSeconds.isFinite, timeoutSeconds > 0 else {
 			throw AttachmentClientError.invalidRequest(
-				"timeoutSeconds must be positive"
+				"timeoutSeconds must be finite and positive"
 			)
 		}
 		if let frameReadTimeoutSeconds {
-			guard frameReadTimeoutSeconds > 0 else {
+			guard
+				frameReadTimeoutSeconds.isFinite,
+				frameReadTimeoutSeconds > 0
+			else {
 				throw AttachmentClientError.invalidRequest(
-					"frameReadTimeoutSeconds must be positive when supplied"
+					"frameReadTimeoutSeconds must be finite and positive when supplied"
 				)
 			}
 		}
 
-		let descriptor: Int32 = try openSocket(
-			path: socketPath,
-			timeoutSeconds: timeoutSeconds
-		)
+		let deadline: AttachmentConnectionDeadline =
+			suppliedDeadline ?? .init(timeout: timeoutSeconds)
+		let descriptor: Int32 = try openSocket(path: socketPath, deadline: deadline)
 		var retainedDescriptor: Bool = false
 		defer {
 			if !retainedDescriptor {
@@ -184,11 +231,16 @@ final class AttachmentClient: @unchecked Sendable {
 			)
 		}
 		requestBytes.append(0x0A)
-		try writeAll(descriptor: descriptor, bytes: requestBytes)
+		try writeAll(
+			descriptor: descriptor,
+			bytes: requestBytes,
+			deadline: deadline
+		)
 
 		let responseBytes: [UInt8] = try readLine(
 			descriptor: descriptor,
-			maximumBytes: maximumJSONLineBytes
+			maximumBytes: maximumJSONLineBytes,
+			deadline: deadline
 		)
 		let response: AttachResponse
 		do {
@@ -268,11 +320,22 @@ final class AttachmentClient: @unchecked Sendable {
 			liveOffset: liveOffset,
 			maximumFramePayloadBytes: attachmentMaximumFramePayloadBytes
 		)
+		try restoreBlocking(descriptor: descriptor)
 		try setSocketTimeout(
 			descriptor: descriptor,
 			option: SO_RCVTIMEO,
 			seconds: frameReadTimeoutSeconds
 		)
+		try setSocketTimeout(
+			descriptor: descriptor,
+			option: SO_SNDTIMEO,
+			seconds: timeoutSeconds
+		)
+		guard !deadline.isExpired else {
+			throw AttachmentClientError.transport(
+				"attachment handshake exceeded its deadline"
+			)
+		}
 		retainedDescriptor = true
 		return AttachmentClient(
 			descriptor: descriptor,
@@ -506,7 +569,7 @@ final class AttachmentClient: @unchecked Sendable {
 
 	private static func openSocket(
 		path: String,
-		timeoutSeconds: Int
+		deadline: AttachmentConnectionDeadline
 	) throws -> Int32 {
 		let pathBytes: [UInt8] = Array(path.utf8)
 		guard !pathBytes.isEmpty, !pathBytes.contains(0) else {
@@ -566,11 +629,15 @@ final class AttachmentClient: @unchecked Sendable {
 			)
 		}
 
-		for option: Int32 in [SO_RCVTIMEO, SO_SNDTIMEO] {
-			try setSocketTimeout(
-				descriptor: descriptor,
-				option: option,
-				seconds: timeoutSeconds
+		let originalFlags: Int32 = Darwin.fcntl(descriptor, F_GETFL)
+		guard originalFlags >= 0 else {
+			throw AttachmentClientError.transport(
+				"fcntl(F_GETFL): \(currentErrnoDescription())"
+			)
+		}
+		guard Darwin.fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
+			throw AttachmentClientError.transport(
+				"fcntl(F_SETFL, O_NONBLOCK): \(currentErrnoDescription())"
 			)
 		}
 
@@ -584,27 +651,161 @@ final class AttachmentClient: @unchecked Sendable {
 					socketAddress,
 					socklen_t(addressLength)
 				)
+				}
 			}
-		}
-		guard connectStatus == 0 else {
-			throw AttachmentClientError.transport(
-				"connect \(String(reflecting: path)): "
-					+ currentErrnoDescription()
-			)
+		if connectStatus != 0 {
+			guard
+				errno == EINPROGRESS
+					|| errno == EALREADY
+					|| errno == EWOULDBLOCK
+			else {
+				throw AttachmentClientError.transport(
+					"connect \(String(reflecting: path)): "
+						+ currentErrnoDescription()
+				)
+			}
+			try waitForConnection(descriptor: descriptor, deadline: deadline)
 		}
 
 		connected = true
 		return descriptor
 	}
 
+	private static func waitForConnection(
+		descriptor: Int32,
+		deadline: AttachmentConnectionDeadline
+	) throws {
+		while true {
+			let remaining: TimeInterval = deadline.remainingTimeInterval
+			guard remaining > 0 else {
+				throw AttachmentClientError.transport(
+					"connect exceeded its deadline"
+				)
+			}
+			let milliseconds: Int32 = Int32(
+				min(
+					Double(Int32.max),
+					max(1, ceil(remaining * 1_000))
+				)
+			)
+			var descriptorEvent: pollfd = .init(
+				fd: descriptor,
+				events: Int16(POLLOUT),
+				revents: 0
+			)
+			let status: Int32 = Darwin.poll(&descriptorEvent, 1, milliseconds)
+			if status == 0 {
+				throw AttachmentClientError.transport(
+					"connect exceeded its deadline"
+				)
+			}
+			if status < 0 {
+				if errno == EINTR {
+					continue
+				}
+				throw AttachmentClientError.transport(
+					"poll(connect): \(currentErrnoDescription())"
+				)
+			}
+
+			var socketError: Int32 = 0
+			var socketErrorLength: socklen_t = .init(
+				MemoryLayout<Int32>.size
+			)
+			let result: Int32 = Darwin.getsockopt(
+				descriptor,
+				SOL_SOCKET,
+				SO_ERROR,
+				&socketError,
+				&socketErrorLength
+			)
+			guard result == 0 else {
+				throw AttachmentClientError.transport(
+					"getsockopt(SO_ERROR): \(currentErrnoDescription())"
+				)
+			}
+			guard socketError == 0 else {
+				throw AttachmentClientError.transport(
+					"connect: \(String(cString: strerror(socketError)))"
+				)
+			}
+			return
+		}
+	}
+
+	private static func restoreBlocking(descriptor: Int32) throws {
+		let flags: Int32 = Darwin.fcntl(descriptor, F_GETFL)
+		guard flags >= 0 else {
+			throw AttachmentClientError.transport(
+				"fcntl(F_GETFL): \(currentErrnoDescription())"
+			)
+		}
+		guard Darwin.fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+			throw AttachmentClientError.transport(
+				"fcntl(F_SETFL, blocking): \(currentErrnoDescription())"
+			)
+		}
+	}
+
+	private static func waitForIO(
+		descriptor: Int32,
+		events: Int16,
+		deadline: AttachmentConnectionDeadline,
+		operation: String
+	) throws {
+		while true {
+			let remaining: TimeInterval = deadline.remainingTimeInterval
+			guard remaining > 0 else {
+				throw AttachmentClientError.transport(
+					"\(operation) exceeded its deadline"
+				)
+			}
+			let milliseconds: Int32 = Int32(
+				min(
+					Double(Int32.max),
+					max(1, ceil(remaining * 1_000))
+				)
+			)
+			var descriptorEvent: pollfd = .init(
+				fd: descriptor,
+				events: events,
+				revents: 0
+			)
+			let status: Int32 = Darwin.poll(&descriptorEvent, 1, milliseconds)
+			if status > 0 {
+				return
+			}
+			if status == 0 {
+				throw AttachmentClientError.transport(
+					"\(operation) exceeded its deadline"
+				)
+			}
+			if errno == EINTR {
+				continue
+			}
+			throw AttachmentClientError.transport(
+				"poll(\(operation)): \(currentErrnoDescription())"
+			)
+		}
+	}
+
 	private static func setSocketTimeout(
 		descriptor: Int32,
 		option: Int32,
-		seconds: Int?
+		seconds: TimeInterval?
 	) throws {
+		let interval: TimeInterval = seconds ?? 0
+		let wholeSeconds: Int = Int(interval.rounded(.down))
+		let fractionalMicroseconds: Int = Int(
+			((interval - TimeInterval(wholeSeconds)) * 1_000_000).rounded(.up)
+		)
+		let normalizedSeconds: Int =
+			wholeSeconds + fractionalMicroseconds / 1_000_000
+		let normalizedMicroseconds: Int =
+			fractionalMicroseconds % 1_000_000
 		var timeout: timeval = .init(
-			tv_sec: seconds ?? 0,
-			tv_usec: 0
+			tv_sec: normalizedSeconds,
+			tv_usec: Int32(normalizedMicroseconds)
 		)
 		let status: Int32 = withUnsafePointer(to: &timeout) { pointer in
 			Darwin.setsockopt(
@@ -624,14 +825,16 @@ final class AttachmentClient: @unchecked Sendable {
 
 	private static func readLine(
 		descriptor: Int32,
-		maximumBytes: Int
+		maximumBytes: Int,
+		deadline: AttachmentConnectionDeadline
 	) throws -> [UInt8] {
 		var line: [UInt8] = []
 		line.reserveCapacity(256)
 		while line.count <= maximumBytes {
 			let byte: [UInt8] = try readExactly(
 				descriptor: descriptor,
-				count: 1
+				count: 1,
+				deadline: deadline
 			)
 			if byte[0] == 0x0A {
 				if line.last == 0x0D {
@@ -648,7 +851,8 @@ final class AttachmentClient: @unchecked Sendable {
 
 	private static func readExactly(
 		descriptor: Int32,
-		count: Int
+		count: Int,
+		deadline: AttachmentConnectionDeadline? = nil
 	) throws -> [UInt8] {
 		guard count >= 0 else {
 			throw AttachmentClientError.protocolViolation(
@@ -660,6 +864,11 @@ final class AttachmentClient: @unchecked Sendable {
 		var bytes: [UInt8] = .init(repeating: 0, count: count)
 		var received: Int = 0
 		while received < count {
+			if let deadline, deadline.isExpired {
+				throw AttachmentClientError.transport(
+					"read exceeded its deadline"
+				)
+			}
 			let result: Int = bytes.withUnsafeMutableBytes { buffer in
 				guard let baseAddress = buffer.baseAddress else { return 0 }
 				return Darwin.read(
@@ -678,6 +887,15 @@ final class AttachmentClient: @unchecked Sendable {
 			if errno == EINTR {
 				continue
 			}
+			if errno == EAGAIN || errno == EWOULDBLOCK, let deadline {
+				try waitForIO(
+					descriptor: descriptor,
+					events: Int16(POLLIN),
+					deadline: deadline,
+					operation: "read"
+				)
+				continue
+			}
 			throw AttachmentClientError.transport(
 				"read: \(currentErrnoDescription())"
 			)
@@ -687,11 +905,17 @@ final class AttachmentClient: @unchecked Sendable {
 
 	private static func writeAll(
 		descriptor: Int32,
-		bytes: [UInt8]
+		bytes: [UInt8],
+		deadline: AttachmentConnectionDeadline? = nil
 	) throws {
 		guard !bytes.isEmpty else { return }
 		var written: Int = 0
 		while written < bytes.count {
+			if let deadline, deadline.isExpired {
+				throw AttachmentClientError.transport(
+					"write exceeded its deadline"
+				)
+			}
 			let result: Int = bytes.withUnsafeBytes { buffer in
 				guard let baseAddress = buffer.baseAddress else { return 0 }
 				return Darwin.write(
@@ -704,7 +928,21 @@ final class AttachmentClient: @unchecked Sendable {
 				written += result
 				continue
 			}
-			if result < 0, errno == EINTR {
+			if result == 0 {
+				throw AttachmentClientError.transport(
+					"write made no progress"
+				)
+			}
+			if errno == EINTR {
+				continue
+			}
+			if errno == EAGAIN || errno == EWOULDBLOCK, let deadline {
+				try waitForIO(
+					descriptor: descriptor,
+					events: Int16(POLLOUT),
+					deadline: deadline,
+					operation: "write"
+				)
 				continue
 			}
 			throw AttachmentClientError.transport(

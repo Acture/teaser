@@ -21,10 +21,19 @@ The submodule must remain clean. TACO-owned experiments and patches live in
 
 The parent-owned patch adds one terminal-level test proving that raw OSC 133
 command output remains readable while the screen reflows from 80 to 7 columns
-and back. Run it in a disposable checkout so the submodule remains unchanged:
+and back. Run it in an ignored, repository-local checkout so the submodule
+remains unchanged and the build survives terminal restarts:
 
 ```fish
-set probe_dir (mktemp -d /tmp/taco-ghostty-probe.XXXXXX)
+set taco_root $PWD
+set probe_dir $taco_root/target/ghostty-semantic-probe
+test ! -e $probe_dir
+or begin
+	printf 'probe checkout already exists: %s\n' $probe_dir >&2
+	exit 1
+end
+mkdir -p $probe_dir
+or exit 1
 git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
 git -C $probe_dir/ghostty checkout --quiet --detach \
 	332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
@@ -37,18 +46,25 @@ cd $probe_dir/ghostty
 ```
 
 The first build may download Ghostty dependencies. Zig build outputs and caches
-stay in the disposable checkout. Do not use `test-lib-vt` at this pin: it also
-compiles Ghostty's C ABI target, which fails on the upstream
+stay under `target/`. Do not use `test-lib-vt` at this pin: it also compiles
+Ghostty's C ABI target, which fails on the upstream
 `semantic_prompt.Command` union before reaching the filtered Terminal test.
 
 ### Verify the external-surface I/O gate
 
 The second patch adds host-driven I/O to the full surface without constructing
-Ghostty's exec backend. Apply it in a fresh disposable checkout:
+Ghostty's exec backend. Apply it in a fresh repository-local checkout:
 
 ```fish
 set taco_root $PWD
-set probe_dir (mktemp -d /tmp/taco-ghostty-external.XXXXXX)
+set probe_dir $taco_root/target/ghostty-external-probe
+test ! -e $probe_dir
+or begin
+	printf 'probe checkout already exists: %s\n' $probe_dir >&2
+	exit 1
+end
+mkdir -p $probe_dir
+or exit 1
 git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
 git -C $probe_dir/ghostty checkout --quiet --detach \
 	332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
@@ -90,11 +106,13 @@ set xc $probe_dir/ghostty/macos/GhosttyKit.xcframework/macos-arm64
 nm -g $xc/libghostty-fat.a | rg '_ghostty_(app_new|surface_new)'
 
 cd $taco_root
-mkdir -p .build
-set -lx CLANG_MODULE_CACHE_PATH $probe_dir/clang-module-cache
-set -lx SWIFT_MODULECACHE_PATH $probe_dir/swift-module-cache
-xcrun swiftc -swift-version 6 -strict-concurrency=complete \
+set native_probe_dir $taco_root/target/native-probe
+mkdir -p $native_probe_dir
+set -lx CLANG_MODULE_CACHE_PATH $native_probe_dir/clang-module-cache
+set -lx SWIFT_MODULECACHE_PATH $native_probe_dir/swift-module-cache
+xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
 	app/macos/TACO/Terminal/AttachmentClient.swift \
+	app/macos/TACO/Terminal/TerminalAttachmentPump.swift \
 	app/macos/TACO/Terminal/TerminalSurfaceAdapter.swift \
 	app/macos/TACOProbe/main.swift \
 	-I $xc/Headers \
@@ -111,23 +129,24 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete \
 	-framework QuartzCore \
 	-lc++ \
 	-lproc \
-	-o .build/TACOProbe
+	-o $native_probe_dir/TACOProbe
 
 cargo build -p tacod
 set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
 set -lx TACO_TACOD_BIN $taco_root/target/debug/tacod
-.build/TACOProbe
+$native_probe_dir/TACOProbe
 ```
 
 A pass connects a fixed `tacod`-owned PTY Session through `taco.attach.v1`,
 rejects a second live Surface, forwards output/input/resize through Ghostty,
-detaches and reattaches the same child PID, replays output produced while
-detached, and completes a synchronous Metal draw to a live IOSurface-backed
-layer. It also checks full-screen readback, child exit, and ordered teardown.
-It does not compare captured pixels. `--probe-session` accepts no program or
-working directory and is only an integration fixture; it is not the production
-Session creation path or asynchronous terminal pump. The Metal download and GUI
-probe are intentionally not part of `scripts/check.fish`.
+automatically reconnects the same child PID, replays output produced offline,
+keeps input paused until explicit confirmation, and completes a synchronous
+Metal draw to a live IOSurface-backed layer. It also checks full-screen
+readback, child exit, and ordered teardown after socket workers and Surface
+feeds quiesce. It does not compare captured pixels. `--probe-session` accepts
+no program or working directory and is only an integration fixture; it is not
+the production Session creation path. The Metal download and GUI probe are
+intentionally not part of `scripts/check.fish`.
 
 ### Update the pin
 

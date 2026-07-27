@@ -62,6 +62,22 @@ Output offsets are monotonic. A reattaching Surface supplies its next unread
 offset and receives only missing retained bytes. If that offset was evicted,
 `0x82` reports the gap before replay starts at the oldest retained byte.
 
+The `taco.attach.v1` wire format is unchanged by the asynchronous Swift client.
+Its attachment pump owns one reader and one ordered writer. Ghostty callbacks
+only copy and enqueue; they never perform socket I/O or wait. The outbound queue
+accepts at most 1 MiB of input and 4,096 events, rejects an overflowing payload
+atomically, and coalesces only consecutive tail resize events.
+
+On transport loss, the client reconnects under one five-second monotonic
+deadline using the last output offset committed after a completed Surface feed.
+It never replays input, may restore the latest resize, and keeps new input paused
+after output resumes until confirmation acknowledges the current recovery ID;
+a stale acknowledgement cannot unlock a later reconnect. A replay-gap frame is
+fatal for the current Surface. Detach stops new input and gives queued input five
+seconds to drain; timeout reports uncertain delivery and aborts the socket.
+Shutdown closes the socket to unblock both workers and waits until no Surface
+feed is in flight.
+
 This protocol is not stable yet. Arbitrary `argv` and `cwd` are deliberately
 absent, Session state is memory-only, and the foreground binary cannot create a
 PTY Session until the Checkout resolver exists.
@@ -72,6 +88,9 @@ PTY Session until the Checkout resolver exists.
 fish scripts/check.fish
 ```
 
-The integration test uses a real macOS PTY and Unix socket to prove exclusive
-attach, detach-time output replay, unchanged child PID, resize, exit, and an
-explicit replay gap.
+Swift fake-transport tests cover nonblocking enqueue, ordered writes, queue
+overflow, reconnect from the committed offset, paused-input confirmation,
+replay-gap failure, bounded detach drain, and quiescent teardown. The native
+integration probe uses a real macOS PTY and Unix socket to prove exclusive
+attach, automatic reconnect and offline replay with an unchanged child PID,
+paused then explicitly resumed input, resize, exit, and ordered teardown.

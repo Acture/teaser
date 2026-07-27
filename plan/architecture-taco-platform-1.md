@@ -2,15 +2,15 @@
 goal: Build the first supportable macOS TACO platform from the validated architecture
 version: 1.0
 date_created: 2026-07-21
-last_updated: 2026-07-21
+last_updated: 2026-07-27
 owner: Acture
-status: 'Planned'
+status: 'In Progress'
 tags: [architecture, terminal, macos, rust, swift, agents]
 ---
 
 # Introduction
 
-![Status: Planned](https://img.shields.io/badge/status-Planned-blue)
+![Status: In Progress](https://img.shields.io/badge/status-In%20Progress-yellow)
 
 This plan builds TACO from an empty repository into a macOS daily-driver terminal
 workspace. It implements risk spikes first, then the terminal workspace, semantic
@@ -79,7 +79,7 @@ same-PGID descendant after both explicit termination and natural leader exit. It
 uses non-reaping exit observation to preserve PGID identity through cleanup, but
 does not cover job-control processes moved into other PGIDs. Before TASK-003 starts
 a user shell, replace or isolate the checkpoint `portable-pty` multithreaded
-`pre_exec` path, bound input backpressure, and provide cross-PGID session cleanup.
+`pre_exec` path and provide cross-PGID session cleanup.
 
 CP-M0.8 adds a parent-owned Ghostty external-I/O patch: the full surface can select
 a backend with no `Exec`, PTY, or child state; host output enters through the C ABI;
@@ -102,6 +102,23 @@ threaded IPC accept begins and exposes no configurable program or cwd. It does
 not close the interactive-shell spawn, cross-PGID cleanup, clean-clone bundle,
 IME, clipboard, selection, 120 Hz, or production asynchronous input-pump
 portions of TASK-003.
+
+CP-M0.10 replaces the synchronous Swift bridge with a bounded asynchronous
+attachment pump while leaving `taco.attach.v1` unchanged. Ghostty callbacks
+only copy and enqueue. A dedicated reader feeds ordered output, and a dedicated
+writer preserves input/resize order behind 1 MiB input and 4,096-event limits.
+Overflow rejects the complete payload and reports uncertain input delivery.
+The pump reconnects under one five-second monotonic deadline from the last
+output offset committed after Surface feed, never retransmits old input, and
+resumes output with input paused until a recovery-ID-bound confirmation. Replay
+gaps terminate the current Surface as desynchronized. Detach drains for at most
+five seconds, and teardown joins socket workers after all Surface feeds
+quiesce. Fake-transport tests cover ordering, pressure, reconnect, gap, drain,
+and blocked-worker teardown; the native probe covers automatic offline
+recovery, same-PID continuity, explicit input resume, resize, exit, and ordered
+Surface teardown.
+TASK-003 remains open for the clean-clone host, bundled resources, IME,
+clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 
 ### Implementation Phase 1 — Native terminal workspace
 

@@ -46,6 +46,253 @@ private struct ProbeBootstrap: Decodable, Sendable {
 	}
 }
 
+private final class FaultInjectingTransport:
+	TerminalAttachmentTransport, @unchecked Sendable
+{
+	private let base: AttachmentClient
+	private let lock: NSLock = .init()
+	private var successfulInputBytes: [UInt8] = []
+
+	init(base: AttachmentClient) {
+		self.base = base
+	}
+
+	var nextUnreadOffset: UInt64 {
+		base.nextUnreadOffset
+	}
+
+	var upgrade: AttachmentUpgrade {
+		base.upgrade
+	}
+
+	func sendInput(_ bytes: [UInt8]) throws {
+		try base.sendInput(bytes)
+		lock.lock()
+		successfulInputBytes.append(contentsOf: bytes)
+		lock.unlock()
+	}
+
+	func sendResize(_ size: AttachmentTerminalSize) throws {
+		try base.sendResize(size)
+	}
+
+	func readFrame() throws -> AttachmentServerFrame {
+		try base.readFrame()
+	}
+
+	func close() {
+		base.close()
+	}
+
+	func injectDrop() {
+		DispatchQueue.global(qos: .utility).async { [base] in
+			base.close()
+		}
+	}
+
+	func successfulInputContains(_ bytes: [UInt8]) -> Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return Data(successfulInputBytes).range(of: Data(bytes)) != nil
+	}
+}
+
+private final class ProbeAttachmentConnector:
+	TerminalAttachmentConnecting, @unchecked Sendable
+{
+	private let socketPath: String
+	private let sessionID: String
+	private let surfaceID: UInt64
+	private let lock: NSLock = .init()
+	private var connectionOffsets: [UInt64] = []
+	private var transports: [FaultInjectingTransport] = []
+	private var reconnectNotBeforeUptimeNanoseconds: UInt64?
+
+	init(socketPath: String, sessionID: String, surfaceID: UInt64) {
+		self.socketPath = socketPath
+		self.sessionID = sessionID
+		self.surfaceID = surfaceID
+	}
+
+	func connect(
+		nextOffset: UInt64,
+		deadline: AttachmentConnectionDeadline
+	) throws -> any TerminalAttachmentTransport {
+		lock.lock()
+		let reconnectNotBefore: UInt64? =
+			transports.isEmpty ? nil : reconnectNotBeforeUptimeNanoseconds
+		lock.unlock()
+		if
+			let reconnectNotBefore,
+			DispatchTime.now().uptimeNanoseconds < reconnectNotBefore
+		{
+			throw AttachmentClientError.transport(
+				"native probe is holding reconnect until offline output is retained"
+			)
+		}
+		let remaining: TimeInterval = deadline.remainingTimeInterval
+		guard remaining > 0 else {
+			throw AttachmentClientError.transport("connection deadline expired")
+		}
+		let client: AttachmentClient = try .connect(
+			socketPath: socketPath,
+			sessionID: sessionID,
+			surfaceID: surfaceID,
+			nextOffset: nextOffset,
+			deadline: deadline,
+			frameReadTimeoutSeconds: nil
+		)
+		lock.lock()
+		let transport: FaultInjectingTransport = .init(
+			base: client
+		)
+		connectionOffsets.append(nextOffset)
+		transports.append(transport)
+		lock.unlock()
+		return transport
+	}
+
+	func holdReconnect(for interval: TimeInterval) {
+		precondition(interval.isFinite && interval > 0)
+		let delayNanoseconds: UInt64 = UInt64(
+			(interval * 1_000_000_000).rounded(.up)
+		)
+		lock.lock()
+		reconnectNotBeforeUptimeNanoseconds =
+			DispatchTime.now().uptimeNanoseconds + delayNanoseconds
+		lock.unlock()
+	}
+
+	func offsets() -> [UInt64] {
+		lock.lock()
+		defer { lock.unlock() }
+		return connectionOffsets
+	}
+
+	func transport(generation: Int) -> FaultInjectingTransport? {
+		lock.lock()
+		defer { lock.unlock() }
+		guard generation > 0, generation <= transports.count else {
+			return nil
+		}
+		return transports[generation - 1]
+	}
+
+}
+
+private final class ProbeSurfaceOutputSink: TerminalOutputSink, @unchecked Sendable {
+	private let surface: ghostty_surface_t
+	private let lock: NSLock = .init()
+	private var outputBytes: [UInt8] = []
+
+	init(surface: ghostty_surface_t) {
+		self.surface = surface
+	}
+
+	func feed(_ bytes: [UInt8]) throws {
+		bytes.withUnsafeBufferPointer { buffer in
+			ghostty_surface_feed_output(
+				surface,
+				buffer.baseAddress,
+				buffer.count
+			)
+		}
+		lock.lock()
+		outputBytes.append(contentsOf: bytes)
+		lock.unlock()
+	}
+
+	func contains(_ marker: String) -> Bool {
+		let markerBytes: [UInt8] = Array(marker.utf8)
+		lock.lock()
+		defer { lock.unlock() }
+		return Data(outputBytes).range(of: Data(markerBytes)) != nil
+	}
+
+	func byteCount() -> UInt64 {
+		lock.lock()
+		defer { lock.unlock() }
+		return UInt64(outputBytes.count)
+	}
+
+	func occurrenceCount(of marker: String) -> Int {
+		lock.lock()
+		defer { lock.unlock() }
+		return String(decoding: outputBytes, as: UTF8.self)
+			.components(separatedBy: marker)
+			.count - 1
+	}
+}
+
+private final class ProbePumpEventRecorder: @unchecked Sendable {
+	private let lock: NSLock = .init()
+	private var events: [TerminalAttachmentPumpEvent] = []
+
+	func record(_ event: TerminalAttachmentPumpEvent) {
+		lock.lock()
+		events.append(event)
+		lock.unlock()
+	}
+
+	func sawInitialConnection() -> Bool {
+		snapshot().contains { event in
+			if case .connected(offset: 0) = event {
+				return true
+			}
+			return false
+		}
+	}
+
+	func pausedRecoveryID(offset: UInt64) -> UInt64? {
+		snapshot().reversed().compactMap { event in
+			if
+				case .reconnected(
+					recoveryID: let recoveryID,
+					offset: let eventOffset,
+					inputPaused: true
+				) = event
+			{
+				return eventOffset == offset ? recoveryID : nil
+			}
+			return nil
+		}.first
+	}
+
+	func sawConnectionUncertainty() -> Bool {
+		snapshot().contains { event in
+			if
+				case .inputDeliveryUncertain(
+					recoveryID: _,
+					reason: .connectionLost(_)
+				) = event
+			{
+				return true
+			}
+			return false
+		}
+	}
+
+	func sawCleanExit() -> Bool {
+		snapshot().contains { event in
+			if
+				case .stopped(
+					reason: .processExited(0),
+					resumeOffset: _
+				) = event
+			{
+				return true
+			}
+			return false
+		}
+	}
+
+	private func snapshot() -> [TerminalAttachmentPumpEvent] {
+		lock.lock()
+		defer { lock.unlock() }
+		return events
+	}
+}
+
 @MainActor
 private final class ProbeDaemon {
 	let bootstrap: ProbeBootstrap
@@ -83,9 +330,9 @@ private final class ProbeDaemon {
 		let runtimeDirectory: URL = URL(
 			fileURLWithPath: "/tmp",
 			isDirectory: true
-		)
+			)
 			.appendingPathComponent(
-				"taco-m09-\(runtimeToken)",
+				"taco-m010-\(runtimeToken)",
 				isDirectory: true
 			)
 		try FileManager.default.createDirectory(
@@ -410,16 +657,6 @@ private func initializeGhostty() -> Int32 {
 	}
 }
 
-private func feed(_ bytes: [UInt8], to surface: ghostty_surface_t) {
-	bytes.withUnsafeBufferPointer { buffer in
-		ghostty_surface_feed_output(surface, buffer.baseAddress, buffer.count)
-	}
-}
-
-private func feed(_ string: String, to surface: ghostty_surface_t) {
-	feed(Array(string.utf8), to: surface)
-}
-
 private func readFullScreen(from surface: ghostty_surface_t) throws -> String {
 	let selection: ghostty_selection_s = .init(
 		top_left: ghostty_point_s(
@@ -473,57 +710,6 @@ private func sendCommand(_ command: String, to surface: ghostty_surface_t) {
 	_ = ghostty_surface_key(surface, returnKey)
 }
 
-private func readOutput(
-	containing marker: String,
-	from client: AttachmentClient,
-	feeding surface: ghostty_surface_t
-) throws -> String {
-	var received: [UInt8] = []
-	let maximumProbeOutputBytes: Int = 1 * 1_024 * 1_024
-	while received.count <= maximumProbeOutputBytes {
-		switch try client.readFrame() {
-		case .output(_, let bytes):
-			feed(bytes, to: surface)
-			received.append(contentsOf: bytes)
-			let text: String = String(decoding: received, as: UTF8.self)
-			if text.contains(marker) {
-				return text
-			}
-		case .replayGap(let requested, let availableFrom):
-			throw ProbeFailure(
-				description: "unexpected replay gap \(requested)..<\(availableFrom) "
-					+ "while waiting for \(marker)"
-			)
-		case .exit(let code):
-			throw ProbeFailure(
-				description: "probe child exited with \(code) before \(marker)"
-			)
-		}
-	}
-	throw ProbeFailure(
-		description: "probe output exceeded \(maximumProbeOutputBytes) bytes "
-			+ "while waiting for \(marker)"
-	)
-}
-
-private func readExit(from client: AttachmentClient) throws -> UInt32 {
-	while true {
-		switch try client.readFrame() {
-		case .output:
-			throw ProbeFailure(
-				description: "received unexpected output after the EXIT marker"
-			)
-		case .replayGap(let requested, let availableFrom):
-			throw ProbeFailure(
-				description: "received replay gap \(requested)..<\(availableFrom) "
-					+ "while waiting for process exit"
-			)
-		case .exit(let code):
-			return code
-		}
-	}
-}
-
 private func processExists(_ processID: UInt32) -> Bool {
 	guard let pid = pid_t(exactly: processID) else { return false }
 	errno = 0
@@ -554,45 +740,6 @@ private func expectExclusiveAttachRejection(
 		else {
 			throw ProbeFailure(
 				description: "second attachment failed for the wrong reason: \(error)"
-			)
-		}
-	}
-}
-
-@MainActor
-private func connectAfterDetach(
-	socketPath: String,
-	sessionID: String,
-	surfaceID: UInt64,
-	nextOffset: UInt64,
-	timeout: TimeInterval
-) throws -> AttachmentClient {
-	let deadline: Date = Date().addingTimeInterval(timeout)
-	while true {
-		do {
-			return try .connect(
-				socketPath: socketPath,
-				sessionID: sessionID,
-				surfaceID: surfaceID,
-				nextOffset: nextOffset,
-				frameReadTimeoutSeconds: 5
-			)
-		} catch let error as AttachmentClientError {
-			guard
-				case .serverRejected(let code, _) = error,
-				code == "session_already_attached"
-			else {
-				throw error
-			}
-			guard Date() < deadline else {
-				throw ProbeFailure(
-					description: "timed out waiting for the first "
-						+ "attachment lease to detach"
-				)
-			}
-			_ = RunLoop.main.run(
-				mode: .default,
-				before: Date().addingTimeInterval(0.01)
 			)
 		}
 	}
@@ -710,28 +857,9 @@ private func runProbe() throws {
 	let baselineChildren: Set<pid_t> = try directChildPIDs()
 	logStep("child audit before surface: \(describePIDs(baselineChildren))")
 
-	logStep("attaching the Ghostty Surface to tacod")
-	let surfaceID: UInt64 = 9_001
-	let firstClient: AttachmentClient = try .connect(
-		socketPath: bootstrap.socketPath,
-		sessionID: bootstrap.sessionID,
-		surfaceID: surfaceID,
-		nextOffset: 0,
-		frameReadTimeoutSeconds: 5
-	)
-	try require(
-		firstClient.upgrade.replayFrom == 0,
-		"initial attachment did not start at offset zero"
-	)
-	try expectExclusiveAttachRejection(
-		socketPath: bootstrap.socketPath,
-		sessionID: bootstrap.sessionID,
-		nextOffset: firstClient.nextUnreadOffset
-	)
-	logStep("second live attachment was rejected")
-
 	logStep("creating EXTERNAL Ghostty surface")
-	let adapter: TerminalSurfaceAdapter = .init(client: firstClient)
+	let surfaceID: UInt64 = 9_001
+	let adapter: TerminalSurfaceAdapter = .init()
 	var surfaceConfig: ghostty_surface_config_s = adapter.makeConfiguration(
 		view: view,
 		scaleFactor: window.backingScaleFactor
@@ -740,13 +868,34 @@ private func runProbe() throws {
 		ghostty_surface_new(ghosttyApp, &surfaceConfig)
 	}
 	guard let surface: ghostty_surface_t = createdSurface else {
-		throw ProbeFailure(description: "ghostty_surface_new returned nil for EXTERNAL surface")
+		throw ProbeFailure(
+			description: "ghostty_surface_new returned nil for EXTERNAL surface"
+		)
 	}
 	var liveSurface: ghostty_surface_t? = surface
+	var livePump: TerminalAttachmentPump?
 	defer {
 		if let liveSurface {
-			logStep("quiescing callbacks and detaching the tacod lease")
-			adapter.quiesceAndDetach()
+			logStep("quiescing Ghostty callbacks")
+			adapter.quiesce()
+			if let livePump {
+				logStep("draining and stopping the attachment pump")
+				livePump.detach()
+				if !livePump.waitUntilStopped(timeout: 6) {
+					logStep(
+						"attachment pump missed its teardown barrier; "
+							+ "stopping tacod before retry"
+					)
+					daemon.stop()
+					if !livePump.waitUntilStopped(timeout: 2) {
+						logStep(
+							"refusing to free a Surface with feed or socket "
+								+ "work still in flight"
+						)
+						Darwin._exit(EXIT_FAILURE)
+					}
+				}
+			}
 			logStep("freeing Ghostty surface")
 			withExtendedLifetime(adapter) {
 				ghostty_surface_free(liveSurface)
@@ -754,13 +903,42 @@ private func runProbe() throws {
 		}
 	}
 
-	let readyMarker: String = "READY \(bootstrap.processID)"
-	logStep("feeding real PTY output through Ghostty: \(readyMarker)")
-	_ = try readOutput(
-		containing: readyMarker,
-		from: firstClient,
-		feeding: surface
+	logStep("starting the asynchronous attachment pump")
+	let connector: ProbeAttachmentConnector = .init(
+		socketPath: bootstrap.socketPath,
+		sessionID: bootstrap.sessionID,
+		surfaceID: surfaceID
 	)
+	let outputSink: ProbeSurfaceOutputSink = .init(surface: surface)
+	let pumpEvents: ProbePumpEventRecorder = .init()
+	let pump: TerminalAttachmentPump = .init(
+		connector: connector,
+		outputSink: outputSink,
+		eventHandler: { [pumpEvents] event in
+			pumpEvents.record(event)
+		}
+	)
+	livePump = pump
+	try adapter.install(enqueuer: pump)
+	pump.start()
+
+	let readyMarker: String = "READY \(bootstrap.processID)"
+	let initiallyConnected: Bool = pumpMainRunLoop(timeout: 5) {
+		pumpEvents.sawInitialConnection()
+			&& outputSink.contains(readyMarker)
+			&& pump.committedOutputOffset == outputSink.byteCount()
+	}
+	try require(
+		initiallyConnected,
+		"asynchronous pump did not connect and feed \(readyMarker)"
+	)
+	try require(connector.offsets() == [0], "initial attach did not request offset zero")
+	try expectExclusiveAttachRejection(
+		socketPath: bootstrap.socketPath,
+		sessionID: bootstrap.sessionID,
+		nextOffset: pump.committedOutputOffset
+	)
+	logStep("second live attachment was rejected")
 
 	logStep("resizing Ghostty and forwarding the resize frame to tacod")
 	let framebuffer: NSSize = view.convertToBacking(view.bounds).size
@@ -786,68 +964,126 @@ private func runProbe() throws {
 	)
 	sendCommand("SIZE", to: surface)
 	let sizeMarker: String = "SIZE \(reportedSize.rows) \(reportedSize.columns)"
-	_ = try readOutput(
-		containing: sizeMarker,
-		from: firstClient,
-		feeding: surface
+	let sizeObserved: Bool = pumpMainRunLoop(timeout: 5) {
+		outputSink.contains(sizeMarker)
+			&& pump.committedOutputOffset == outputSink.byteCount()
+	}
+	try require(
+		sizeObserved,
+		"continuous pump output omitted \(sizeMarker)"
 	)
 	logStep("probe child observed \(sizeMarker)")
 
 	logStep("sending PING through Ghostty's external write callback")
 	sendCommand("PING", to: surface)
 	let pongMarker: String = "PONG \(bootstrap.processID)"
-	_ = try readOutput(
-		containing: pongMarker,
-		from: firstClient,
-		feeding: surface
+	let firstPongObserved: Bool = pumpMainRunLoop(timeout: 5) {
+		outputSink.occurrenceCount(of: pongMarker) == 1
+			&& pump.committedOutputOffset == outputSink.byteCount()
+	}
+	try require(
+		firstPongObserved,
+		"real PTY input did not return the first \(pongMarker)"
 	)
 	logStep("real PTY input returned \(pongMarker)")
 
 	logStep("forcing a real Metal draw")
 	try validateRenderedIOSurface(view: view, surface: surface)
 
-	logStep("arming offline output and detaching the first lease")
-	let detachOffset: UInt64 = firstClient.nextUnreadOffset
-	try firstClient.sendInput(Array("ARM\n".utf8))
-	adapter.detach()
+	logStep("arming offline output through the Surface")
+	let disconnectOffset: UInt64 = pump.committedOutputOffset
+	sendCommand("ARM", to: surface)
+	let armBytes: [UInt8] = Array("ARM\r".utf8)
+	let armDelivered: Bool = pumpMainRunLoop(timeout: 5) {
+		connector.transport(generation: 1)?
+			.successfulInputContains(armBytes) == true
+	}
 	try require(
-		firstClient.isClosed,
-		"detaching the Surface left the first attachment open"
+		armDelivered,
+		"first transport did not successfully write ARM before fault injection"
 	)
+	connector.holdReconnect(for: 0.35)
+
+	logStep("injecting a real attachment-socket drop")
+	guard let firstTransport = connector.transport(generation: 1) else {
+		throw ProbeFailure(description: "missing first fault-injecting transport")
+	}
+	firstTransport.injectDrop()
 	try require(
 		processExists(bootstrap.processID),
-		"probe child died when its Surface detached"
+		"probe child died when its attachment socket dropped"
 	)
 
-	logStep("reattaching at offset \(detachOffset)")
-	let secondClient: AttachmentClient = try connectAfterDetach(
-		socketPath: bootstrap.socketPath,
-		sessionID: bootstrap.sessionID,
-		surfaceID: surfaceID,
-		nextOffset: detachOffset,
-		timeout: 5
-	)
-	try require(
-		secondClient.upgrade.replayFrom == detachOffset,
-		"reattachment replay began at \(secondClient.upgrade.replayFrom), "
-			+ "expected \(detachOffset)"
-	)
-	try adapter.install(client: secondClient)
 	let offlineMarker: String = "OFFLINE \(bootstrap.processID)"
-	_ = try readOutput(
-		containing: offlineMarker,
-		from: secondClient,
-		feeding: surface
+	let automaticallyReconnected: Bool = pumpMainRunLoop(timeout: 6) {
+		pumpEvents.sawConnectionUncertainty()
+			&& pumpEvents.pausedRecoveryID(offset: disconnectOffset) != nil
+			&& outputSink.contains(offlineMarker)
+			&& pump.committedOutputOffset == outputSink.byteCount()
+	}
+	try require(
+		automaticallyReconnected,
+		"pump did not reconnect at \(disconnectOffset) and replay \(offlineMarker)"
+	)
+	let connectionOffsets: [UInt64] = connector.offsets()
+	try require(
+		connectionOffsets.count == 2
+			&& connectionOffsets.last == disconnectOffset,
+		"reconnect offsets were \(connectionOffsets), expected [0, \(disconnectOffset)]"
+	)
+	guard let secondTransport = connector.transport(generation: 2) else {
+		throw ProbeFailure(description: "missing reconnected transport")
+	}
+	let offlineEndOffset: UInt64 =
+		disconnectOffset + UInt64("\(offlineMarker)\r\n".utf8.count)
+	try require(
+		secondTransport.upgrade.replayFrom == disconnectOffset
+			&& secondTransport.upgrade.liveOffset >= offlineEndOffset,
+		"reconnect upgrade did not prove offline replay: replay_from "
+			+ "\(secondTransport.upgrade.replayFrom), live_offset "
+			+ "\(secondTransport.upgrade.liveOffset), expected at least "
+			+ "\(offlineEndOffset)"
 	)
 	try require(
-		secondClient.nextUnreadOffset > detachOffset,
-		"reattachment did not consume retained offline output"
+		!secondTransport.successfulInputContains(armBytes),
+		"reconnected transport replayed old ARM input"
 	)
 	try require(
 		processExists(bootstrap.processID),
-		"reattachment did not preserve child PID \(bootstrap.processID)"
+		"automatic reconnect did not preserve child PID \(bootstrap.processID)"
 	)
-	logStep("replayed \(offlineMarker) from the unchanged child")
+	guard
+		let recoveryID: UInt64 =
+			pumpEvents.pausedRecoveryID(offset: disconnectOffset)
+	else {
+		throw ProbeFailure(description: "missing reconnect recovery identifier")
+	}
+	logStep("replayed \(offlineMarker) from the unchanged child with input paused")
+
+	logStep("proving paused input is not forwarded")
+	let pingBytes: [UInt8] = Array("PING\r".utf8)
+	sendCommand("PING", to: surface)
+	_ = pumpMainRunLoop(timeout: 0.25) {
+		secondTransport.successfulInputContains(pingBytes)
+	}
+	try require(
+		!secondTransport.successfulInputContains(pingBytes),
+		"input was forwarded before reconnect uncertainty was acknowledged"
+	)
+	try require(
+		pump.acknowledgeInputAfterReconnect(recoveryID: recoveryID),
+		"pump rejected explicit input-resume acknowledgement"
+	)
+	sendCommand("PING", to: surface)
+	let resumedInputWorked: Bool = pumpMainRunLoop(timeout: 5) {
+		secondTransport.successfulInputContains(pingBytes)
+			&& outputSink.occurrenceCount(of: pongMarker) == 2
+	}
+	try require(
+		resumedInputWorked,
+		"explicit acknowledgement did not resume fresh input"
+	)
+	logStep("fresh input resumed without retransmitting old input")
 
 	let screen: String = try readFullScreen(from: surface)
 	try require(
@@ -860,13 +1096,18 @@ private func runProbe() throws {
 	logStep("requesting an ordered probe-child exit")
 	sendCommand("EXIT", to: surface)
 	let exitMarker: String = "EXIT \(bootstrap.processID)"
-	_ = try readOutput(
-		containing: "\(exitMarker)\r\n",
-		from: secondClient,
-		feeding: surface
+	let cleanExitObserved: Bool = pumpMainRunLoop(timeout: 5) {
+		outputSink.contains("\(exitMarker)\r\n")
+			&& pumpEvents.sawCleanExit()
+	}
+	try require(
+		cleanExitObserved,
+		"pump did not feed the EXIT marker before the clean stopped event"
 	)
-	let exitCode: UInt32 = try readExit(from: secondClient)
-	try require(exitCode == 0, "probe child exited with status \(exitCode)")
+	try require(
+		pump.waitUntilStopped(timeout: 0),
+		"pump stopped event arrived before its teardown barrier"
+	)
 	let childExited: Bool = pumpMainRunLoop(timeout: 5) {
 		!processExists(bootstrap.processID)
 	}
@@ -883,12 +1124,13 @@ private func runProbe() throws {
 	)
 	try require(daemon.isRunning, "tacod exited before Surface teardown")
 
-	logStep("quiescing callbacks, detaching, and freeing the Surface")
-	adapter.quiesceAndDetach()
+	logStep("quiescing callbacks after the pump teardown barrier")
+	adapter.quiesce()
 	withExtendedLifetime(adapter) {
 		ghostty_surface_free(surface)
 	}
 	liveSurface = nil
+	livePump = nil
 	logStep("disabling and draining Ghostty runtime wakeups")
 	try require(
 		runtimeState.disableAndDrain(timeout: 5),

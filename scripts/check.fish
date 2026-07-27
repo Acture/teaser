@@ -8,6 +8,10 @@ set expected_zig_version 0.15.2
 set zig_bin /opt/homebrew/opt/zig@0.15/bin/zig
 set ghostty_dir $repo_root/vendor/ghostty
 set vendor_readme $repo_root/vendor/README.md
+set swift_test_dir $repo_root/target/swift-tests
+set swift_test_binary $swift_test_dir/TACOProbeTests
+set swift_module_cache $swift_test_dir/swift-module-cache
+set clang_module_cache $swift_test_dir/clang-module-cache
 set ghostty_patches \
     $repo_root/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch \
     $repo_root/patches/ghostty/0002-external-surface-io.patch
@@ -105,6 +109,22 @@ if test "$zig_version" != $expected_zig_version
         $expected_zig_version $zig_bin "$zig_version" >&2
     exit 1
 end
+
+mkdir -p $swift_test_dir $swift_module_cache $clang_module_cache
+or exit 1
+set -lx SWIFT_MODULECACHE_PATH $swift_module_cache
+set -lx CLANG_MODULE_CACHE_PATH $clang_module_cache
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    app/macos/TACO/Terminal/AttachmentClient.swift \
+    app/macos/TACO/Terminal/TerminalAttachmentPump.swift \
+    app/macos/TACOProbeTests/main.swift \
+    -o $swift_test_binary
+or exit 1
+$swift_test_binary
+or exit 1
 
 cargo fmt --check
 or exit 1
