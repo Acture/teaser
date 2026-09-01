@@ -1,10 +1,8 @@
-# TACO
+# Teaser
 
-**Terminal Application Composition & Orchestration**
-
-TACO is a macOS-first, terminal-centric workspace. Shells, agents, image previews,
-and editors are peers inside one orchestration model; the editor is not the root
-abstraction and agent CLIs do not each need to reinvent terminal UI.
+Teaser is a macOS-first spatial development environment. It keeps complete project
+Workspaces available as composable regions on one screen instead of hiding each
+project behind a mutually exclusive tab.
 
 > Status: foundation prototype. The Rust control plane, detachable PTY data
 > plane, and owning-process-group teardown are testable, but there is no
@@ -12,38 +10,43 @@ abstraction and agent CLIs do not each need to reinvent terminal UI.
 
 ## Product thesis
 
-A terminal should own three things that are currently split across terminal
-emulators, multiplexers, agent harnesses, and IDEs:
+Many products marketed as agentic development environments place complete projects
+in separate tabs. That display model serializes project visibility even when work
+continues in parallel: showing one project hides the agent execution, terminals,
+diffs, and project details of the others.
 
-1. native terminal rendering and input;
-2. workspace layout, session lifetime, and remote transport;
-3. semantic objects such as shell commands, agent turns, tool calls, and files.
+Teaser treats a Workspace as a persistent, project-scoped display unit. Multiple
+Workspaces can be tiled in parallel, one Workspace can temporarily take the full
+display, or complete Workspaces can be switched as units. Each keeps its own Panel
+layout, running content, and spatial relationships across those presentation
+changes.
 
-TACO keeps ordinary CLI and TUI programs working as ordinary terminal programs.
-Applications gain richer behavior progressively through shell integration,
-standard protocols, or built-in adapters; unsupported applications never need a
-TACO-specific rewrite.
+A Panel is a content-neutral display region. Agent execution, project details,
+terminals, diffs, images, and input are content placed in Panels rather than separate
+application modes. Terminal content still behaves like an ordinary terminal: CLI
+and TUI applications require no Teaser-specific rewrite, while shell integration and
+built-in adapters add richer semantics progressively.
 
 ## Architecture at a glance
 
-- **AppKit/SwiftUI host:** native windows, panes, focus, IME, clipboard, image
-  previews, and input surfaces.
-- **`tacod` runtime:** owns TACO sessions, processes, PTYs, block state, and
+- **AppKit/SwiftUI host:** parallel, focused, and switched Workspace presentation;
+  Panel layout; focus; IME; clipboard; previews; and native input.
+- **`teaserd` runtime:** owns Teaser sessions, processes, PTYs, block state, and
   lifetime independently of any GUI; each session has zero or one attached
   surface.
 - **Ghostty terminal surface:** uses pinned `libghostty` APIs for Metal rendering,
   terminal input, selection, and terminal compatibility.
-- **Rust core:** typed project, checkout, workspace, session, attachment, block,
-  and control-plane state.
-- **External environments:** cmux and IDEs remain provider-owned federated panels
-  or companion windows instead of entering TACO's session registry.
+- **Rust core:** typed project, checkout, Workspace, Panel, session, attachment,
+  block, and control-plane state.
+- **External environments:** cmux and IDEs remain provider-owned federated
+  environments or companion windows instead of entering Teaser's session registry.
 
 Terminal parsing, rendering, and native input stay inside AppKit and `libghostty`.
 Canonical PTY bytes use the bounded local attachment stream; UniFFI remains
 reserved for low-frequency state and semantic events.
 
 See [Architecture](docs/architecture.md), [Roadmap](ROADMAP.md), and the
-[implementation plan](plan/architecture-taco-platform-1.md).
+[implementation plan](plan/architecture-teaser-platform-1.md).
 
 ## Development
 
@@ -58,10 +61,10 @@ It checks formatting, Clippy warnings, all workspace tests, and whitespace error
 To run the current foreground daemon prototype:
 
 ```fish
-cargo run -p tacod
+cargo run -p teaserd
 ```
 
-It uses `~/Library/Application Support/TACO/runtime` by default. Pass
+It uses `~/Library/Application Support/Teaser/runtime` by default. Pass
 `--runtime-dir PATH` only for development or tests.
 
 The daemon supports metadata-only `session.create` plus an internal
@@ -75,7 +78,7 @@ wire format and current limits.
 - **Native CLI mode:** run `claude`, `codex`, or any other harness inside a normal
   TerminalSurface. This retains vendor behavior but provides only terminal-level
   semantics.
-- **Structured ACP mode:** run `taco agent claude` or `taco agent codex`. TACO
+- **Structured ACP mode:** run `teaser agent claude` or `teaser agent codex`. Teaser
   owns input and presentation, but only capabilities exposed by the ACP adapter are
   available; this is not promised to equal every vendor CLI feature.
 
@@ -90,9 +93,9 @@ wire format and current limits.
 
 ## License and name
 
-TACO is licensed under [AGPL-3.0-or-later](LICENSE). The source license preserves
+Teaser is licensed under [AGPL-3.0-or-later](LICENSE). The source license preserves
 source-sharing and legal-notice obligations; it does not require derivative
-products to keep the TACO product name. The separate
-[trademark policy](TRADEMARKS.md) reserves the TACO name and logo against confusing
+products to keep the Teaser product name. The separate
+[trademark policy](TRADEMARKS.md) reserves the Teaser name and logo against confusing
 redistribution while allowing truthful nominative use. See [NOTICE](NOTICE) for the
 project notice.

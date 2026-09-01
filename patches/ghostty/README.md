@@ -51,7 +51,7 @@ Zig cache. Do not share that cache across concurrent builds; production
 integration should normalize private archive copies instead.
 
 With Metal Toolchain 17F109, the native Apple Silicon XCFramework builds and
-links. `app/macos/TACOProbe` passes a synchronous Metal draw to a live
+links. `app/macos/TeaserProbe` passes a synchronous Metal draw to a live
 IOSurface-backed layer, full-screen readback, exact `probe\r` input forwarding,
 resize consistency, direct-child snapshots, and ordered surface/app/config
 teardown. It does not perform pixel capture or comparison.
@@ -60,4 +60,4 @@ The host callback must copy or enqueue bytes promptly and must not synchronously
 re-enter the surface. Producers must stop and all feed calls must finish before
 the surface is freed. The Zig backend tests are the authoritative proof that
 external mode has no process or PTY state; the runtime child snapshot is only
-corroborating evidence. Connecting this surface to `tacod` remains separate work.
+corroborating evidence. Connecting this surface to `teaserd` remains separate work.

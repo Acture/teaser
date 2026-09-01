@@ -1,0 +1,17 @@
+[package]
+name = "teaserd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+portable-pty = { version = "0.9.0", default-features = false }
+rustix = { version = "1", features = ["process", "termios"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+teaser-core = { path = "../teaser-core" }
+
+[lints]
+workspace = true

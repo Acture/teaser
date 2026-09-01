@@ -8,13 +8,13 @@
 - License: MIT; see `ghostty/LICENSE` and `../THIRD_PARTY_NOTICES.md`
 
 `vendor/ghostty` is a Git submodule pinned to the commit above. Initialize it
-after cloning TACO:
+after cloning Teaser:
 
 ```fish
 git submodule update --init -- vendor/ghostty
 ```
 
-The submodule must remain clean. TACO-owned experiments and patches live in
+The submodule must remain clean. Teaser-owned experiments and patches live in
 `patches/ghostty`; application code belongs outside the submodule.
 
 ### Verify the semantic-range test
@@ -25,8 +25,8 @@ and back. Run it in an ignored, repository-local checkout so the submodule
 remains unchanged and the build survives terminal restarts:
 
 ```fish
-set taco_root $PWD
-set probe_dir $taco_root/target/ghostty-semantic-probe
+set teaser_root $PWD
+set probe_dir $teaser_root/target/ghostty-semantic-probe
 test ! -e $probe_dir
 or begin
 	printf 'probe checkout already exists: %s\n' $probe_dir >&2
@@ -56,8 +56,8 @@ The second patch adds host-driven I/O to the full surface without constructing
 Ghostty's exec backend. Apply it in a fresh repository-local checkout:
 
 ```fish
-set taco_root $PWD
-set probe_dir $taco_root/target/ghostty-external-probe
+set teaser_root $PWD
+set probe_dir $teaser_root/target/ghostty-external-probe
 test ! -e $probe_dir
 or begin
 	printf 'probe checkout already exists: %s\n' $probe_dir >&2
@@ -105,16 +105,16 @@ the AppKit probe, and run it:
 set xc $probe_dir/ghostty/macos/GhosttyKit.xcframework/macos-arm64
 nm -g $xc/libghostty-fat.a | rg '_ghostty_(app_new|surface_new)'
 
-cd $taco_root
-set native_probe_dir $taco_root/target/native-probe
+cd $teaser_root
+set native_probe_dir $teaser_root/target/native-probe
 mkdir -p $native_probe_dir
 set -lx CLANG_MODULE_CACHE_PATH $native_probe_dir/clang-module-cache
 set -lx SWIFT_MODULECACHE_PATH $native_probe_dir/swift-module-cache
 xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
-	app/macos/TACO/Terminal/AttachmentClient.swift \
-	app/macos/TACO/Terminal/TerminalAttachmentPump.swift \
-	app/macos/TACO/Terminal/TerminalSurfaceAdapter.swift \
-	app/macos/TACOProbe/main.swift \
+	app/macos/Teaser/Terminal/AttachmentClient.swift \
+	app/macos/Teaser/Terminal/TerminalAttachmentPump.swift \
+	app/macos/Teaser/Terminal/TerminalSurfaceAdapter.swift \
+	app/macos/TeaserProbe/main.swift \
 	-I $xc/Headers \
 	$xc/libghostty-fat.a \
 	-framework AppKit \
@@ -129,15 +129,15 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
 	-framework QuartzCore \
 	-lc++ \
 	-lproc \
-	-o $native_probe_dir/TACOProbe
+	-o $native_probe_dir/TeaserProbe
 
-cargo build -p tacod
+cargo build -p teaserd
 set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
-set -lx TACO_TACOD_BIN $taco_root/target/debug/tacod
-$native_probe_dir/TACOProbe
+set -lx TEASERD_BIN $teaser_root/target/debug/teaserd
+$native_probe_dir/TeaserProbe
 ```
 
-A pass connects a fixed `tacod`-owned PTY Session through `taco.attach.v1`,
+A pass connects a fixed `teaserd`-owned PTY Session through `teaser.attach.v1`,
 rejects a second live Surface, forwards output/input/resize through Ghostty,
 automatically reconnects the same child PID, replays output produced offline,
 keeps input paused until explicit confirmation, and completes a synchronous

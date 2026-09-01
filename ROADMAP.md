@@ -1,11 +1,11 @@
-# TACO roadmap
+# Teaser roadmap
 
 This roadmap is ordered by risk and usable outcomes, not by visual feature count.
 A milestone starts only after the previous milestone's exit gates pass.
 
 ## M0 — Foundation and risk retirement
 
-Goal: prove that the selected boundaries can support TACO without rebuilding Ghostty
+Goal: prove that the selected boundaries can support Teaser without rebuilding Ghostty
 or placing orchestration on the render path.
 
 Deliverables:
@@ -20,7 +20,9 @@ Deliverables:
 - Swift/Rust UniFFI control-path spike with no raw terminal data crossing it;
 - Claude and Codex ACP capability smoke tests, explicitly compared with native CLI
   mode rather than treated as equivalent;
-- tmux `-CC` parser plus one `taco-bridge` pane covering arbitrary bytes, Unicode,
+- immutable project-scoped Workspace and content-neutral Panel models that do not
+  assume only one Workspace can be visible;
+- tmux `-CC` parser plus one `teaser-bridge` pane covering arbitrary bytes, Unicode,
   bracketed paste, mouse input, resize, flow control, and capture repair;
 - best-effort Zed Accessibility tiling and same-window frame restoration.
 
@@ -41,36 +43,46 @@ Exit gates:
   completes only after socket workers and Surface feeds are quiescent;
 - explicit Session termination reaps a stubborn descendant in the verified owning
   process group before the attachment closes;
+- two independent Workspace models retain distinct Panel layouts across parallel,
+  focused, switched, and restored presentation states;
 - all spikes have repeatable automated or scripted checks.
 
 Failure policy: stop and revise the foundation. Do not compensate for a failed gate
 by adding a second terminal renderer or an unbounded Ghostty fork.
 
-## v0.1 — Daily terminal workspace
+## v0.1 — Parallel project workspaces
 
-Goal: replace the normal local terminal window for daily shell and TUI work.
+Goal: make two independent project Workspaces usable on one screen without forcing
+them into mutually exclusive tabs.
 
 Deliverables:
 
-- tabs, splits, focus, resize, zoom, command palette, and workspace restoration;
-- direct PTY `TerminalSurface` and terminal-grid Neovim;
+- screen-level Workspace presentation supporting parallel tiling, temporary focus,
+  and whole-Workspace switching;
+- one persistent `PanelTree` per Workspace with split, close, move, resize, focus,
+  zoom, command palette, and restoration;
+- content-neutral Panels with initial project details and direct PTY
+  `TerminalSurface` content;
+- native agent CLIs and terminal-grid Neovim inside terminal Panels;
 - Quick Look/Image I/O image preview;
 - adjacent Zed desktop companion with safe permission degradation;
-- `taco`, `taco shell`, and `taco open` CLI flows.
+- `teaser`, `teaser shell`, and `teaser open` CLI flows.
 
-Exit gate: shell, Neovim, image preview, and external Zed can be used together for a
-full work session without input regressions or manual window repair.
+Exit gate: two different projects can remain visible and interactive in parallel;
+focusing or switching either Workspace and returning preserves both Panel layouts,
+exact Checkout bindings, and live Session identities without manual window repair.
 
 ## v0.2 — Semantic blocks
 
-Goal: add Warp-like command affordances without replacing terminal-native drawing.
+Goal: expose structured terminal activity as Panel detail without replacing
+terminal-native drawing.
 
 Deliverables:
 
 - fish, zsh, and bash OSC 133/OSC 7 shell integration;
 - bounded SQLite BlockStore with live ranges, snapshots, retention controls, and
   eviction handling;
-- block status, copy, jump, confirm-before-rerun, focused-pane search, and workspace
+- block status, copy, jump, confirm-before-rerun, focused-Panel search, and Workspace
   search;
 - opaque alternate-screen behavior for TUIs.
 
@@ -79,15 +91,18 @@ scrollback, resize, failed commands, prompts spanning multiple lines, and evicti
 
 ## v0.3 — Native agent sessions
 
-Goal: add structured Claude and Codex experiences without inheriting their terminal
-composers or pretending ACP covers every vendor CLI feature.
+Goal: show structured Claude and Codex execution as Workspace Panel content without
+inheriting their terminal composers or pretending ACP covers every vendor CLI
+feature.
 
 Deliverables:
 
 - ACP protocol/capability negotiation and supervised pinned adapters;
-- `taco agent claude` and `taco agent codex`;
+- `teaser agent claude` and `teaser agent codex`;
 - structured turns, plans, tool calls, approvals, diffs, images, and resources;
-- reusable native `InputSurface` for multiline input and attachments;
+- agent execution and related project details visible in separate Panels within the
+  same Workspace;
+- reusable native `InputView` for multiline input and attachments;
 - native `claude` and `codex` remain usable in TerminalSurface;
 - adapter crash isolation and transcript preservation.
 
@@ -108,9 +123,9 @@ Deliverables:
 - Mosh opaque sessions with visible capability degradation;
 - reconnect, flow control, stale-session handling, and pane-size synchronization.
 
-Exit gate: TACO can restart and reattach tmux panes; recovered text is marked
+Exit gate: Teaser can restart and reattach tmux panes; recovered text is marked
 semantic-degraded when block lifecycle was missed; SSH loss does not misroute panes;
-Mosh roams while its owning TACO PTY lives and never claims unsupported semantics.
+Mosh roams while its owning Teaser PTY lives and never claims unsupported semantics.
 
 ## v1.0 — Daily-driver release
 
@@ -127,8 +142,11 @@ Deliverables:
 
 Release criteria:
 
-- shell/Neovim, image, external Zed, native agent CLIs, and structured ACP sessions
-  coexist in one daily workflow;
+- at least two project Workspaces can be tiled, focused, and switched without losing
+  their Panel layouts, running content, or spatial relationships;
+- Workspace Panels can present shell/Neovim, images, native agent CLIs, structured
+  ACP sessions, and project details together, while external Zed remains associated
+  with the Workspace rather than represented as Panel content;
 - unsupported CLIs/TUIs work through an unmodified PTY;
 - direct terminal and tmux bridge meet the recorded M0 SLOs;
 - tmux/SSH recovery and Mosh degradation behave deterministically;

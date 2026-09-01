@@ -334,21 +334,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "taco-core"
+name = "teaser-core"
 version = "0.1.0"
 dependencies = [
  "uuid",
 ]
 
 [[package]]
-name = "tacod"
+name = "teaserd"
 version = "0.1.0"
 dependencies = [
  "portable-pty",
  "rustix",
  "serde",
  "serde_json",
- "taco-core",
+ "teaser-core",
 ]
 
 [[package]]

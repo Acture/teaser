@@ -1,7 +1,7 @@
 # Local Control and Attachment Protocol
 
-`tacod` listens on
-`~/Library/Application Support/TACO/runtime/control.sock`. The runtime
+`teaserd` listens on
+`~/Library/Application Support/Teaser/runtime/control.sock`. The runtime
 directory, permanent lock file, and socket use modes `0700`, `0600`, and
 `0600`. One daemon owns a runtime directory; a later owner removes only a
 confirmed stale socket.
@@ -9,7 +9,7 @@ confirmed stale socket.
 Start the foreground prototype with:
 
 ```fish
-cargo run -p tacod
+cargo run -p teaserd
 ```
 
 Use `--runtime-dir PATH` only for isolated development and tests.
@@ -38,7 +38,7 @@ identity. The GUI will issue this request; users do not type an attach command.
 On success, the same socket upgrades after the response newline:
 
 ```json
-{"version":1,"request_id":42,"status":"ok","session_id":"550e8400-e29b-41d4-a716-446655440000","upgrade":"taco.attach.v1","replay_from":0,"live_offset":0,"max_frame_payload_bytes":65536}
+{"version":1,"request_id":42,"status":"ok","session_id":"550e8400-e29b-41d4-a716-446655440000","upgrade":"teaser.attach.v1","replay_from":0,"live_offset":0,"max_frame_payload_bytes":65536}
 ```
 
 Only one live attachment lease may own a Session, even if a second connection
@@ -62,7 +62,7 @@ Output offsets are monotonic. A reattaching Surface supplies its next unread
 offset and receives only missing retained bytes. If that offset was evicted,
 `0x82` reports the gap before replay starts at the oldest retained byte.
 
-The `taco.attach.v1` wire format is unchanged by the asynchronous Swift client.
+The `teaser.attach.v1` wire format is unchanged by the asynchronous Swift client.
 Its attachment pump owns one reader and one ordered writer. Ghostty callbacks
 only copy and enqueue; they never perform socket I/O or wait. The outbound queue
 accepts at most 1 MiB of input and 4,096 events, rejects an overflowing payload
