@@ -10,8 +10,10 @@ set ghostty_dir $repo_root/vendor/ghostty
 set vendor_readme $repo_root/vendor/README.md
 set swift_test_dir $repo_root/target/swift-tests
 set swift_test_binary $swift_test_dir/TeaserProbeTests
-set swift_module_cache $swift_test_dir/swift-module-cache
-set clang_module_cache $swift_test_dir/clang-module-cache
+set external_window_test_binary $swift_test_dir/TeaserExternalWindowTests
+set module_cache_key (string escape --style=var -- $repo_root)
+set swift_module_cache $swift_test_dir/swift-module-cache-$module_cache_key
+set clang_module_cache $swift_test_dir/clang-module-cache-$module_cache_key
 set ghostty_patches \
     $repo_root/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch \
     $repo_root/patches/ghostty/0002-external-surface-io.patch
@@ -22,6 +24,8 @@ or exit 1
 fish -n scripts/*.fish
 or exit 1
 fish_indent --check scripts/*.fish
+or exit 1
+fish scripts/app.fish --build-only
 or exit 1
 if not test -f .gitmodules
     printf 'error: .gitmodules is missing\n' >&2
@@ -124,6 +128,20 @@ xcrun swiftc \
     -o $swift_test_binary
 or exit 1
 $swift_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    -framework AppKit \
+    -framework ApplicationServices \
+    -framework CoreGraphics \
+    app/macos/Teaser/ExternalWindows/ManagedExternalWindow.swift \
+    app/macos/TeaserExternalWindowTests/main.swift \
+    -o $external_window_test_binary
+or exit 1
+$external_window_test_binary
 or exit 1
 
 cargo fmt --check

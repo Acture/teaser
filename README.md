@@ -4,9 +4,10 @@ Teaser is a macOS-first spatial development environment. It keeps complete proje
 Workspaces available as composable regions on one screen instead of hiding each
 project behind a mutually exclusive tab.
 
-> Status: foundation prototype. The Rust control plane, detachable PTY data
-> plane, and owning-process-group teardown are testable, but there is no
-> runnable GUI application yet.
+> Status: native layout prototype. `Teaser.app` runs a fixture-backed Workspace
+> and Panel UI plus a Zed companion managed through public Accessibility APIs.
+> The Rust control plane, detachable PTY data plane, and owning-process-group
+> teardown are testable; production Ghostty and Session wiring remain incomplete.
 
 ## Product thesis
 
@@ -50,13 +51,32 @@ See [Architecture](docs/architecture.md), [Roadmap](ROADMAP.md), and the
 
 ## Development
 
-Run the current Rust quality gate from the repository root:
+Run the full quality gate from the repository root:
 
 ```fish
 fish scripts/check.fish
 ```
 
-It checks formatting, Clippy warnings, all workspace tests, and whitespace errors.
+It builds `Teaser.app` and checks Swift integration tests, formatting, Clippy
+warnings, all Rust workspace tests, and whitespace errors.
+
+Build the current macOS app prototype with:
+
+```fish
+fish scripts/app.fish --build-only
+```
+
+This produces `target/macos/Teaser.app`. Launching the app requires a stable
+Apple Development or Developer ID signing identity so macOS can retain Teaser's
+Accessibility approval across rebuilds:
+
+```fish
+set -lx TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
+fish scripts/app.fish
+```
+
+The first Zed connection can choose a project directory in the app. Pass
+`--zed-repo PATH` to preselect it.
 
 To run the current foreground daemon prototype:
 

@@ -27,15 +27,16 @@ current-state document. Keep legal and naming changes aligned with `LICENSE`,
 
 ## Project Structure and Module Organization
 
-The repository contains a foundation prototype, not a runnable GUI application.
-The Rust workspace contains `crates/teaser-core` and `crates/teaserd`. Native Swift
-terminal integration and probes live under `app/macos/Teaser`,
-`app/macos/TeaserProbe`, and `app/macos/TeaserProbeTests`.
+The repository contains a runnable fixture-backed SwiftUI application prototype
+plus the Rust foundation. The Rust workspace contains `crates/teaser-core` and
+`crates/teaserd`. Native application and terminal integration live under
+`app/macos/Teaser`; probes live under `app/macos/TeaserProbe` and
+`app/macos/TeaserProbeTests`.
 
 The pinned Ghostty source is the `vendor/ghostty` submodule. Teaser-owned provenance
 and patches live under `vendor/README.md` and `patches/ghostty`. Shell integration,
-terminal benchmarks, the full macOS host, and additional `crates/teaser-*` packages
-remain planned until their paths exist.
+terminal benchmarks, the production Ghostty-backed macOS host, and additional
+`crates/teaser-*` packages remain planned until their paths exist.
 
 Use exact names consistently: product `Teaser`, daemon and package `teaserd`, core
 package `teaser-core`, protocol `teaser.attach.v1`, and runtime directory
@@ -50,8 +51,9 @@ The canonical full gate is:
 fish scripts/check.fish
 ```
 
-It verifies the pinned Ghostty inputs, Rust formatting, Clippy warnings, Rust tests,
-Swift terminal-attachment tests, and whitespace. The component Rust gates are:
+It verifies the `Teaser.app` build, pinned Ghostty inputs, Rust formatting, Clippy
+warnings, Rust tests, Swift terminal-attachment and external-window tests, and
+whitespace. The component Rust gates are:
 
 ```fish
 cargo fmt --check
@@ -65,8 +67,16 @@ Run the foreground daemon prototype with:
 cargo run -p teaserd
 ```
 
-There is no Xcode project or production GUI build command yet. Add exact Swift build
-and test commands only when the corresponding project exists; do not invent them.
+Build the native application prototype with:
+
+```fish
+fish scripts/app.fish --build-only
+```
+
+It produces `target/macos/Teaser.app`. There is no Xcode project or production
+packaging command yet. Live launch through `scripts/app.fish` requires
+`TEASER_CODESIGN_IDENTITY` so Accessibility approval uses a stable application
+identity.
 
 ## Coding Style and Naming Conventions
 
