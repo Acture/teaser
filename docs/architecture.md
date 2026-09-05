@@ -1,8 +1,8 @@
 # Teaser architecture
 
-Status: design baseline
+Status: design baseline; desktop-stage implementation in progress
 
-Last updated: 2026-09-01
+Last updated: 2026-09-05
 
 ## 1. System boundary
 
@@ -10,18 +10,17 @@ Teaser is a native spatial development environment, not a new shell, editor,
 browser, or agent model. Its primary unit of presentation is a complete,
 project-scoped Workspace rather than a mutually exclusive project tab. Workspaces
 can be tiled in parallel, focused, or switched as units while retaining their Panel
-layouts and running content.
+layouts and running content. A Workspace is one connected rectangular region, even
+when its Panels are backed by windows owned by several applications.
 
 ```text
 Teaser.app
-├── WorkspacePresentation                      tile / focus / switch Workspaces
-│   ├── Workspace A                            Project + Checkout context
-│   │   └── PanelTree                          terminal / agent / project / diff
-│   ├── Workspace B                            independently retained layout
-│   │   └── PanelTree                          content-neutral display regions
-│   └── restore, focus, actions, permissions
-├── PanelHost                                  AppKit / SwiftUI content composition
-│   └── focus, geometry, clipboard, IME, input
+├── DesktopStageController                     current-Space window orchestration
+│   ├── WorkspacePresentation                  display → WorkspaceTree → PanelTree
+│   ├── NotesWindowController                  Teaser-owned Notes
+│   ├── ManagedExternalWindow                  exact provider-owned top-level window
+│   ├── DesktopOverlayController               passive visuals + bounded hit windows
+│   └── DesktopStageControlWindow              explicit start / stop / quit
 ├── TerminalSurfaceAdapter
 │   └── pinned libghostty                      VT state + Metal + IME + selection
 ├── TerminalAttachmentPump                    bounded asynchronous data plane
@@ -43,19 +42,29 @@ teaser CLI                                     low-frequency control client
 ```
 
 The host is macOS-first because AppKit already supplies the hard parts Teaser should
-not rebuild: responder routing, text input and IME, accessibility, drag and drop,
-window lifecycle, and native view composition.
+not rebuild: responder routing, text input and IME, Accessibility, drag and drop,
+window lifecycle, and native view composition. A single opaque full-screen Teaser
+window cannot contain live third-party windows. The desktop stage therefore uses
+mutually non-overlapping top-level windows plus transparent overlay windows rather
+than a visual container pretending to own every Panel.
 
 ## 2. Ownership and performance boundaries
 
-Swift/AppKit owns live view lifetime, Workspace and Panel geometry, presentation
-transitions, focus, native input, clipboard, image preview, and Accessibility
-permission UX.
+Swift/AppKit owns live window and view lifetime, Workspace and Panel geometry,
+presentation transitions, Virtual Focus, explicit Input Focus handoff, native
+input, clipboard, image preview, adopted-window leases, arrangement overlays, and
+Accessibility permission UX.
 
 `teaserd` owns each Teaser Session's canonical child process, PTY master, attachment
 lease, replay offsets, backend lifecycle, and eventual block state. Rust also owns
 the authoritative persistent Project, Workspace, Panel, capability, ACP, tmux, CLI
 IPC, and diagnostic state.
+
+The in-progress Swift desktop-stage slice persists a typed presentation snapshot in
+`~/Library/Application Support/Teaser` until the UniFFI-backed Workspace store
+exists. It does not persist AX object references or treat a saved application hint
+as live window identity. This is an implementation staging boundary, not a second
+long-term source of Workspace truth.
 
 Raw PTY output, keystrokes, pointer motion, IME composition, and render callbacks
 must never cross UniFFI, JSON, or SQLite. A TerminalSurface attaches to one exact
@@ -152,54 +161,117 @@ wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
 risk and cross-PGID session cleanup. Working-directory selection is intentionally
 absent until the Checkout resolver can enforce it.
 
-## 4. Workspace, Panel, and content model
+## 4. Workspace, Panel, and desktop-stage model
 
 A Workspace is a persistent, project-scoped organization of Panels. Panels within
 that Workspace may bind to different Checkouts of the same Project, but a Workspace
 does not combine unrelated Projects. Multiple Workspaces keep unrelated project
 contexts independently available for parallel presentation.
 
-`WorkspacePresentation` arranges complete Workspaces on the screen. It supports:
+`WorkspacePresentation` is a two-level constrained slicing layout. Each display has
+one `WorkspaceTree`; each Workspace leaf owns one `PanelTree`. Both trees partition
+their parent rectangle exactly except for explicit gutters. This guarantees that a
+Workspace is one connected rectangle, Panels do not overlap, and unequal Workspace
+and Panel sizes can still fill the visible display. A Workspace has display affinity
+and does not span displays; each display in the current Space is solved independently.
 
-- parallel presentation, where multiple Workspaces remain visible and interactive;
-- focused presentation, where one Workspace temporarily receives more display;
-- whole-Workspace switching, where hidden Workspaces retain their state.
+The persistent value model stores tree topology and user-requested split ratios.
+Minimum sizes clamp the feasible ratio without overwriting the user's requested
+ratio. Preferred aspect ranges currently contribute diagnostic quality metrics;
+growth weights are stored intent, not allocation inputs yet. Automatic aesthetic
+optimization remains planned. Manual divider movement is authoritative.
+Presentation may tile Workspaces, temporarily enlarge one, or switch complete
+Workspaces without recreating their Panel trees, content, or Session ownership.
 
-These are presentation changes over the same Workspace identities. They do not
-recreate Panel trees, restart content, or transfer Session ownership. Returning to a
-Workspace restores the same Panel geometry, content bindings, and spatial
-relationships.
+A Panel is a stable spatial identity, not a view subclass. Its data-defined
+`PanelKindDefinition` supplies a label and `LayoutProfile` containing minimum size,
+preferred aspect-ratio range, and growth weight. Initial kinds are Task, CLI, App,
+Agent, File, and Notes. Users may define more kinds and override a profile on one
+Panel; a kind does not select an application, provider, protocol, or capability.
 
-Each Workspace owns an immutable `PanelTree`. A Panel is a content-neutral display
-region: `PanelID` identifies layout and focus, while `PanelContent` describes what
-the region presents. Initial built-in content includes:
+`PanelID`, a Panel binding, and `SurfaceID` are deliberately distinct. A binding is
+replaceable and may be:
 
-- `TerminalSurface`: a full Ghostty surface attached to one Session;
-- `AgentView`: structured ACP turns, tools, permissions, and artifacts;
-- `ProjectDetails`: Project, Checkout, task, and repository information;
-- `DiffView`: code changes and review detail;
-- `ImageView`: Quick Look plus Image I/O metadata where useful;
-- `InputView`: reusable native rich-text input based on `NSTextView`.
+- Teaser-owned `PanelContent`, such as Notes, a `TerminalSurface`, structured agent
+  detail, project detail, a diff, Quick Look content, or native input;
+- one exact provider-owned external top-level window under a live
+  `ManagedExternalWindow` lease; or
+- empty, optionally retaining a provider hint for the user.
 
-`PanelID` and `SurfaceID` are deliberately distinct. A Panel can present static or
-interactive information without owning a Session; a Surface is the presentation of
-one exact Teaser Session and may be attached to a Panel.
+Built-in Teaser content uses a closed internal enum, not a plugin API. Extensible
+Panel kinds change presentation metadata only. There is no dynamic loader, stable
+ABI, WASM host, or third-party SDK in v1. Neovim remains a normal TUI inside a
+terminal, and Notes is the only Teaser-owned content required by the real-window
+showcase.
 
-Built-in Panel content uses a closed internal enum, not a plugin API. There is no
-dynamic loader, extension registry, stable ABI, WASM host, or third-party SDK in v1.
-Interfaces are introduced only where multiple implementations already exist, such
-as agent and session backends.
+### 4.1 External-window adoption
 
-Neovim is initially a normal TUI inside `TerminalSurface`. A native editor surface
-is deliberately out of scope.
+Adoption is geometry orchestration, not embedding. The provider retains ownership
+of rendering, input, accessibility, menus, tabs, process lifetime, and the top-level
+window. Teaser never reparents the window, mirrors its pixels, synthesizes its
+application input, or represents it as a Teaser Session or Surface.
 
-Zed is represented by `ManagedExternalWindow`, not by `PanelContent` or `Surface`.
-Accessibility APIs may best-effort set its position, size, and focus and restore its
-frame while the same process/window remains identifiable. Teaser does not reparent
-its window, capture its pixels, synthesize its editor input, or claim it is embedded.
-The first implementation associates Zed with one Workspace and can tile it adjacent
-to the Teaser window on the current Space; it does not turn Zed into Panel content
-or carve an external window into one `NSWindow`.
+After macOS grants the stably signed Teaser application Accessibility access once,
+physically dragging a window into a Panel is the explicit selection action. A global
+mouse monitor, button-state sampling, and front-to-back Core Graphics hit testing
+with unique Accessibility correlation lock one
+exact `(PID, window ID, AX element)` identity at drag start. Teaser recognizes the
+gesture only after the same window's movement correlates with pointer movement, so
+tab, file, text, and in-application drags do not become window adoptions.
+
+During a qualified drag, a nonactivating click-through overlay exposes Panel targets.
+Dropping on an empty Panel adopts it; dropping at an occupied Panel edge inserts a
+local split; dropping a managed window on another empty Panel moves its binding.
+An occupied center rejects an unmanaged window rather than silently replacing
+content. Every successful adoption is one atomic layout transaction with single-step
+Undo. On identity, feasibility, or frame verification failure, Teaser attempts
+compensation for every affected window, reports incomplete rollback, and retains
+failed restoration leases. This is best-effort orchestration, not an OS-atomic
+multi-window transaction.
+
+Only standard, unminimized, movable, resizable windows on the current Space are
+eligible. Public macOS APIs cannot send an arbitrary provider window to a selected
+Space, so Teaser fails closed across that boundary. Multiple visible displays are
+supported. Display topology changes automatically redistribute whole Workspaces
+and rebuild display trees deterministically; they do not preserve old display
+split IDs or ratios. A Workspace never straddles displays.
+
+Launching opens a normal closable control window. Only explicit Start Layout
+creates the desktop stage, after Accessibility authorization. Stop Layout and
+Control-Option-Escape immediately remove Teaser chrome and Notes before releasing
+provider leases. Switching Space stops the stage; overlays do not join every Space
+or full-screen application. The display-sized visual window always ignores mouse
+events; only bounded labels and divider handles intercept input in Arrange mode.
+
+The live AX identity and pre-adoption frame are ephemeral. Graceful release restores
+the original frame only while the exact window still exists and remains at the frame
+last applied by Teaser. Persistence retains layout and a non-authoritative provider
+hint, not PID, window ID, or AX references. After Teaser or the provider restarts,
+the Panel remains empty and requires another physical drag; Teaser never guesses a
+replacement by title, repository path, or application name.
+
+### 4.2 Virtual and input focus
+
+`VirtualFocus` is Teaser's persistent Workspace and Panel selection for navigation,
+split, resize, focus, and arrangement commands. Moving it or changing Workspace
+presentation does not activate another application. It is drawn independently of
+the macOS key-window state.
+
+`InputFocus` is the operating system's actual keyboard destination. A direct click,
+double-click, or explicit focus action such as Control-Option-Return transfers it to the virtually
+focused Panel. For an external binding, the bridge focuses that exact AX window and
+activates only as required; it does not request that every window of the provider be
+raised. Clicking an adopted window also synchronizes Virtual Focus to its Panel.
+
+Teaser cannot deliver ordinary keyboard input to an inactive provider window without
+event injection or private behavior, so it does not attempt to virtualize Input
+Focus. Workspace enlargement and switching do not deliberately hand it to another
+Panel; macOS may still choose a new key window if the current provider closes or
+hides its own window.
+
+Control-Option-Z invokes layout Undo while Arrange is active. Command-Z is never
+observed as a layout command because a passive global monitor cannot consume it
+without also delivering Undo to the provider.
 
 ## 5. Capability model
 
@@ -256,7 +328,7 @@ multiline commands, and secret-like input require explicit review.
 Arbitrary block folding, reordering, or vertical gaps are not v1 promises because
 they require a second terminal layout engine or deep renderer changes.
 
-Search defaults are local: `Cmd-F` searches the focused Panel and
+Search defaults are local: `Cmd-F` searches the virtually focused Panel and
 `Cmd-Shift-F` searches the current Workspace. There is no default all-Workspaces
 search.
 
@@ -330,13 +402,17 @@ opaque.
 
 ## 9. CLI and persistence
 
-The Rust `teaser` CLI connects to
+The following CLI and backend-history behavior is a v1 target, not implemented by
+the desktop-stage prototype. Current persistence contains presentation and Notes
+only, with no live external-window identities.
+
+The planned Rust `teaser` CLI connects to
 `~/Library/Application Support/Teaser/runtime/control.sock`. The app creates the
 parent directory with user-only access and the socket with mode `0600`. If the
 socket is absent, the CLI launches `Teaser.app`, waits for readiness with a bounded
 retry, and sends a versioned request.
 
-Stable v1 commands:
+Planned v1 commands:
 
 ```text
 teaser
@@ -345,18 +421,22 @@ teaser agent <claude|codex> [--cwd PATH]
 teaser open <PATH>
 ```
 
-Workspace persistence includes Panel layout, presentation mode, bounded block
-history, resources, and backend identity. Direct PTYs survive Surface or GUI
-disconnection while their
-owning `teaserd` process remains alive, but cannot survive daemon termination and
-restore as terminated placeholders. tmux-backed sessions reconnect to surviving
-pane IDs, with the semantic-degraded recovery rule above.
+Workspace persistence includes display affinity, Workspace and Panel trees,
+requested split ratios, Virtual Focus, Panel kinds and profiles, Notes, bounded
+block history, resources, and Teaser backend identity. An external-window binding
+persists only an empty-slot provider hint and must be re-established by dragging the
+window again. Direct PTYs survive Surface or GUI disconnection while their owning
+`teaserd` process remains alive, but cannot survive daemon termination and restore
+as terminated placeholders. tmux-backed sessions reconnect to surviving pane IDs,
+with the semantic-degraded recovery rule above.
 
 ## 10. Distribution and maintenance
 
-Teaser targets Apple Silicon macOS and direct Developer ID distribution. Accessibility
-window management is incompatible with the App Sandbox, so Mac App Store delivery
-is out of scope. v1 distribution is a notarized release archive plus Homebrew cask.
+Teaser targets Apple Silicon macOS and direct Developer ID distribution.
+Accessibility window management is incompatible with the App Sandbox, so Mac App
+Store delivery is out of scope. A stable signature lets macOS retain one Teaser
+Accessibility decision; Teaser does not maintain a per-application authorization
+list. v1 distribution is a notarized release archive plus Homebrew cask.
 
 Ghostty updates are explicit dependency upgrades: change the pinned commit, rebuild
 the semantic patch, run compile/integration/performance gates, and record upstream
@@ -373,10 +453,14 @@ SLO must be recorded with measurements and rationale before later milestones beg
 |---|---|
 | License | AGPL-3.0-or-later plus separate trademark policy |
 | Host | AppKit/SwiftUI with Rust core |
-| Workspace | Project-scoped; multiple Workspaces may tile, focus, or switch |
-| Panel | Content-neutral region; layout identity is separate from Surface identity |
+| Desktop stage | Provider-owned top-level windows plus Teaser-owned windows and overlays |
+| Workspace | One connected rectangle; multiple Workspaces may tile, focus, or switch |
+| Panel | Stable region; identity is separate from kind, binding, and Surface |
+| Layout | Per-display WorkspaceTree containing one PanelTree per Workspace |
+| Focus | Virtual Focus is independent from explicit macOS Input Focus |
 | Terminal | Full pinned `libghostty`, isolated behind one adapter |
-| Editor | Neovim in terminal; optional externally tiled Zed |
+| External apps | Exact current-Space window leases through public AX APIs |
+| Editor | Neovim in terminal or an adopted provider-owned editor window |
 | Agent | Native CLI for completeness; ACP for structured supported capabilities |
 | Input | Reusable native `NSTextView`-based input surface |
 | Blocks | OSC 133/ACP semantics plus bounded durable BlockStore |
@@ -394,3 +478,5 @@ SLO must be recorded with measurements and rationale before later milestones beg
 - [Mosh technical description](https://mosh.org/#techinfo)
 - [UniFFI user guide](https://mozilla.github.io/uniffi-rs/latest/)
 - [macOS AXUIElement API](https://developer.apple.com/documentation/applicationservices/axuielement_h)
+- [AppKit global event monitoring](https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents%28matching%3Ahandler%3A%29)
+- [Core Graphics window list](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo%28_%3A_%3A%29)

@@ -27,8 +27,9 @@ current-state document. Keep legal and naming changes aligned with `LICENSE`,
 
 ## Project Structure and Module Organization
 
-The repository contains a runnable fixture-backed SwiftUI application prototype
-plus the Rust foundation. The Rust workspace contains `crates/teaser-core` and
+The repository contains an AppKit/SwiftUI desktop-stage prototype plus the Rust
+foundation. Real-window drag acceptance is still pending; do not infer it from
+pure geometry tests. The Rust workspace contains `crates/teaser-core` and
 `crates/teaserd`. Native application and terminal integration live under
 `app/macos/Teaser`; probes live under `app/macos/TeaserProbe` and
 `app/macos/TeaserProbeTests`.
@@ -52,8 +53,8 @@ fish scripts/check.fish
 ```
 
 It verifies the `Teaser.app` build, pinned Ghostty inputs, Rust formatting, Clippy
-warnings, Rust tests, Swift terminal-attachment and external-window tests, and
-whitespace. The component Rust gates are:
+warnings, Rust tests, Swift terminal-attachment, external-window, layout, topology,
+shortcut, and hidden-window safety tests, and whitespace. The component Rust gates are:
 
 ```fish
 cargo fmt --check
@@ -77,6 +78,9 @@ It produces `target/macos/Teaser.app`. There is no Xcode project or production
 packaging command yet. Live launch through `scripts/app.fish` requires
 `TEASER_CODESIGN_IDENTITY` so Accessibility approval uses a stable application
 identity.
+
+Launch opens a normal control window, not the stage. Layout activation is explicit.
+Do not automatically start an overlay on the user's desktop for smoke testing.
 
 ## Coding Style and Naming Conventions
 

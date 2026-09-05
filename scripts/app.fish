@@ -5,6 +5,9 @@ set repo_root (path resolve $script_dir/..)
 set source_dir $repo_root/app/macos/Teaser
 set model_source_dir $source_dir/Model
 set layout_source_dir $source_dir/Layout
+set desktop_stage_source_dir $source_dir/DesktopStage
+set notes_source_dir $source_dir/Notes
+set persistence_source_dir $source_dir/Persistence
 set external_window_source_dir $repo_root/app/macos/Teaser/ExternalWindows
 set build_dir $repo_root/target/macos
 set app_bundle $build_dir/Teaser.app
@@ -16,7 +19,6 @@ set bundle_info_plist $app_contents/Info.plist
 set swift_module_cache $build_dir/swift-module-cache
 set clang_module_cache $build_dir/clang-module-cache
 set build_only false
-set zed_repo
 set codesign_identity -
 
 if set -q TEASER_CODESIGN_IDENTITY
@@ -35,24 +37,8 @@ while test $argument_index -le (count $argv)
                 exit 2
             end
             set build_only true
-        case --zed-repo
-            if test -n "$zed_repo"
-                printf 'error: --zed-repo was provided more than once\n' >&2
-                exit 2
-            end
-            set argument_index (math $argument_index + 1)
-            if test $argument_index -gt (count $argv)
-                printf 'usage: fish scripts/app.fish [--build-only] [--zed-repo PATH]\n' >&2
-                exit 2
-            end
-            set repository_argument $argv[$argument_index]
-            if not test -d "$repository_argument"
-                printf 'error: Zed repository is not a directory: %s\n' "$repository_argument" >&2
-                exit 2
-            end
-            set zed_repo (path resolve "$repository_argument")
         case '*'
-            printf 'usage: fish scripts/app.fish [--build-only] [--zed-repo PATH]\n' >&2
+            printf 'usage: fish scripts/app.fish [--build-only]\n' >&2
             exit 2
     end
     set argument_index (math $argument_index + 1)
@@ -81,6 +67,16 @@ if not test -d $layout_source_dir
     printf 'error: Teaser layout sources are missing: %s\n' $layout_source_dir >&2
     exit 1
 end
+for required_source_dir in \
+    $desktop_stage_source_dir \
+    $notes_source_dir \
+    $persistence_source_dir
+    if not test -d $required_source_dir
+        printf 'error: Teaser source directory is missing: %s\n' \
+            $required_source_dir >&2
+        exit 1
+    end
+end
 if not test -d $external_window_source_dir
     printf 'error: external-window sources are missing: %s\n' \
         $external_window_source_dir >&2
@@ -98,12 +94,29 @@ if test (count $swift_sources) -eq 0
 end
 set model_sources (find $model_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
 set layout_sources (find $layout_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
+set desktop_stage_sources \
+    (find $desktop_stage_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
+set notes_sources (find $notes_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
+set persistence_sources \
+    (find $persistence_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
 if test (count $model_sources) -eq 0
     printf 'error: no Swift sources found in %s\n' $model_source_dir >&2
     exit 1
 end
 if test (count $layout_sources) -eq 0
     printf 'error: no Swift sources found in %s\n' $layout_source_dir >&2
+    exit 1
+end
+if test (count $desktop_stage_sources) -eq 0
+    printf 'error: no Swift sources found in %s\n' $desktop_stage_source_dir >&2
+    exit 1
+end
+if test (count $notes_sources) -eq 0
+    printf 'error: no Swift sources found in %s\n' $notes_source_dir >&2
+    exit 1
+end
+if test (count $persistence_sources) -eq 0
+    printf 'error: no Swift sources found in %s\n' $persistence_source_dir >&2
     exit 1
 end
 set external_window_sources \
@@ -137,6 +150,9 @@ xcrun swiftc \
     $swift_sources \
     $model_sources \
     $layout_sources \
+    $desktop_stage_sources \
+    $notes_sources \
+    $persistence_sources \
     $external_window_sources \
     -o $app_binary
 or exit 1
@@ -157,8 +173,4 @@ if $build_only
 end
 
 printf 'Launching Teaser\n'
-if test -n "$zed_repo"
-    env TEASER_ZED_REPO="$zed_repo" $app_binary
-else
-    $app_binary
-end
+$app_binary

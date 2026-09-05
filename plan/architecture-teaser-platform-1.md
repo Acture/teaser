@@ -2,7 +2,7 @@
 goal: Build the first supportable macOS Teaser platform from the current architecture baseline
 version: 1.0
 date_created: 2026-07-21
-last_updated: 2026-09-01
+last_updated: 2026-09-04
 owner: Acture
 status: 'In Progress'
 tags: [architecture, terminal, macos, rust, swift, agents]
@@ -14,44 +14,48 @@ tags: [architecture, terminal, macos, rust, swift, agents]
 
 This plan builds Teaser's foundation prototype into a macOS spatial development
 environment. It implements risk spikes first, then parallel project Workspaces,
-structured terminal detail, ACP agents, persistent/remote sessions, and release
-hardening. Every phase has an explicit stop condition; no phase may compensate for
-a failed terminal foundation by adding a second renderer.
+the provider-owned window desktop stage, structured terminal detail, ACP agents,
+persistent/remote sessions, and release hardening. Every phase has an explicit stop
+condition; no phase may compensate for a failed terminal foundation by adding a
+second renderer.
 
 ## 1. Requirements & Constraints
 
 - **REQ-001**: Render and accept input through the full Ghostty embedding surface; do not implement a second VT renderer.
 - **REQ-002**: Keep raw PTY output, keystrokes, pointer events, IME composition, and render callbacks outside UniFFI, JSON, and SQLite paths.
-- **REQ-003**: Present multiple project-scoped Workspaces in parallel, focus one, or switch complete Workspaces while preserving each Workspace's `PanelTree`, running content, and spatial relationships.
+- **REQ-003**: Use a two-level per-display slicing layout so each Workspace is one connected rectangle and its unequal Panels fill that rectangle; support parallel presentation, focus, and complete-Workspace switching without losing tree identity, running content, or requested split ratios.
 - **REQ-004**: Preserve unsupported CLI/TUI behavior through an ordinary PTY with no required Teaser adapter.
 - **REQ-005**: Produce shell blocks from OSC 133/OSC 7 and agent blocks from ACP while storing bounded completed payloads in SQLite.
 - **REQ-006**: Support `teaser agent claude` and `teaser agent codex` without shadowing or modifying the vendor `claude` and `codex` commands.
 - **REQ-007**: Support local tmux control mode, system SSH, SSH-carried tmux control mode, and capability-degraded opaque Mosh sessions.
-- **REQ-008**: Manage Zed only as an adjacent external desktop companion through public Accessibility APIs; never reparent or capture it.
-- **REQ-009**: Default search to the focused Panel and require a distinct action for current-Workspace search.
+- **REQ-008**: Let the user drag any eligible current-Space application window into a Panel and manage its geometry through public Accessibility APIs; never reparent, capture, or synthesize input for it.
+- **REQ-009**: Default search to the virtually focused Panel and require a distinct action for current-Workspace search.
 - **REQ-010**: Ship v1 without a dynamic plugin loader, public surface SDK, stable internal ABI, or third-party extension promise.
 - **REQ-011**: Preserve native Claude/Codex CLI mode in TerminalSurface because ACP adapters may expose fewer capabilities than the vendor CLIs.
 - **REQ-012**: Restore a command for rerun into an editable input area and require user confirmation; never auto-execute historical commands.
-- **REQ-013**: Keep Panel identity content-neutral and distinct from Surface identity so a Panel can show terminal, agent, project, diff, file, image, input, or other built-in content without requiring a Session.
+- **REQ-013**: Keep Panel identity content-neutral and distinct from kind, binding, and Surface identity so an empty Panel can bind either Teaser-owned content or one exact provider-owned external window without requiring a Session.
+- **REQ-014**: Keep Teaser's `VirtualFocus` for layout commands independent from macOS `InputFocus`; transfer keyboard focus only after an explicit user action.
+- **REQ-015**: Define Task, CLI, App, Agent, File, and Notes as data-driven layout profiles with per-Panel overrides and user-defined kinds, not application-specific Swift subclasses.
 - **SEC-001**: Create the control socket at `~/Library/Application Support/Teaser/runtime/control.sock` with mode `0600` inside a user-only directory.
 - **SEC-002**: Treat PTY output, OSC payloads, ACP `_meta`, file paths, and tmux control messages as untrusted input and bound every decoded frame or stored payload.
-- **SEC-003**: Request Accessibility access only when external-window management is invoked and continue without it when permission is denied.
+- **SEC-003**: Request Accessibility access only when external-window management is invoked; after the one system decision, use the physical drag as explicit window selection and continue without adoption when permission is denied.
 - **SEC-004**: Create workspace databases with user-only permissions and expose retention duration, capacity, disable-history, and clear-history controls.
 - **CON-001**: Target Apple Silicon macOS first and distribute outside the Mac App Store sandbox.
 - **CON-002**: Pin Ghostty `v1.3.1` commit `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`; never follow `main` implicitly.
 - **CON-003**: Write Teaser application logic in typed Rust and Swift; restrict Zig changes to the Ghostty embedding boundary.
 - **CON-004**: Use tabs in new project-owned source where the language formatter permits; otherwise follow rustfmt and Swift format conventions.
 - **CON-005**: Use AGPL-3.0-or-later for Teaser and preserve every bundled dependency notice.
-- **CON-006**: Do not claim arbitrary block folding/reordering, native Zed embedding, or direct PTY survival across `teaserd` termination in v1.
+- **CON-006**: Do not claim arbitrary block folding/reordering, external-window embedding, cross-Space movement, or direct PTY survival across `teaserd` termination in v1.
 - **CON-007**: Treat tmux text recovered after a control disconnect as semantic-degraded when OSC 133 lifecycle or exit status was missed.
 - **CON-008**: Treat Mosh roaming as valid only while its owning `teaserd` direct PTY remains alive; daemon restart does not restore that Mosh process.
-- **GUD-001**: Use closed enums for built-in Panel content and introduce traits only for seams with multiple implementations, including `SessionBackend` and `AgentBackend`.
+- **GUD-001**: Use closed enums for built-in Panel content, data values for extensible Panel kinds, and traits only for seams with multiple implementations, including `SessionBackend` and `AgentBackend`.
 - **GUD-002**: Log lifecycle transitions, reconnects, adapter failures, and expensive operations at INFO; do not log raw prompts, PTY contents, or credentials by default.
 - **GUD-003**: Display progress and elapsed time for dependency builds, packaging, and benchmark suites that exceed five seconds.
 - **GUD-004**: Run `cargo fmt`, `cargo clippy --all-targets --all-features`, Swift compiler checks, and project tests before completing each implementation phase.
-- **PAT-001**: Rust owns persistent Project, Workspace, Panel, and content-binding state; Swift owns live AppKit geometry, presentation transitions, and view lifetime; messages crossing the boundary are immutable typed values.
+- **PAT-001**: Rust owns persistent Project, Workspace, Panel, and Teaser content-binding state; Swift owns live AppKit geometry, overlays, external-window leases, focus handoff, and view lifetime; messages crossing the boundary are immutable typed values.
 - **PAT-002**: Model missing integration as an explicit `CapabilitySet`, not as guessed behavior or silent fallback.
 - **PAT-003**: Supervise ACP adapters, tmux, SSH, and bridge processes with bounded restart and deterministic terminal states.
+- **PAT-004**: Persist external provider hints but never persist or reconstruct AX references; after either process restarts, require the user to drag the window again.
 
 ## 2. Implementation Steps
 
@@ -69,7 +73,7 @@ a failed terminal foundation by adding a second renderer.
 | TASK-006 | Implement the UniFFI boundary in `crates/teaser-core/src/ffi.rs` and `app/macos/Teaser/Core/TeaserCoreBridge.swift` with `TeaserCore`, `WorkspaceSnapshot`, `CoreAction`, and `CoreEvent`; add a guard test that no terminal byte-buffer type is exported. | | |
 | TASK-007 | In `crates/teaser-acp/tests/smoke.rs`, start pinned Claude and Codex ACP adapters, negotiate `protocolVersion` and capabilities, initialize one session, submit one prompt, collect updates, and terminate cleanly; compare advertised features with native CLI mode and record exact adapter revisions/notices. | | |
 | TASK-008 | In `crates/teaser-tmux`, parse one local tmux control session and connect one pane through `crates/teaser-bridge` to the same `teaserd` Session data plane used by a TerminalSurface; test arbitrary bytes, Unicode, IME-produced input, bracketed paste, mouse protocol, resize, `%pause/%continue`, `capture-pane` repair, malformed messages, and flow control; record the initial 20% bridge target. | | |
-| TASK-009 | Implement a `ManagedExternalWindow` spike in `app/macos/Teaser/ExternalWindows`; locate one Zed window through AX on the current Space, tile it beside Teaser, observe move/close events, and best-effort restore the original frame while the same window remains identifiable. | | |
+| TASK-009 | Implement the `ManagedExternalWindow` foundation in `app/macos/Teaser/ExternalWindows`; prove exact AX/Core Graphics identity, current-Space validation, move/resize observation, transactional frame application, and best-effort same-window restoration. Zed may be the fixture, but title, path, and application-specific lookup are not the product interaction. | | |
 
 CP-M0.6 now proves a real daemon-owned PTY, exclusive attachment leases, bounded
 binary frames, monotonic replay offsets, replay-gap reporting, detach/reattach with
@@ -123,17 +127,53 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 
 ### Implementation Phase 1 — Parallel project Workspaces
 
-- **GOAL-002**: Deliver two reliable project Workspaces that can remain tiled in parallel, focus, or switch as units while retaining their Panel layouts and live content.
+- **GOAL-002**: Deliver a real-window desktop stage in which multiple connected project Workspaces remain tiled in parallel, focus, or switch as units while retaining unequal Panel layouts and live content.
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-010 | Implement immutable `WorkspacePresentation`, `Workspace`, `PanelTree`, `PanelNode`, `PanelID`, `PanelContent`, `SplitAxis`, and `WorkspaceID` values plus reducers for Workspace tile/focus/switch and Panel split/close/move/resize/focus; add property tests for identity, tree, focus, and round-trip invariants. | | |
-| TASK-011 | Implement `WorkspacePresentationHost`, `WorkspaceHost`, `PanelContainerView`, and action routing under `app/macos/Teaser/Workspace`; show two project Workspaces in parallel, focus or switch either without rebuilding it, and provide initial project-details and terminal Panel content with split, zoom, focus, resize, and command-palette actions. | | |
-| TASK-012 | Implement Workspace SQLite persistence in `crates/teaser-core/src/store`; store schema version, Project and Checkout bindings, Workspace presentation, Panel trees, content descriptors, backend identity, and restoration state at the architecture-defined path with mode `0600`; reattach a direct PTY only while its exact owning `teaserd` Session remains live, otherwise restore a terminated placeholder. | | |
+| TASK-010 | Implement immutable `WorkspacePresentation`, `DisplayWorkspaceLayout`, `WorkspaceDescriptor`, `PanelDescriptor`, generic `LayoutTree`, `PanelKindDefinition`, `LayoutProfile`, `PanelBinding`, `LayoutAxis`, `VirtualFocusState`, and stable ID values. Add deterministic constrained-layout reducers for split, close, move, resize, tile, focus, switch, display-affinity changes, and optimization; prove exact fill, non-overlap, connected Workspaces, feasible minimum sizes, unequal ratios, and round trips. | | |
+| TASK-011 | Implement `DesktopStageCoordinator`, Teaser-owned Panel windows, click-through arrangement overlays, action routing, and `InputFocusBridge` under `app/macos/Teaser`; use `Ctrl-Option-D` to split the virtually focused Panel, move Virtual Focus without activation, and require click/double-click/Enter for Input Focus. Replace fixture-rendered third-party interfaces with a six-Workspace unequal showcase using real IDE, task, terminal/agent, file, and browser windows plus Teaser-owned persistent Notes. | | |
+| TASK-012 | Implement schema-versioned Workspace persistence with user-only permissions. Store display affinity, Workspace/Panel trees, requested ratios, Virtual Focus, kinds and overrides, Notes, Project/Checkout bindings, Teaser content descriptors, and backend restoration state. During the Swift-only desktop-stage slice, one atomic typed snapshot under `~/Library/Application Support/Teaser` owns this state; cut directly to the Rust Workspace store when TASK-006 lands, with no dual write. Persist only hints for external providers and require re-drag after restart. Reattach a direct PTY only while its exact owning `teaserd` Session remains live. | | |
 | TASK-013 | Implement `HistoryPolicy` with maximum database bytes, retention duration, persistence enabled/disabled, clear-on-exit, and explicit clear-now action; enforce bounds transactionally and expose the controls in native settings. | | |
-| TASK-014 | Implement `ImageViewController` as built-in Panel content under `app/macos/Teaser/Images` using `QLPreviewView` with Image I/O metadata fallback; route `teaser open <PATH>` to image preview for supported media and to a terminal editor command for text. | | |
-| TASK-015 | Promote the AX spike into `DesktopLayoutCoordinator`; support one external Zed companion adjacent to one Teaser workspace window, explicit permission UX, focus, close observation, and best-effort frame restoration; do not represent Zed as a `Surface`. | | |
+| TASK-014 | Implement `ImageViewController` as optional Teaser-owned Panel content under `app/macos/Teaser/Images` using `QLPreviewView` with Image I/O metadata fallback; route `teaser open <PATH>` to image preview for supported media and to a terminal editor command for text. The showcase may instead adopt a real Preview window as a File Panel. | | |
+| TASK-015 | Promote the AX spike into generic drag-to-adopt window orchestration. Correlate global mouse movement with one exact standard, movable, resizable current-Space window; expose targets only during a qualified drag; adopt an empty target, edge-split an occupied target, move an existing lease, or detach outside the layout. Apply every layout atomically with frame readback, compensation rollback, single-step Undo, close/move observation, explicit focus handoff, and safe same-window release. Fail closed on ambiguity or permission denial and never locate by title, path, or provider-specific polling. | | |
 | TASK-016 | Implement the versioned CLI protocol in `crates/teaser-core/src/ipc` and `crates/teaser-cli`; support `teaser`, `teaser shell [--cwd PATH]`, and `teaser open <PATH>`; validate paths, socket ownership, stale sockets, bounded app-launch retry, and structured errors. | | |
+
+The default P-511 showcase uses actual provider windows and six unequal Workspace
+regions. Missing providers leave empty hinted Panels; they are never replaced by a
+fixture-rendered copy.
+
+| Workspace | Panel bindings |
+|---|---|
+| Teaser | Zed App, Linear Task, Ghostty Codex Agent |
+| Research | Notion Task, Teaser-owned Notes |
+| Foch | Warp Claude Agent |
+| Ark Solver | Terminal.app SSH CLI |
+| Paper | Preview File |
+| Sort & Pour | Chrome App |
+
+On a 2560×1440 visible frame, the default WorkspaceTree gives the left branch 62%
+and the right 38%. Teaser and Research split the left branch 65/35; Foch, Ark
+Solver, and the Paper/Sort branch receive 40/21/39% of the right branch. Teaser's
+three-Panel tree is intentionally asymmetric. The solver clamps these requests to
+the feasible range on other displays.
+
+Default `LayoutProfile` values are points and may be overridden per Panel:
+
+The showcase uses compact external-slot overrides (at most 320 pt minimum width,
+200 pt minimum height) so all targets fit laptop displays. These are empty-slot
+constraints, not claims about provider minimum sizes; adoption verifies actual
+frames and can reject a slot that an app cannot fit. Aspect ranges are currently
+diagnostic and growth weights are stored for later optimization.
+
+| Kind | Minimum | Preferred aspect ratio | Growth weight |
+|---|---:|---:|---:|
+| Task | 360×240 | 1.2–2.0 | 1.0 |
+| CLI | 400×220 | 1.6–3.2 | 1.0 |
+| App | 520×320 | 1.2–2.2 | 1.5 |
+| Agent | 440×280 | 1.1–2.2 | 1.3 |
+| File | 300×360 | 0.55–1.4 | 0.8 |
+| Notes | 320×240 | 0.8–1.6 | 0.8 |
 
 ### Implementation Phase 2 — Semantic block system
 
@@ -189,17 +229,19 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 
 - **ALT-001**: Thin-fork the complete Ghostty macOS application. Rejected as the default because it couples Teaser workspace code to upstream UI churn; retained only as a foundation reassessment if the documented embedding gate fails.
 - **ALT-002**: Build on `libghostty-vt` and write a new renderer. Rejected because it discards the performance/input implementation that motivated Ghostty.
-- **ALT-003**: Use GPUI or Zed as the host. Rejected because GPUI is pre-1.0 and Zed's editor/workspace is not a stable embeddable library; external Zed tiling preserves native behavior at lower cost.
-- **ALT-004**: Capture and forward arbitrary external GUI windows. Rejected because macOS provides no public general reparent API and pixel mirroring cannot preserve IME, drag/drop, accessibility, or native focus.
+- **ALT-003**: Use GPUI or Zed as the host. Rejected because GPUI is pre-1.0 and Zed's editor/workspace is not a stable embeddable library; adopting Zed's provider-owned window preserves native behavior at lower cost.
+- **ALT-004**: Reparent, capture, and forward arbitrary external GUI windows. Rejected because macOS provides no public general reparent API and pixel mirroring cannot preserve IME, drag/drop, accessibility, or native focus. Public top-level window geometry orchestration is the accepted boundary.
 - **ALT-005**: Define a custom agent protocol. Rejected because ACP covers the semantic control plane and Claude/Codex adapters already exist.
 - **ALT-006**: Use Mosh as a transport for tmux control mode. Rejected because Mosh synchronizes terminal state rather than exposing a transparent ordered byte stream.
 - **ALT-007**: Open a third-party plugin SDK in v1. Rejected because there are no concrete plugin consumers and early compatibility promises would freeze unvalidated surface/session abstractions.
 - **ALT-008**: Put complete project Workspaces in mutually exclusive tabs. Rejected because it hides parallel project state and reproduces the display discontinuity Teaser exists to remove.
+- **ALT-009**: Keep one opaque full-screen Teaser window and draw imitations of provider applications inside it. Rejected because it cannot coexist correctly with live provider-owned windows and a fixture skin is not product evidence.
+- **ALT-010**: Locate or silently rebind windows by application, title, repository path, or polling. Rejected because those fields are ambiguous and mutable; the physical drag selects an exact runtime window, and restart requires re-drag.
 
 ## 4. Dependencies
 
 - **DEP-001**: Ghostty `v1.3.1` commit `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`, MIT license.
-- **DEP-002**: macOS AppKit, SwiftUI, Quick Look, Image I/O, Core Animation, Accessibility, and Developer ID tooling.
+- **DEP-002**: macOS AppKit, SwiftUI, Quick Look, Image I/O, Core Animation, Core Graphics window lists, Accessibility, and Developer ID tooling.
 - **DEP-003**: Rust stable toolchain with Cargo, rustfmt, and clippy; versions are locked in `rust-toolchain.toml` when TASK-001 executes.
 - **DEP-004**: UniFFI for typed low-frequency Rust/Swift bindings, locked in `Cargo.lock`.
 - **DEP-005**: SQLite through a typed Rust crate with bundled-vs-system linkage recorded before distribution.
@@ -211,7 +253,7 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 ## 5. Files
 
 - **FILE-001**: `Cargo.toml`, `Cargo.lock`, and `rust-toolchain.toml` define the Rust workspace and exact toolchain/dependency graph.
-- **FILE-002**: `app/macos` contains the native application, Xcode project, Swift sources, resources, and tests.
+- **FILE-002**: `app/macos` contains the native Swift application, resources, probes, and tests; project scripts currently build it without an Xcode project.
 - **FILE-003**: `crates/teaser-core` contains Project, Workspace, Panel, content-binding, block, capability, persistence, FFI, and IPC models.
 - **FILE-004**: `crates/teaser-cli` contains the public `teaser` command.
 - **FILE-005**: `crates/teaser-bridge` contains the tmux-pane byte-stream helper.
@@ -225,15 +267,15 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 
 ## 6. Testing
 
-- **TEST-001**: Workspace-presentation and PanelTree property tests preserve Workspace and Panel identities, a nonempty valid Panel root, valid focus, normalized split weights, and exact state across tile/focus/switch/restore reducer sequences.
+- **TEST-001**: Workspace/Panel layout tests preserve identities, valid Virtual Focus, requested ratios, exact fill, non-overlap, connected rectangular Workspaces, minimum sizes, deterministic unequal layouts, and exact state across split/move/resize/tile/focus/switch/display/restore sequences.
 - **TEST-002**: Ghostty embedding tests cover clean-clone resources, runtime tick/wakeup, lifetime, signed bundle, render, resize, focus, clipboard, selection, Kitty graphics, English input, and Chinese IME.
 - **TEST-003**: Block tests cover OSC 133/OSC 7, multiline prompts, wrapping, resize, scrollback, eviction, signals, exit status, nested shells, alternate screen, snapshot limits, retention controls, confirmed rerun, and search scope.
 - **TEST-004**: ACP tests cover protocol negotiation, capability gaps, Claude/Codex initialization, updates, tools, permissions, plans, resources, cancellation, auth failure, malformed messages, adapter crash, and restart limits.
 - **TEST-005**: tmux tests cover parser fuzzing, arbitrary bytes, Unicode, bracketed paste, mouse protocol, pane mapping, escaped output, pause/continue, backpressure, resize, capture repair, reconnect, and degraded semantics.
 - **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on `teaserd` exit, ordinary terminal use, and absence of structured tmux/block capabilities.
-- **TEST-007**: Accessibility tests cover permission denied, Zed launch/find, move/resize/focus, user movement, close, multiple windows, current-Space behavior, identity loss, and best-effort frame restoration.
+- **TEST-007**: Accessibility tests cover permission denied, exact AX/Core Graphics identity, window-versus-content drag qualification, four edge targets, empty/occupied targets, move/swap/detach, frame readback and rollback, Undo, Virtual/Input Focus separation, same-application multiple windows, close, multiple displays, current-Space behavior, identity loss, and safe frame restoration.
 - **TEST-008**: IPC/security tests cover ownership, mode `0600`, stale sockets, oversized frames, invalid paths, malformed versions, process impersonation, and redacted logs.
-- **TEST-009**: Persistence tests cover schema migration, WAL recovery, interrupted writes, permissions, capacity/retention, disable/clear, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
+- **TEST-009**: Persistence tests cover schema migration, atomic-write or WAL recovery, interrupted writes, permissions, display affinity, requested ratios, kinds, Notes, external provider hints without live identity, safe re-drag after restart, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
 - **TEST-010**: Comparative performance tests record direct-terminal and tmux-bridge SLOs while proving no hot-path UniFFI/JSON/SQLite activity.
 - **TEST-011**: Release tests verify clean-machine install, signing, notarization, checksums, Homebrew cask, uninstall boundaries, notices, and update behavior.
 
@@ -242,13 +284,13 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 - **RISK-001**: The full Ghostty embedding API is explicitly unstable. Mitigation: exact pin, one adapter, narrow patch, compile gate, comparative tests, and no automatic updates.
 - **RISK-002**: The proposed semantic-range export may not remain narrow. Mitigation: M0 stops if it touches terminal model, reflow, or renderer rather than hiding the cost.
 - **RISK-003**: every attached Session adds a local binary socket hop, while tmux adds another bridge and cannot reconstruct missed command lifecycles. Mitigation: benchmark both paths, apply bounded backpressure, and mark repaired intervals semantic-degraded.
-- **RISK-004**: AX external-window control depends on permission and unstable external window identity. Mitigation: adjacent current-Space tiling, permission-on-use, visible degradation, and best-effort restoration only.
+- **RISK-004**: AX external-window control depends on permission, transient identity, provider frame constraints, and current-Space visibility. Mitigation: one-time permission education, drag-driven exact selection, identity revalidation, transactional frame readback and rollback, provider-hint-only persistence, explicit re-drag, and best-effort same-window restoration.
 - **RISK-005**: ACP adapters may expose fewer or different capabilities than native vendor CLIs. Mitigation: negotiate capabilities, pin revisions, retain native CLI mode, and never claim equivalence.
 - **RISK-006**: SQLite history may capture secrets. Mitigation: mode `0600`, bounded payloads, configurable retention/capacity, disable/clear controls, and redacted logs.
 - **RISK-007**: AGPL does not force derivative products to display the Teaser product name. Mitigation: preserve source/legal-notice obligations, ship NOTICE, and use a separate non-confusing trademark policy.
 - **ASSUMPTION-001**: Apple Silicon macOS is the only supported v1 host platform.
-- **ASSUMPTION-002**: Users accept direct Developer ID distribution and Accessibility permission for optional external-window tiling.
-- **ASSUMPTION-003**: Neovim-in-terminal and externally tiled Zed cover v1 editor needs; Teaser does not need a native editor engine.
+- **ASSUMPTION-002**: Users accept direct Developer ID distribution and one macOS Accessibility decision for external-window geometry management.
+- **ASSUMPTION-003**: Neovim-in-terminal and an adopted provider-owned editor window cover v1 editor needs; Teaser does not need a native editor engine.
 - **ASSUMPTION-004**: Third-party plugins have no current consumer and remain excluded until a separate approved design exists.
 - **ASSUMPTION-005**: Direct PTY speed and compatibility are more important than making every backend structurally inspectable.
 
@@ -262,3 +304,6 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 - [tmux control mode](https://github.com/tmux/tmux/wiki/Control-Mode)
 - [Mosh technical description](https://mosh.org/#techinfo)
 - [UniFFI guide](https://mozilla.github.io/uniffi-rs/latest/)
+- [macOS AXUIElement API](https://developer.apple.com/documentation/applicationservices/axuielement_h)
+- [AppKit global event monitoring](https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents%28matching%3Ahandler%3A%29)
+- [Core Graphics window list](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo%28_%3A_%3A%29)

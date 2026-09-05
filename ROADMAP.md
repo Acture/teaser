@@ -5,8 +5,8 @@ A milestone starts only after the previous milestone's exit gates pass.
 
 ## M0 — Foundation and risk retirement
 
-Goal: prove that the selected boundaries can support Teaser without rebuilding Ghostty
-or placing orchestration on the render path.
+Goal: prove that the selected boundaries can support Teaser without rebuilding
+Ghostty or placing orchestration on the render path.
 
 Deliverables:
 
@@ -21,10 +21,15 @@ Deliverables:
 - Claude and Codex ACP capability smoke tests, explicitly compared with native CLI
   mode rather than treated as equivalent;
 - immutable project-scoped Workspace and content-neutral Panel models that do not
-  assume only one Workspace can be visible;
+  assume only one Workspace can be visible, plus data-defined Task, CLI, App,
+  Agent, File, and Notes layout profiles;
 - tmux `-CC` parser plus one `teaser-bridge` pane covering arbitrary bytes, Unicode,
   bracketed paste, mouse input, resize, flow control, and capture repair;
-- best-effort Zed Accessibility tiling and same-window frame restoration.
+- a two-level constrained slicing layout in which each display contains connected
+  rectangular Workspaces and each Workspace contains unequal Panels;
+- generic current-Space window adoption through public Accessibility APIs, with
+  exact identity, drag-driven selection, transactional placement, Undo, and safe
+  same-window release.
 
 Exit gates:
 
@@ -45,6 +50,13 @@ Exit gates:
   process group before the attachment closes;
 - two independent Workspace models retain distinct Panel layouts across parallel,
   focused, switched, and restored presentation states;
+- Virtual Focus can navigate, split, and resize without changing macOS Input Focus,
+  while an explicit action transfers input to one exact adopted window;
+- a standard window from an arbitrary supported application can be dragged into a
+  Panel without title, repository-path, or application-specific lookup;
+- the desktop-stage showcase composes six unequal Workspace regions from real
+  provider windows plus Teaser-owned Notes, without fixture-rendered copies of
+  third-party interfaces;
 - all spikes have repeatable automated or scripted checks.
 
 Failure policy: stop and revise the foundation. Do not compensate for a failed gate
@@ -52,25 +64,30 @@ by adding a second terminal renderer or an unbounded Ghostty fork.
 
 ## v0.1 — Parallel project workspaces
 
-Goal: make two independent project Workspaces usable on one screen without forcing
-them into mutually exclusive tabs.
+Goal: make multiple independent project Workspaces usable on one or more displays
+without forcing them into mutually exclusive tabs.
 
 Deliverables:
 
-- screen-level Workspace presentation supporting parallel tiling, temporary focus,
-  and whole-Workspace switching;
-- one persistent `PanelTree` per Workspace with split, close, move, resize, focus,
-  zoom, command palette, and restoration;
-- content-neutral Panels with initial project details and direct PTY
-  `TerminalSurface` content;
+- per-display Workspace presentation supporting connected unequal tiling,
+  temporary focus, whole-Workspace switching, and explicit display affinity;
+- one persistent `PanelTree` per Workspace with split, close, move, resize, virtual
+  focus, zoom, command palette, and restoration;
+- content-neutral Panels with data-defined kinds, custom layout profiles, external
+  window bindings, and initial project details and direct PTY content;
 - native agent CLIs and terminal-grid Neovim inside terminal Panels;
 - Quick Look/Image I/O image preview;
-- adjacent Zed desktop companion with safe permission degradation;
+- generic drag-to-adopt external windows, one-time permission education, virtual
+  focus, explicit input-focus transfer, safe release, and re-drag after restart;
+- a six-Workspace real-application showcase covering IDE, task, agent, CLI, file,
+  browser, and Teaser-owned Notes Panels;
 - `teaser`, `teaser shell`, and `teaser open` CLI flows.
 
-Exit gate: two different projects can remain visible and interactive in parallel;
-focusing or switching either Workspace and returning preserves both Panel layouts,
-exact Checkout bindings, and live Session identities without manual window repair.
+Exit gate: six unequal Workspace regions can remain visible in the showcase, and at
+least two different Projects remain interactive in parallel. Tiling, virtual focus,
+switching, display changes, and restart preserve Panel trees, requested ratios,
+Checkout bindings, and live Teaser Session identities. External bindings restore as
+empty hinted Panels and become live only after the user drags the window again.
 
 ## v0.2 — Semantic blocks
 
@@ -145,8 +162,8 @@ Release criteria:
 - at least two project Workspaces can be tiled, focused, and switched without losing
   their Panel layouts, running content, or spatial relationships;
 - Workspace Panels can present shell/Neovim, images, native agent CLIs, structured
-  ACP sessions, and project details together, while external Zed remains associated
-  with the Workspace rather than represented as Panel content;
+  ACP sessions, project details, and exact provider-owned external windows together
+  without claiming that those windows are embedded Teaser content;
 - unsupported CLIs/TUIs work through an unmodified PTY;
 - direct terminal and tmux bridge meet the recorded M0 SLOs;
 - tmux/SSH recovery and Mosh degradation behave deterministically;
@@ -160,4 +177,6 @@ Release criteria:
 - third-party plugins, ExtensionKit/WASM host, or stable surface SDK;
 - custom roaming daemon or replacement for Mosh/tmux;
 - Linux/Windows host;
-- arbitrary external-GUI embedding or private macOS APIs.
+- external-GUI reparenting, pixel mirroring, synthetic application input, or private
+  macOS APIs;
+- automatic replacement-window guessing and cross-Space window movement.

@@ -12,6 +12,10 @@ set swift_test_dir $repo_root/target/swift-tests
 set swift_test_binary $swift_test_dir/TeaserProbeTests
 set external_window_test_binary $swift_test_dir/TeaserExternalWindowTests
 set layout_test_binary $swift_test_dir/TeaserLayoutTests
+set topology_test_binary $swift_test_dir/TeaserDesktopStageTopologyTests
+set controls_test_binary $swift_test_dir/TeaserDesktopStageControlsTests
+set safety_test_binary $swift_test_dir/TeaserDesktopStageSafetyTests
+set persistence_test_binary $swift_test_dir/TeaserPresentationStoreTests
 set module_cache_key (string escape --style=var -- $repo_root)
 set swift_module_cache $swift_test_dir/swift-module-cache-$module_cache_key
 set clang_module_cache $swift_test_dir/clang-module-cache-$module_cache_key
@@ -141,6 +145,64 @@ xcrun swiftc \
     -o $layout_test_binary
 or exit 1
 $layout_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    app/macos/Teaser/Model/*.swift \
+    app/macos/Teaser/Layout/*.swift \
+    app/macos/Teaser/Persistence/PresentationStore.swift \
+    app/macos/TeaserPresentationStoreTests/main.swift \
+    -o $persistence_test_binary
+or exit 1
+$persistence_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    -framework AppKit \
+    -framework CoreGraphics \
+    app/macos/Teaser/Model/*.swift \
+    app/macos/Teaser/Layout/*.swift \
+    app/macos/Teaser/DesktopStage/DesktopStageDisplayTopology.swift \
+    app/macos/TeaserDesktopStageTopologyTests/main.swift \
+    -o $topology_test_binary
+or exit 1
+$topology_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    -framework AppKit \
+    app/macos/Teaser/DesktopStage/DesktopStageShortcutMonitor.swift \
+    app/macos/TeaserDesktopStageControlsTests/main.swift \
+    -o $controls_test_binary
+or exit 1
+$controls_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    -framework AppKit \
+    -framework SwiftUI \
+    -framework Combine \
+    app/macos/Teaser/Model/*.swift \
+    app/macos/Teaser/Layout/*.swift \
+    app/macos/Teaser/DesktopStage/DesktopOverlayController.swift \
+    app/macos/Teaser/DesktopStage/DesktopStageControlWindow.swift \
+    app/macos/Teaser/Notes/NotesWindowController.swift \
+    app/macos/TeaserDesktopStageSafetyTests/main.swift \
+    -o $safety_test_binary
+or exit 1
+$safety_test_binary
 or exit 1
 xcrun swiftc \
     -swift-version 6 \

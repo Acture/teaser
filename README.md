@@ -1,13 +1,14 @@
 # Teaser
 
 Teaser is a macOS-first spatial development environment. It keeps complete project
-Workspaces available as composable regions on one screen instead of hiding each
-project behind a mutually exclusive tab.
+Workspaces available as composable regions across visible displays instead of
+hiding each project behind a mutually exclusive tab.
 
-> Status: native layout prototype. `Teaser.app` runs a fixture-backed Workspace
-> and Panel UI plus a Zed companion managed through public Accessibility APIs.
-> The Rust control plane, detachable PTY data plane, and owning-process-group
-> teardown are testable; production Ghostty and Session wiring remain incomplete.
+> Status: desktop-stage implementation in progress. The native app and Rust
+> foundation include constrained layout, generic window-control code, local
+> presentation persistence, and a six-Workspace preset. Automated checks cover
+> geometry and desktop safety; signed real-window drag acceptance is still pending.
+> Production Ghostty and Session wiring also remain incomplete.
 
 ## Product thesis
 
@@ -28,10 +29,16 @@ application modes. Terminal content still behaves like an ordinary terminal: CLI
 and TUI applications require no Teaser-specific rewrite, while shell integration and
 built-in adapters add richer semantics progressively.
 
+A Panel may instead bind to a standard window owned by another macOS application.
+Dragging that window into a Panel adopts its position and size into the Workspace
+layout. The provider still owns rendering, input, and window lifetime: Teaser does
+not reparent the window, capture its pixels, or pretend it is an embedded view.
+
 ## Architecture at a glance
 
-- **AppKit/SwiftUI host:** parallel, focused, and switched Workspace presentation;
-  Panel layout; focus; IME; clipboard; previews; and native input.
+- **AppKit/SwiftUI desktop stage:** connected rectangular Workspace and Panel
+  layout, Teaser-owned windows, click-through arrangement overlays, virtual focus,
+  and public Accessibility control of adopted external windows.
 - **`teaserd` runtime:** owns Teaser sessions, processes, PTYs, block state, and
   lifetime independently of any GUI; each session has zero or one attached
   surface.
@@ -39,8 +46,9 @@ built-in adapters add richer semantics progressively.
   terminal input, selection, and terminal compatibility.
 - **Rust core:** typed project, checkout, Workspace, Panel, session, attachment,
   block, and control-plane state.
-- **External environments:** cmux and IDEs remain provider-owned federated
-  environments or companion windows instead of entering Teaser's session registry.
+- **External applications:** IDEs, terminals, task tools, browsers, and previewers
+  remain provider-owned top-level windows even when bound to Panels. Structured
+  federated environments remain outside Teaser's Session registry.
 
 Terminal parsing, rendering, and native input stay inside AppKit and `libghostty`.
 Canonical PTY bytes use the bounded local attachment stream; UniFFI remains
@@ -66,17 +74,31 @@ Build the current macOS app prototype with:
 fish scripts/app.fish --build-only
 ```
 
-This produces `target/macos/Teaser.app`. Launching the app requires a stable
-Apple Development or Developer ID signing identity so macOS can retain Teaser's
-Accessibility approval across rebuilds:
+This produces `target/macos/Teaser.app`. Moving adopted external windows requires a
+stable Apple Development or Developer ID signing identity so macOS can retain the
+one-time Accessibility approval across rebuilds:
 
 ```fish
 set -lx TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
 fish scripts/app.fish
 ```
 
-The first Zed connection can choose a project directory in the app. Pass
-`--zed-repo PATH` to preselect it.
+Launch opens a normal control window. Allow Accessibility, then click **Start
+Layout**; launching alone never covers the desktop. Physically dragging a standard
+window into a visible Panel is the explicit adoption action. Teaser does not request per-application or per-project
+authorization, and it does not guess a replacement window after either application
+restarts.
+
+Use the Teaser menu's **Stop Layout**, or `Ctrl+Option+Esc`, to remove the stage.
+Switching macOS Space also stops it. The Dock icon reopens the control window;
+closing that window or using `Cmd+Q` quits Teaser. Closed Notes stay closed until
+explicitly focused or a new stage session begins. Arrange uses only small labels
+and divider handles for input, never a display-sized mouse shield.
+
+`Ctrl+Option+Space` toggles Arrange and `Esc` leaves it. `Ctrl+Option+D` splits,
+`Ctrl+Option+F` focuses a Workspace, and `Ctrl+Option+Return` hands input to the
+selected Panel. Layout Undo is `Ctrl+Option+Z` in Arrange or the menu action;
+`Cmd+Z` remains exclusively with the app receiving keyboard input.
 
 To run the current foreground daemon prototype:
 
@@ -106,7 +128,8 @@ wire format and current limits.
 
 - no Warp, Zed, Claude Code, or Codex fork;
 - no browser-based host or custom terminal renderer;
-- no arbitrary GUI embedding, screen-capture proxy, or private macOS API;
+- no GUI reparenting, pixel-capture proxy, synthetic application input, or private
+  macOS API;
 - no third-party plugin SDK or compatibility promise;
 - no custom agent protocol when ACP already covers the semantic control plane;
 - no replacement for every CLI application's own interface.

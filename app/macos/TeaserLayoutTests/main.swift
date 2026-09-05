@@ -326,7 +326,24 @@ private func testInfeasibleLayoutFailsAtomically() throws {
 	}
 }
 
+private func testShowcaseFitsLaptopDisplays() throws {
+	let presentation: WorkspacePresentation = ShowcasePreset.presentation()
+	for size: LayoutSize in [
+		.init(width: 1_440, height: 800), .init(width: 1_512, height: 900),
+		.init(width: 1_600, height: 900), .init(width: 1_728, height: 1_000),
+	] {
+		let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+			presentation: presentation,
+			displayFrames: [ShowcasePreset.mainDisplayID: .init(x: 0, y: 0, width: size.width, height: size.height)]
+		)
+		try expect(layout.workspaceFrames.count == 6 && layout.panelFrames.count == 9,
+			"laptop displays must expose all six workspaces and nine drop targets")
+		try assertNoOverlap(layout.panelFrames, "laptop targets must not overlap")
+	}
+}
+
 private func run() throws {
+	try testShowcaseFitsLaptopDisplays()
 	try testShowcaseFillsWithoutOverlap()
 	try testLayoutIsDeterministic()
 	try testEdgeInsertionAndLongAxisSplit()

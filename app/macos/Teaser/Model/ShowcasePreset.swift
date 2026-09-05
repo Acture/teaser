@@ -246,7 +246,8 @@ enum ShowcasePreset {
 		bundleIdentifier: String? = nil,
 		context: String? = nil
 	) -> PanelDescriptor {
-		.init(
+		let profile: LayoutProfile = PanelKindDefinition.builtIns.first { $0.id == kindID }!.defaultProfile
+		return .init(
 			id: id,
 			title: title,
 			kindID: kindID,
@@ -255,7 +256,13 @@ enum ShowcasePreset {
 				bundleIdentifier: bundleIdentifier,
 				context: context
 			),
-			profileOverride: nil,
+			// Compact empty targets fit a laptop display. Provider geometry is
+			// still checked on adoption; these are not promises about app minima.
+			profileOverride: .init(
+				minimumSize: .init(width: min(320, profile.minimumSize.width), height: 200),
+				preferredAspectRatio: profile.preferredAspectRatio,
+				growthWeight: profile.growthWeight
+			),
 			nativeContent: .none
 		)
 	}
