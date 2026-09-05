@@ -1170,9 +1170,20 @@ final class ManagedExternalWindow {
 				actual: snapshot.identity
 			)
 		}
-		_ = try apply(appKitScreenFrame: snapshot.appKitScreenFrame)
-		try setMinimized(snapshot.isMinimized)
-		return try self.snapshot()
+		let previous: ManagedExternalWindowSnapshot = try self.snapshot()
+		do {
+			if previous.isMinimized { try setMinimized(false) }
+			_ = try apply(appKitScreenFrame: snapshot.appKitScreenFrame)
+			try setMinimized(snapshot.isMinimized)
+			return try self.snapshot()
+		} catch {
+			if (try? self.snapshot().isMinimized) == true {
+				try? setMinimized(false)
+			}
+			_ = try? apply(appKitScreenFrame: previous.appKitScreenFrame)
+			try? setMinimized(previous.isMinimized)
+			throw error
+		}
 	}
 
 	func raise() throws {
@@ -1251,6 +1262,12 @@ final class ManagedExternalWindow {
 			on: binding.selection.windowElement,
 			operation: minimized ? "minimize external window" : "restore external window"
 		)
+		guard try ExternalWindowSystem.boolAttribute(
+			kAXMinimizedAttribute as CFString,
+			of: binding.selection.windowElement
+		) == minimized else {
+			throw ManagedExternalWindowError.windowCannotMinimize
+		}
 		binding.lastAppliedMinimizedState = minimized
 		self.binding = binding
 	}
@@ -1283,6 +1300,22 @@ final class ManagedExternalWindow {
 						binding.originalAccessibilityFrame,
 						to: binding.selection.windowElement
 					)
+					let restoredFrame = try ExternalWindowSystem.accessibilityFrame(
+						of: binding.selection.windowElement
+					)
+					guard managedExternalWindowFramesAreApproximatelyEqual(
+						restoredFrame,
+						binding.originalAccessibilityFrame
+					) else {
+						throw ManagedExternalWindowError.windowCannotFit(
+							requested: try ExternalWindowSystem.appKitFrame(
+								fromAccessibility: binding.originalAccessibilityFrame
+							),
+							actual: try ExternalWindowSystem.appKitFrame(
+								fromAccessibility: restoredFrame
+							)
+						)
+					}
 				}
 			}
 			if let appliedMinimized = binding.lastAppliedMinimizedState {
@@ -1299,6 +1332,12 @@ final class ManagedExternalWindow {
 						on: binding.selection.windowElement,
 						operation: "restore external window minimized state"
 					)
+					guard try ExternalWindowSystem.boolAttribute(
+						kAXMinimizedAttribute as CFString,
+						of: binding.selection.windowElement
+					) == binding.originalMinimizedState else {
+						throw ManagedExternalWindowError.windowCannotMinimize
+					}
 				}
 			}
 			clearBinding()
