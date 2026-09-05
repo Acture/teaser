@@ -316,6 +316,27 @@ private func testAccessibilityNotificationMapping() throws {
 	)
 }
 
+private func testHitSelectionPassesThroughChromeButNotOwnWindows() throws {
+	let provider: ExternalWindowIdentity = .init(processIdentifier: 42, windowID: 10)
+	let own: ExternalWindowIdentity = .init(processIdentifier: 99, windowID: 11)
+	let frame: CGRect = .init(x: 0, y: 0, width: 600, height: 400)
+	let providerWindow: ExternalWindowCurrentSpaceWindow = .init(
+		identity: provider, layer: 0, isOnscreen: true, accessibilityFrame: frame
+	)
+	let chrome: ExternalWindowCurrentSpaceWindow = .init(
+		identity: own, layer: 3, isOnscreen: true, accessibilityFrame: frame
+	)
+	let control: ExternalWindowCurrentSpaceWindow = .init(
+		identity: own, layer: 0, isOnscreen: true, accessibilityFrame: frame
+	)
+	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [chrome, providerWindow],
+		excludingProcessIdentifiers: [99]) == provider, "transparent chrome must not hide provider candidates")
+	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [control, providerWindow],
+		excludingProcessIdentifiers: [99]) == nil, "clicking Teaser controls must not select a window behind them")
+	try expect(externalWindowAtPoint(.init(x: 900, y: 50), windows: [providerWindow],
+		excludingProcessIdentifiers: [99]) == nil, "points outside provider frames must not select them")
+}
+
 private func testTransactionErrorsRetainInputs() throws {
 	let expected = ExternalWindowIdentity(processIdentifier: 42, windowID: 10)
 	let actual = ExternalWindowIdentity(processIdentifier: 42, windowID: 11)
@@ -348,6 +369,7 @@ do {
 	try testWindowDragQualification()
 	try testAccessibilityNotificationMapping()
 	try testTransactionErrorsRetainInputs()
+	try testHitSelectionPassesThroughChromeButNotOwnWindows()
 	print("ManagedExternalWindow tests passed")
 } catch {
 	fputs("ManagedExternalWindow tests failed: \(error)\n", stderr)

@@ -121,6 +121,20 @@ struct ExternalWindowCurrentSpaceWindow: Equatable, Sendable {
 	let accessibilityFrame: CGRect
 }
 
+/// Window-server order is front to back. Exclude Teaser's transparent chrome
+/// before resolving a candidate; a system-wide AX hit can land on that chrome.
+func externalWindowAtPoint(
+	_ point: CGPoint,
+	windows: [ExternalWindowCurrentSpaceWindow],
+	excludingProcessIdentifiers: Set<pid_t>
+) -> ExternalWindowIdentity? {
+	guard let candidate: ExternalWindowCurrentSpaceWindow = windows.first(where: {
+		$0.isOnscreen && $0.layer == 0
+			&& $0.accessibilityFrame.contains(point)
+	}), !excludingProcessIdentifiers.contains(candidate.identity.processIdentifier) else { return nil }
+	return candidate.identity
+}
+
 func externalWindowCurrentSpaceCorrelations(
 	accessibilityCandidates: [ExternalWindowAccessibilityCandidate],
 	currentSpaceWindows: [ExternalWindowCurrentSpaceWindow],
@@ -418,62 +432,14 @@ private enum ExternalWindowSystem {
 			throw ManagedExternalWindowError.accessibilityPermissionRequired
 		}
 		let accessibilityPoint: CGPoint = try accessibilityPoint(fromAppKit: point)
-		var hitElement: AXUIElement?
-		let error: AXError = AXUIElementCopyElementAtPosition(
-			AXUIElementCreateSystemWide(),
-			Float(accessibilityPoint.x),
-			Float(accessibilityPoint.y),
-			&hitElement
-		)
-		guard error == .success, let hitElement else {
+		guard let identity: ExternalWindowIdentity = externalWindowAtPoint(
+			accessibilityPoint,
+			windows: currentSpaceWindows(),
+			excludingProcessIdentifiers: excludingProcessIdentifiers
+		) else {
 			throw ManagedExternalWindowError.windowAtPointUnavailable
 		}
-		let windowElement: AXUIElement = try enclosingWindow(of: hitElement)
-		var processIdentifier: pid_t = 0
-		guard AXUIElementGetPid(windowElement, &processIdentifier) == .success,
-			processIdentifier > 0,
-			!excludingProcessIdentifiers.contains(processIdentifier)
-		else {
-			throw ManagedExternalWindowError.windowAtPointUnavailable
-		}
-		let applicationElement: AXUIElement = AXUIElementCreateApplication(processIdentifier)
-		AXUIElementSetMessagingTimeout(applicationElement, 0.75)
-		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
-		guard let selectedIndex: Int = applicationWindows.firstIndex(where: {
-			CFEqual($0, windowElement)
-		}) else {
-			throw ManagedExternalWindowError.windowAtPointUnavailable
-		}
-		let cgWindows: [ExternalWindowCurrentSpaceWindow] = currentSpaceWindows(
-			processIdentifier: processIdentifier
-		)
-		let correlations: [Int: CGWindowID] = correlate(
-			windows: applicationWindows,
-			processIdentifier: processIdentifier,
-			currentSpaceWindows: cgWindows
-		)
-		guard let windowID: CGWindowID = correlations[selectedIndex] else {
-			throw ManagedExternalWindowError.ambiguousWindowIdentity(
-				processIdentifier: processIdentifier
-			)
-		}
-		guard let frontmostAtPoint = cgWindows.first(where: {
-			$0.layer == 0
-				&& $0.isOnscreen
-				&& $0.accessibilityFrame.contains(accessibilityPoint)
-		}),
-			frontmostAtPoint.identity.windowID == windowID
-		else {
-			throw ManagedExternalWindowError.windowAtPointUnavailable
-		}
-		return try makeSelection(
-			applicationElement: applicationElement,
-			windowElement: windowElement,
-			identity: .init(
-				processIdentifier: processIdentifier,
-				windowID: windowID
-			)
-		)
+		return try selection(identity: identity)
 	}
 
 	static func selection(identity: ExternalWindowIdentity) throws -> ExternalWindowSelection {
@@ -740,25 +706,6 @@ private enum ExternalWindowSystem {
 		return selection
 	}
 
-	private static func enclosingWindow(of hit: AXUIElement) throws -> AXUIElement {
-		if stringAttribute(kAXRoleAttribute as CFString, of: hit) == kAXWindowRole {
-			return hit
-		}
-		if let window = elementAttribute(kAXWindowAttribute as CFString, of: hit) {
-			return window
-		}
-		var current: AXUIElement = hit
-		for _ in 0 ..< 16 {
-			guard let parent = elementAttribute(kAXParentAttribute as CFString, of: current)
-			else { break }
-			if stringAttribute(kAXRoleAttribute as CFString, of: parent) == kAXWindowRole {
-				return parent
-			}
-			current = parent
-		}
-		throw ManagedExternalWindowError.windowAtPointUnavailable
-	}
-
 	private static func correlate(
 		windows: [AXUIElement],
 		processIdentifier: pid_t,
@@ -788,7 +735,7 @@ private enum ExternalWindowSystem {
 	}
 
 	private static func currentSpaceWindows(
-		processIdentifier: pid_t
+		processIdentifier: pid_t? = nil
 	) -> [ExternalWindowCurrentSpaceWindow] {
 		guard let info = CGWindowListCopyWindowInfo(
 			[.optionOnScreenOnly, .excludeDesktopElements],
@@ -796,7 +743,7 @@ private enum ExternalWindowSystem {
 		) as? [[String: Any]] else { return [] }
 		return info.compactMap { entry in
 			guard let ownerPID = entry[kCGWindowOwnerPID as String] as? NSNumber,
-				ownerPID.int32Value == processIdentifier,
+				(processIdentifier == nil || ownerPID.int32Value == processIdentifier),
 				let windowID = entry[kCGWindowNumber as String] as? NSNumber,
 				let layer = entry[kCGWindowLayer as String] as? NSNumber,
 				let onscreen = entry[kCGWindowIsOnscreen as String] as? NSNumber,
@@ -805,7 +752,7 @@ private enum ExternalWindowSystem {
 			else { return nil }
 			return .init(
 				identity: .init(
-					processIdentifier: processIdentifier,
+					processIdentifier: ownerPID.int32Value,
 					windowID: CGWindowID(windowID.uint32Value)
 				),
 				layer: layer.intValue,
@@ -867,18 +814,6 @@ private enum ExternalWindowSystem {
 			)
 		}
 		guard settable.boolValue else { throw unavailableError }
-	}
-
-	private static func elementAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) -> AXUIElement? {
-		var raw: CFTypeRef?
-		guard AXUIElementCopyAttributeValue(element, attribute, &raw) == .success,
-			let raw,
-			CFGetTypeID(raw) == AXUIElementGetTypeID()
-		else { return nil }
-		return unsafeDowncast(raw, to: AXUIElement.self)
 	}
 
 	private static func pointAttribute(
@@ -1099,6 +1034,7 @@ final class ManagedExternalWindow {
 	func apply(
 		appKitScreenFrame requestedFrame: CGRect
 	) throws -> ManagedExternalWindowSnapshot {
+		cancelPendingApply()
 		guard requestedFrame.isValidManagedExternalWindowFrame else {
 			throw ManagedExternalWindowError.invalidFrame(requestedFrame)
 		}
@@ -1274,6 +1210,7 @@ final class ManagedExternalWindow {
 
 	@discardableResult
 	func release(restoringOriginalFrame: Bool) -> Bool {
+		cancelPendingApply()
 		guard let binding else {
 			clearBinding()
 			return true
@@ -1351,6 +1288,7 @@ final class ManagedExternalWindow {
 		guard applyTask == nil else { return }
 		applyTask = Task { @MainActor [weak self] in
 			await Task.yield()
+			guard !Task.isCancelled else { return }
 			guard let self else { return }
 			self.applyTask = nil
 			guard let frame = self.pendingApplyFrame else { return }
@@ -1467,10 +1405,14 @@ final class ManagedExternalWindow {
 		}
 	}
 
-	private func clearBinding() {
+	private func cancelPendingApply() {
 		applyTask?.cancel()
 		applyTask = nil
 		pendingApplyFrame = nil
+	}
+
+	private func clearBinding() {
+		cancelPendingApply()
 		observedEventTask?.cancel()
 		observedEventTask = nil
 		pendingObservedEvent = nil
@@ -1498,7 +1440,8 @@ final class WindowDragObserver {
 		}
 
 		func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
-			Task { @MainActor [weak owner] in
+			Task { @MainActor [weak owner, self] in
+				guard owner?.relay === self else { return }
 				owner?.receive(phase: phase, appKitScreenLocation: appKitScreenLocation)
 			}
 		}
@@ -1522,11 +1465,17 @@ final class WindowDragObserver {
 	}
 
 	var onEvent: ExternalWindowDragEventHandler?
+	var onDiagnostic: (@MainActor @Sendable (String) -> Void)?
 	let qualificationConfiguration: ExternalWindowDragQualificationConfiguration
 	let excludedProcessIdentifiers: Set<pid_t>
 	private var monitor: MonitorToken?
 	private var relay: MonitorRelay?
 	private var pendingDrag: PendingDrag?
+	private var pollingTimer: Timer?
+	private var mouseIsDown: Bool = false
+	private var selectionFailure: String?
+	private var pressLocation: CGPoint?
+	private var lastSampleTime: TimeInterval = 0
 
 	init(
 		qualificationConfiguration: ExternalWindowDragQualificationConfiguration = .init(),
@@ -1571,9 +1520,22 @@ final class WindowDragObserver {
 		}
 		self.relay = relay
 		self.monitor = .init(value: monitor)
+		// Native title-bar tracking can omit NSEvent drag/up deliveries. Sample
+		// actual button state and the selected window until release as well.
+		let timer: Timer = .init(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+			MainActor.assumeIsolated { self?.pollMouse() }
+		}
+		pollingTimer = timer
+		RunLoop.main.add(timer, forMode: .common)
+		NSLog("Teaser: window drag observer started")
 	}
 
 	func stop() {
+		pollingTimer?.invalidate()
+		pollingTimer = nil
+		mouseIsDown = false
+		pressLocation = nil
+		selectionFailure = nil
 		if let pendingDrag, pendingDrag.isQualified {
 			onEvent?(
 				.cancelled(
@@ -1590,20 +1552,51 @@ final class WindowDragObserver {
 	private func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
 		switch phase {
 		case .down:
+			guard !mouseIsDown else { return }
+			mouseIsDown = true
+			pressLocation = appKitScreenLocation
 			beginPendingDrag(at: appKitScreenLocation)
 		case .dragged:
+			if let selectionFailure, let pressLocation,
+				hypot(appKitScreenLocation.x - pressLocation.x, appKitScreenLocation.y - pressLocation.y) >= 10
+			{
+				onDiagnostic?(selectionFailure)
+				self.selectionFailure = nil
+			}
 			updatePendingDrag(at: appKitScreenLocation)
 		case .up:
+			mouseIsDown = false
 			endPendingDrag(at: appKitScreenLocation)
 		}
 	}
 
+	private func pollMouse() {
+		let isDown: Bool = CGEventSource.buttonState(.combinedSessionState, button: .left)
+		let point: CGPoint = NSEvent.mouseLocation
+		if isDown && !mouseIsDown {
+			receive(phase: .down, appKitScreenLocation: point)
+		} else if !isDown && mouseIsDown {
+			receive(phase: .up, appKitScreenLocation: point)
+		} else if isDown {
+			receive(phase: .dragged, appKitScreenLocation: point)
+		}
+	}
+
 	private func beginPendingDrag(at location: CGPoint) {
+		lastSampleTime = 0
 		pendingDrag = nil
-		guard let selection = try? ManagedExternalWindow.selectWindow(
-			atAppKitScreenPoint: location,
-			excludingProcessIdentifiers: excludedProcessIdentifiers
-		) else { return }
+		selectionFailure = nil
+		let selection: ExternalWindowSelection
+		do {
+			selection = try ManagedExternalWindow.selectWindow(
+				atAppKitScreenPoint: location,
+				excludingProcessIdentifiers: excludedProcessIdentifiers
+			)
+		} catch {
+			selectionFailure = error.localizedDescription
+			NSLog("Teaser: window selection failed: %@", error.localizedDescription)
+			return
+		}
 		let sample = ExternalWindowDragSample(
 			mouseAppKitScreenLocation: location,
 			windowAppKitScreenFrame: selection.initialSnapshot.appKitScreenFrame
@@ -1618,6 +1611,9 @@ final class WindowDragObserver {
 
 	private func updatePendingDrag(at location: CGPoint) {
 		guard var pendingDrag else { return }
+		let now: TimeInterval = ProcessInfo.processInfo.systemUptime
+		guard now - lastSampleTime >= 1.0 / 30.0 else { return }
+		lastSampleTime = now
 		do {
 			try ExternalWindowSystem.validateElement(
 				identity: pendingDrag.selection.identity,
@@ -1641,15 +1637,19 @@ final class WindowDragObserver {
 				configuration: qualificationConfiguration
 			) {
 				pendingDrag.isQualified = true
+				NSLog("Teaser: window drag qualified pid=%d window=%u", pendingDrag.selection.identity.processIdentifier, pendingDrag.selection.identity.windowID)
 				onEvent?(.began(dragSnapshot))
 			}
 			self.pendingDrag = pendingDrag
 		} catch {
+			onDiagnostic?(error.localizedDescription)
 			cancelPendingDrag(reason: .windowUnavailable)
 		}
 	}
 
 	private func endPendingDrag(at location: CGPoint) {
+		lastSampleTime = 0
+		updatePendingDrag(at: location)
 		guard let pendingDrag else { return }
 		defer { self.pendingDrag = nil }
 		guard pendingDrag.isQualified else { return }
@@ -1669,6 +1669,7 @@ final class WindowDragObserver {
 				)
 			)
 		} catch {
+			onDiagnostic?(error.localizedDescription)
 			onEvent?(
 				.cancelled(
 					identity: pendingDrag.selection.identity,
