@@ -3,6 +3,8 @@
 set script_dir (path resolve (dirname (status filename)))
 set repo_root (path resolve $script_dir/..)
 set source_dir $repo_root/app/macos/Teaser
+set model_source_dir $source_dir/Model
+set layout_source_dir $source_dir/Layout
 set external_window_source_dir $repo_root/app/macos/Teaser/ExternalWindows
 set build_dir $repo_root/target/macos
 set app_bundle $build_dir/Teaser.app
@@ -71,6 +73,14 @@ if not test -d $source_dir
     printf 'error: Teaser sources are missing: %s\n' $source_dir >&2
     exit 1
 end
+if not test -d $model_source_dir
+    printf 'error: Teaser model sources are missing: %s\n' $model_source_dir >&2
+    exit 1
+end
+if not test -d $layout_source_dir
+    printf 'error: Teaser layout sources are missing: %s\n' $layout_source_dir >&2
+    exit 1
+end
 if not test -d $external_window_source_dir
     printf 'error: external-window sources are missing: %s\n' \
         $external_window_source_dir >&2
@@ -84,6 +94,16 @@ end
 set swift_sources (find $source_dir -maxdepth 1 -type f -name '*.swift' | sort)
 if test (count $swift_sources) -eq 0
     printf 'error: no Swift sources found in %s\n' $source_dir >&2
+    exit 1
+end
+set model_sources (find $model_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
+set layout_sources (find $layout_source_dir -maxdepth 1 -type f -name '*.swift' | sort)
+if test (count $model_sources) -eq 0
+    printf 'error: no Swift sources found in %s\n' $model_source_dir >&2
+    exit 1
+end
+if test (count $layout_sources) -eq 0
+    printf 'error: no Swift sources found in %s\n' $layout_source_dir >&2
     exit 1
 end
 set external_window_sources \
@@ -115,6 +135,8 @@ xcrun swiftc \
     -framework ApplicationServices \
     -framework CoreGraphics \
     $swift_sources \
+    $model_sources \
+    $layout_sources \
     $external_window_sources \
     -o $app_binary
 or exit 1

@@ -11,6 +11,7 @@ set vendor_readme $repo_root/vendor/README.md
 set swift_test_dir $repo_root/target/swift-tests
 set swift_test_binary $swift_test_dir/TeaserProbeTests
 set external_window_test_binary $swift_test_dir/TeaserExternalWindowTests
+set layout_test_binary $swift_test_dir/TeaserLayoutTests
 set module_cache_key (string escape --style=var -- $repo_root)
 set swift_module_cache $swift_test_dir/swift-module-cache-$module_cache_key
 set clang_module_cache $swift_test_dir/clang-module-cache-$module_cache_key
@@ -128,6 +129,18 @@ xcrun swiftc \
     -o $swift_test_binary
 or exit 1
 $swift_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    app/macos/Teaser/Model/*.swift \
+    app/macos/Teaser/Layout/*.swift \
+    app/macos/TeaserLayoutTests/main.swift \
+    -o $layout_test_binary
+or exit 1
+$layout_test_binary
 or exit 1
 xcrun swiftc \
     -swift-version 6 \
