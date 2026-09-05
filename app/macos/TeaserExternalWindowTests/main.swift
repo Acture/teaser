@@ -7,16 +7,13 @@ private enum TestFailure: Error, CustomStringConvertible {
 
 	var description: String {
 		switch self {
-		case .assertion(let message):
-			return message
+		case .assertion(let message): return message
 		}
 	}
 }
 
 private func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
-	guard condition() else {
-		throw TestFailure.assertion(message)
-	}
+	guard condition() else { throw TestFailure.assertion(message) }
 }
 
 private func expectFrame(
@@ -34,139 +31,263 @@ private func expectFrame(
 	)
 }
 
-private func candidate(
+private func axCandidate(
 	_ index: Int,
-	title: String,
-	document: String? = nil,
-	role: String = kAXWindowRole,
-	subrole: String? = kAXStandardWindowSubrole,
-	accessibilityFrame: CGRect? = .init(x: 100, y: 100, width: 800, height: 600),
-	isMinimized: Bool = false,
-	isOnCurrentSpace: Bool = true
-) -> ManagedExternalWindowCandidate {
+	pid: pid_t = 42,
+	frame: CGRect?
+) -> ExternalWindowAccessibilityCandidate {
 	.init(
 		index: index,
-		role: role,
-		subrole: subrole,
-		title: title,
-		document: document,
-		accessibilityFrame: accessibilityFrame,
-		isMinimized: isMinimized,
-		isOnCurrentSpace: isOnCurrentSpace
+		processIdentifier: pid,
+		role: kAXWindowRole,
+		subrole: kAXStandardWindowSubrole,
+		accessibilityFrame: frame,
+		isMinimized: false,
+		isFullScreen: false
+	)
+}
+
+private func cgWindow(
+	_ id: CGWindowID,
+	pid: pid_t = 42,
+	layer: Int = 0,
+	isOnscreen: Bool = true,
+	frame: CGRect
+) -> ExternalWindowCurrentSpaceWindow {
+	.init(
+		identity: .init(processIdentifier: pid, windowID: id),
+		layer: layer,
+		isOnscreen: isOnscreen,
+		accessibilityFrame: frame
+	)
+}
+
+private func dragSample(
+	mouseX: CGFloat,
+	mouseY: CGFloat,
+	windowX: CGFloat,
+	windowY: CGFloat,
+	width: CGFloat = 800,
+	height: CGFloat = 600
+) -> ExternalWindowDragSample {
+	.init(
+		mouseAppKitScreenLocation: .init(x: mouseX, y: mouseY),
+		windowAppKitScreenFrame: .init(
+			x: windowX,
+			y: windowY,
+			width: width,
+			height: height
+		)
 	)
 }
 
 private func testCoordinateConversion() throws {
-	let menuBarScreen: CGRect = .init(x: 0, y: 0, width: 1_920, height: 1_080)
-	let appKitFrame: CGRect = .init(x: 100, y: 120, width: 800, height: 600)
-	let expectedAccessibilityFrame: CGRect = .init(
-		x: 100,
-		y: 360,
-		width: 800,
-		height: 600
-	)
-	let converted: CGRect = managedExternalWindowAccessibilityFrame(
+	let menuBarScreen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+	let appKitFrame = CGRect(x: 100, y: 120, width: 800, height: 600)
+	let accessibilityFrame = managedExternalWindowAccessibilityFrame(
 		fromAppKitScreenFrame: appKitFrame,
 		menuBarScreenFrame: menuBarScreen
 	)
 	try expectFrame(
-		converted,
-		expectedAccessibilityFrame,
-		message: "primary-screen conversion"
+		accessibilityFrame,
+		.init(x: 100, y: 360, width: 800, height: 600),
+		message: "primary display conversion"
 	)
 	try expectFrame(
 		managedExternalWindowAppKitScreenFrame(
-			fromAccessibilityFrame: converted,
+			fromAccessibilityFrame: accessibilityFrame,
 			menuBarScreenFrame: menuBarScreen
 		),
 		appKitFrame,
-		message: "primary-screen round trip"
+		message: "coordinate conversion round trip"
 	)
-
-	let leftDisplayFrame: CGRect = .init(x: -1_280, y: 160, width: 1_280, height: 720)
-	let leftAccessibilityFrame: CGRect = managedExternalWindowAccessibilityFrame(
-		fromAppKitScreenFrame: leftDisplayFrame,
-		menuBarScreenFrame: menuBarScreen
-	)
-	try expectFrame(
-		leftAccessibilityFrame,
-		.init(x: -1_280, y: 200, width: 1_280, height: 720),
-		message: "left-display conversion"
-	)
-
-	let upperDisplayFrame: CGRect = .init(x: 100, y: 1_080, width: 1_000, height: 700)
-	let upperAccessibilityFrame: CGRect = managedExternalWindowAccessibilityFrame(
-		fromAppKitScreenFrame: upperDisplayFrame,
-		menuBarScreenFrame: menuBarScreen
-	)
-	try expectFrame(
-		upperAccessibilityFrame,
-		.init(x: 100, y: -700, width: 1_000, height: 700),
-		message: "upper-display conversion"
+	try expect(
+		managedExternalWindowAccessibilityPoint(
+			fromAppKitScreenPoint: .init(x: -200, y: 1_200),
+			menuBarScreenFrame: menuBarScreen
+		) == .init(x: -200, y: -120),
+		"screen points must support negative and upper-display coordinates"
 	)
 }
 
-private func testApproximateFrameComparison() throws {
-	let baseline: CGRect = .init(x: 10, y: 20, width: 800, height: 600)
-	try expect(
-		managedExternalWindowFramesAreApproximatelyEqual(
-			baseline,
-			.init(x: 10.8, y: 19.4, width: 800.5, height: 599.2)
-		),
-		"sub-point frame differences should be suppressed"
+private func testUniqueGeometryCorrelation() throws {
+	let first = CGRect(x: 100, y: 100, width: 800, height: 600)
+	let second = CGRect(x: 920, y: 100, width: 700, height: 600)
+	let correlations = externalWindowCurrentSpaceCorrelations(
+		accessibilityCandidates: [
+			axCandidate(7, frame: first),
+			axCandidate(9, frame: second),
+		],
+		currentSpaceWindows: [
+			cgWindow(101, frame: first),
+			cgWindow(202, frame: second),
+		]
 	)
 	try expect(
-		!managedExternalWindowFramesAreApproximatelyEqual(
-			baseline,
-			.init(x: 12, y: 20, width: 800, height: 600)
-		),
-		"material frame differences must not be suppressed"
+		correlations == [7: 101, 9: 202],
+		"unique geometry must correlate exact AX and CG identities"
 	)
 }
 
-private func testAdjacentLayoutFillsVisibleFrameWithoutOverlap() throws {
-	let visibleFrame: CGRect = .init(x: -200, y: 40, width: 1_600, height: 900)
-	guard let layout: ManagedExternalWindowAdjacentLayout =
-		managedExternalWindowAdjacentLayout(
-			in: visibleFrame,
-			gap: 8,
-			hostFraction: 0.45,
-			minimumHostWidth: 620,
-			minimumExternalWidth: 480
+private func testAmbiguousGeometryFailsClosed() throws {
+	let shared = CGRect(x: 100, y: 100, width: 800, height: 600)
+	let duplicateAccessibility = externalWindowCurrentSpaceCorrelations(
+		accessibilityCandidates: [
+			axCandidate(0, frame: shared),
+			axCandidate(1, frame: shared),
+		],
+		currentSpaceWindows: [cgWindow(101, frame: shared)]
+	)
+	try expect(
+		duplicateAccessibility.isEmpty,
+		"duplicate AX geometry must not use title or ordering as a tiebreaker"
+	)
+	let duplicateCoreGraphics = externalWindowCurrentSpaceCorrelations(
+		accessibilityCandidates: [axCandidate(0, frame: shared)],
+		currentSpaceWindows: [
+			cgWindow(101, frame: shared),
+			cgWindow(202, frame: shared),
+		]
+	)
+	try expect(
+		duplicateCoreGraphics.isEmpty,
+		"duplicate CG geometry must fail closed"
+	)
+}
+
+private func testCorrelationRejectsWrongProcessAndNonstandardLayers() throws {
+	let frame = CGRect(x: 20, y: 30, width: 900, height: 700)
+	let rejected = externalWindowCurrentSpaceCorrelations(
+		accessibilityCandidates: [axCandidate(3, pid: 42, frame: frame)],
+		currentSpaceWindows: [
+			cgWindow(11, pid: 7, frame: frame),
+			cgWindow(12, layer: 1, frame: frame),
+			cgWindow(13, isOnscreen: false, frame: frame),
+		]
+	)
+	try expect(
+		rejected.isEmpty,
+		"correlation must require same PID, layer zero, and current-Space visibility"
+	)
+	let missingFrame = externalWindowCurrentSpaceCorrelations(
+		accessibilityCandidates: [axCandidate(3, frame: nil)],
+		currentSpaceWindows: [cgWindow(11, frame: frame)]
+	)
+	try expect(missingFrame.isEmpty, "an AX window without a frame is not identifiable")
+}
+
+private func testPanelTargetSemantics() throws {
+	let empty = ExternalWindowPanelGeometry(
+		panelID: "empty",
+		appKitScreenFrame: .init(x: 0, y: 0, width: 400, height: 300),
+		isOccupied: false
+	)
+	try expect(
+		externalWindowPanelDropTarget(
+			at: .init(x: 2, y: 150),
+			panels: [empty]
+		) == .init(panelID: "empty", region: .empty),
+		"an empty panel must be one whole replacement target"
+	)
+
+	let occupied = ExternalWindowPanelGeometry(
+		panelID: "occupied",
+		appKitScreenFrame: .init(x: 500, y: 100, width: 600, height: 400),
+		isOccupied: true
+	)
+	let probes: [(CGPoint, ExternalWindowPanelDropRegion)] = [
+		(.init(x: 800, y: 300), .center),
+		(.init(x: 505, y: 300), .leading),
+		(.init(x: 1_095, y: 300), .trailing),
+		(.init(x: 800, y: 495), .top),
+		(.init(x: 800, y: 105), .bottom),
+		(.init(x: 510, y: 130), .leading),
+	]
+	for (point, expectedRegion) in probes {
+		try expect(
+			externalWindowPanelDropTarget(at: point, panels: [occupied])
+				== .init(panelID: "occupied", region: expectedRegion),
+			"occupied panel target at \(point) must be \(expectedRegion)"
 		)
-	else {
-		throw TestFailure.assertion("a valid visible frame must produce an adjacent layout")
 	}
-	try expect(layout.hostFrame.minX == visibleFrame.minX, "host must anchor to the left edge")
 	try expect(
-		layout.externalFrame.maxX == visibleFrame.maxX,
-		"external window must anchor to the right edge"
-	)
-	try expect(
-		layout.externalFrame.minX - layout.hostFrame.maxX == 8,
-		"adjacent windows must preserve the requested gap"
-	)
-	try expect(
-		layout.hostFrame.height == visibleFrame.height
-			&& layout.externalFrame.height == visibleFrame.height,
-		"both adjacent windows must fill the visible height"
-	)
-	try expect(layout.hostFrame.width >= 620, "host minimum width must be enforced")
-	try expect(
-		layout.externalFrame.width >= 480,
-		"external minimum width must be enforced"
-	)
-	try expect(
-		!layout.hostFrame.intersects(layout.externalFrame),
-		"adjacent windows must never overlap"
-	)
-	try expect(
-		managedExternalWindowAdjacentLayout(
-			in: .init(x: 0, y: 0, width: 1_000, height: 700),
-			minimumHostWidth: 620,
-			minimumExternalWidth: 480
+		externalWindowPanelDropTarget(
+			at: .init(x: 450, y: 300),
+			panels: [occupied]
 		) == nil,
-		"an undersized screen must fail instead of overlapping windows"
+		"a point outside every panel must not create a target"
+	)
+}
+
+private func testPanelOverlapFailsClosed() throws {
+	let panels = [
+		ExternalWindowPanelGeometry(
+			panelID: "one",
+			appKitScreenFrame: .init(x: 0, y: 0, width: 400, height: 400),
+			isOccupied: true
+		),
+		ExternalWindowPanelGeometry(
+			panelID: "two",
+			appKitScreenFrame: .init(x: 200, y: 200, width: 400, height: 400),
+			isOccupied: false
+		),
+	]
+	try expect(
+		externalWindowPanelDropTarget(at: .init(x: 300, y: 300), panels: panels) == nil,
+		"overlapping panel geometry must fail closed"
+	)
+}
+
+private func testWindowDragQualification() throws {
+	let initial = dragSample(mouseX: 200, mouseY: 800, windowX: 100, windowY: 400)
+	try expect(
+		qualifiesExternalWindowDrag(
+			initial: initial,
+			current: dragSample(
+				mouseX: 260,
+				mouseY: 760,
+				windowX: 160,
+				windowY: 360
+			)
+		),
+		"correlated mouse and window displacement must qualify"
+	)
+	try expect(
+		!qualifiesExternalWindowDrag(
+			initial: initial,
+			current: dragSample(
+				mouseX: 260,
+				mouseY: 760,
+				windowX: 100,
+				windowY: 400
+			)
+		),
+		"mouse-only drags such as text, tabs, and files must not qualify"
+	)
+	try expect(
+		!qualifiesExternalWindowDrag(
+			initial: initial,
+			current: dragSample(
+				mouseX: 260,
+				mouseY: 760,
+				windowX: 300,
+				windowY: 650
+			)
+		),
+		"uncorrelated window motion must not qualify"
+	)
+	try expect(
+		!qualifiesExternalWindowDrag(
+			initial: initial,
+			current: dragSample(
+				mouseX: 260,
+				mouseY: 760,
+				windowX: 160,
+				windowY: 360,
+				width: 900
+			)
+		),
+		"window resizing must not be classified as a title-bar drag"
 	)
 }
 
@@ -175,251 +296,58 @@ private func testAccessibilityNotificationMapping() throws {
 		managedExternalWindowEvent(
 			forAccessibilityNotification: kAXMovedNotification as String
 		) == .moved,
-		"AX moved notifications should map to moved events"
+		"AX moved notifications must map to moved events"
 	)
 	try expect(
 		managedExternalWindowEvent(
 			forAccessibilityNotification: kAXResizedNotification as String
 		) == .resized,
-		"AX resized notifications should map to resized events"
+		"AX resized notifications must map to resized events"
 	)
 	try expect(
 		managedExternalWindowEvent(
 			forAccessibilityNotification: kAXUIElementDestroyedNotification as String
 		) == .destroyed,
-		"AX destroyed notifications should map to destroyed events"
+		"AX destroyed notifications must map to destroyed events"
 	)
 	try expect(
-		managedExternalWindowEvent(
-			forAccessibilityNotification: "AXUnknownManagedWindowNotification"
-		) == nil,
-		"unknown AX notifications should be ignored"
+		managedExternalWindowEvent(forAccessibilityNotification: "AXUnknown") == nil,
+		"unknown AX notifications must be ignored"
 	)
 }
 
-private func testExactRepositoryDocumentMatchWins() throws {
-	let candidates: [ManagedExternalWindowCandidate] = [
-		candidate(
-			0,
-			title: "foch — old checkout",
-			document: "file:///old/foch/src/main.rs"
-		),
-		candidate(
-			1,
-			title: "main.rs — Zed",
-			document: "file:///new/foch/src/main.rs"
-		),
-	]
-	let selectedIndex: Int = try selectUniqueManagedExternalWindowCandidate(
-		from: candidates,
-		repositoryURL: URL(fileURLWithPath: "/new/foch")
-	)
-	try expect(selectedIndex == 1, "absolute repository paths must distinguish equal basenames")
-}
-
-private func testTitleOnlyCandidateFailsClosed() throws {
-	do {
-		_ = try selectUniqueManagedExternalWindowCandidate(
-			from: [candidate(0, title: "foch — Zed")],
-			repositoryURL: URL(fileURLWithPath: "/new/foch")
-		)
-		throw TestFailure.assertion("a basename-only title must not identify a repository")
-	} catch let error as ManagedExternalWindowCandidateSelectionError {
-		try expect(
-			error == .noMatch(repositoryName: "foch"),
-			"title-only matching must fail closed while an exact-path window may appear"
-		)
-	}
-}
-
-private func testOffSpaceCandidateFailsClosed() throws {
-	do {
-		_ = try selectUniqueManagedExternalWindowCandidate(
-			from: [
-				candidate(
-					3,
-					title: "foch — Zed",
-					document: "file:///new/foch/src/main.rs",
-					isOnCurrentSpace: false
-				),
-			],
-			repositoryURL: URL(fileURLWithPath: "/new/foch")
-		)
-		throw TestFailure.assertion("an off-Space window must not be selected")
-	} catch let error as ManagedExternalWindowCandidateSelectionError {
-		try expect(
-			error == .noMatch(repositoryName: "foch"),
-			"off-Space matching must fail closed"
-		)
-	}
-}
-
-private func testMinimizedCandidateFailsClosed() throws {
-	do {
-		_ = try selectUniqueManagedExternalWindowCandidate(
-			from: [
-				candidate(
-					3,
-					title: "foch — Zed",
-					document: "file:///new/foch/src/main.rs",
-					isMinimized: true
-				),
-			],
-			repositoryURL: URL(fileURLWithPath: "/new/foch")
-		)
-		throw TestFailure.assertion("a minimized window must not be selected")
-	} catch let error as ManagedExternalWindowCandidateSelectionError {
-		try expect(
-			error == .noMatch(repositoryName: "foch"),
-			"minimized matching must fail closed"
-		)
-	}
-}
-
-private func testCurrentSpaceCorrelationIsOneToOne() throws {
-	let firstFrame: CGRect = .init(x: 100, y: 100, width: 800, height: 600)
-	let secondFrame: CGRect = .init(x: 920, y: 100, width: 800, height: 600)
-	let candidates: [ManagedExternalWindowCandidate] = [
-		candidate(7, title: "foch — Zed", accessibilityFrame: firstFrame),
-		candidate(9, title: "teaser — Zed", accessibilityFrame: secondFrame),
-	]
-	let correlations: [Int: CGWindowID] = managedExternalWindowCurrentSpaceCorrelations(
-		candidates: candidates,
-		currentSpaceWindows: [
-			.init(windowID: 101, title: nil, accessibilityFrame: firstFrame),
-		]
-	)
-	try expect(
-		correlations == [7: 101],
-		"only the uniquely correlated frame and CGWindowID are current-Space"
-	)
-}
-
-private func testAmbiguousCurrentSpaceGeometryFailsClosed() throws {
-	let sharedFrame: CGRect = .init(x: 100, y: 100, width: 800, height: 600)
-	let candidates: [ManagedExternalWindowCandidate] = [
-		candidate(0, title: "foch — one", accessibilityFrame: sharedFrame),
-		candidate(1, title: "foch — two", accessibilityFrame: sharedFrame),
-	]
-	let unresolved: [Int: CGWindowID] = managedExternalWindowCurrentSpaceCorrelations(
-		candidates: candidates,
-		currentSpaceWindows: [
-			.init(windowID: 202, title: nil, accessibilityFrame: sharedFrame),
-		]
-	)
-	try expect(unresolved.isEmpty, "duplicate geometry without a title must be rejected")
-
-	let resolved: [Int: CGWindowID] = managedExternalWindowCurrentSpaceCorrelations(
-		candidates: candidates,
-		currentSpaceWindows: [
-			.init(
-				windowID: 303,
-				title: "foch — two",
-				accessibilityFrame: sharedFrame
-			),
-		]
-	)
-	try expect(resolved == [1: 303], "an exact visible-window title may disambiguate geometry")
-}
-
-private func testNonlocalAndRelativeDocumentURLsFailClosed() throws {
-	for document: String in [
-		"file:relative/new/foch/main.swift",
-		"file://server/new/foch/main.swift",
-		"//server/new/foch/main.swift",
-	] {
-		do {
-			_ = try selectUniqueManagedExternalWindowCandidate(
-				from: [candidate(0, title: "foch — Zed", document: document)],
-				repositoryURL: URL(fileURLWithPath: "/new/foch")
-			)
-			throw TestFailure.assertion("nonlocal or relative document URL was accepted: \(document)")
-		} catch let error as ManagedExternalWindowCandidateSelectionError {
-			try expect(
-				error == .noMatch(repositoryName: "foch"),
-				"nonlocal and relative document URLs must fail closed"
-			)
-		}
-	}
-}
-
-private func testCannotFitErrorReportsRequestedAndActualFrames() throws {
-	let requested: CGRect = .init(x: 10, y: 20, width: 280, height: 180)
-	let actual: CGRect = .init(x: 10, y: 20, width: 480, height: 320)
-	let error: ManagedExternalWindowError = .windowCannotFit(
-		requested: requested,
+private func testTransactionErrorsRetainInputs() throws {
+	let expected = ExternalWindowIdentity(processIdentifier: 42, windowID: 10)
+	let actual = ExternalWindowIdentity(processIdentifier: 42, windowID: 11)
+	let mismatch = ManagedExternalWindowError.snapshotIdentityMismatch(
+		expected: expected,
 		actual: actual
 	)
-	guard case .windowCannotFit(
-		let reportedRequested,
-		let reportedActual
-	) = error else {
-		throw TestFailure.assertion("cannot-fit errors must preserve both frames")
-	}
-	try expectFrame(
-		reportedRequested,
-		requested,
-		message: "cannot-fit requested frame"
+	try expect(
+		mismatch == .snapshotIdentityMismatch(expected: expected, actual: actual),
+		"snapshot mismatch must retain exact identities"
 	)
-	try expectFrame(
-		reportedActual,
-		actual,
-		message: "cannot-fit actual frame"
+	let requested = CGRect(x: 10, y: 20, width: 280, height: 180)
+	let fitted = CGRect(x: 10, y: 20, width: 480, height: 320)
+	try expect(
+		ManagedExternalWindowError.windowCannotFit(
+			requested: requested,
+			actual: fitted
+		) == .windowCannotFit(requested: requested, actual: fitted),
+		"cannot-fit errors must retain requested and actual frames"
 	)
-}
-
-private func testAmbiguousCandidatesFailClosed() throws {
-	let candidates: [ManagedExternalWindowCandidate] = [
-		candidate(0, title: "foch — one", document: "file:///new/foch/a.swift"),
-		candidate(1, title: "foch — two", document: "file:///new/foch/b.swift"),
-	]
-	do {
-		_ = try selectUniqueManagedExternalWindowCandidate(
-			from: candidates,
-			repositoryURL: URL(fileURLWithPath: "/new/foch")
-		)
-		throw TestFailure.assertion("ambiguous candidates must not be guessed")
-	} catch let error as ManagedExternalWindowCandidateSelectionError {
-		try expect(
-			error == .ambiguous(repositoryName: "foch", count: 2),
-			"ambiguous selection should report the exact candidate count"
-		)
-	}
-}
-
-private func testNoCandidateFailsClosed() throws {
-	do {
-		_ = try selectUniqueManagedExternalWindowCandidate(
-			from: [
-				candidate(0, title: "teaser — Zed", document: "file:///other/teaser"),
-				candidate(1, title: "notfoch — Zed", document: "file:///other/notfoch"),
-			],
-			repositoryURL: URL(fileURLWithPath: "/new/foch")
-		)
-		throw TestFailure.assertion("missing candidates must fail closed")
-	} catch let error as ManagedExternalWindowCandidateSelectionError {
-		try expect(
-			error == .noMatch(repositoryName: "foch"),
-			"missing candidate selection should retain the requested repository"
-		)
-	}
 }
 
 do {
 	try testCoordinateConversion()
-	try testApproximateFrameComparison()
-	try testAdjacentLayoutFillsVisibleFrameWithoutOverlap()
+	try testUniqueGeometryCorrelation()
+	try testAmbiguousGeometryFailsClosed()
+	try testCorrelationRejectsWrongProcessAndNonstandardLayers()
+	try testPanelTargetSemantics()
+	try testPanelOverlapFailsClosed()
+	try testWindowDragQualification()
 	try testAccessibilityNotificationMapping()
-	try testExactRepositoryDocumentMatchWins()
-	try testTitleOnlyCandidateFailsClosed()
-	try testOffSpaceCandidateFailsClosed()
-	try testMinimizedCandidateFailsClosed()
-	try testCurrentSpaceCorrelationIsOneToOne()
-	try testAmbiguousCurrentSpaceGeometryFailsClosed()
-	try testNonlocalAndRelativeDocumentURLsFailClosed()
-	try testCannotFitErrorReportsRequestedAndActualFrames()
-	try testAmbiguousCandidatesFailClosed()
-	try testNoCandidateFailsClosed()
+	try testTransactionErrorsRetainInputs()
 	print("ManagedExternalWindow tests passed")
 } catch {
 	fputs("ManagedExternalWindow tests failed: \(error)\n", stderr)

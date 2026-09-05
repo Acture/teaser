@@ -8,11 +8,15 @@ enum ExternalWindowPermissionStatus: Equatable, Sendable {
 	case notAuthorized
 }
 
+struct ExternalWindowIdentity: Equatable, Hashable, Sendable {
+	let processIdentifier: pid_t
+	let windowID: CGWindowID
+}
+
 struct ManagedExternalWindowSnapshot: Equatable, Sendable {
+	let identity: ExternalWindowIdentity
 	let applicationName: String
 	let title: String
-	let processIdentifier: pid_t
-	let repositoryName: String
 	let appKitScreenFrame: CGRect
 	let isMinimized: Bool
 }
@@ -27,21 +31,32 @@ typealias ManagedExternalWindowEventHandler = @MainActor @Sendable (
 	ManagedExternalWindowEvent
 ) -> Void
 
-enum ManagedExternalWindowError: Error, LocalizedError {
+typealias ManagedExternalWindowApplyErrorHandler = @MainActor @Sendable (
+	ManagedExternalWindowError
+) -> Void
+
+enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 	case accessibilityPermissionRequired
 	case alreadyBound
-	case invalidProcessIdentifier(pid_t)
-	case invalidRepositoryName
+	case invalidIdentity(ExternalWindowIdentity)
 	case invalidFrame(CGRect)
 	case noScreens
-	case noMatchingWindow(repositoryName: String)
-	case ambiguousMatchingWindows(repositoryName: String, count: Int)
-	case windowUnavailable
-	case windowNotOnCurrentSpace
+	case windowAtPointUnavailable
+	case ambiguousWindowIdentity(processIdentifier: pid_t)
+	case windowUnavailable(ExternalWindowIdentity?)
+	case windowNotOnCurrentSpace(ExternalWindowIdentity)
+	case windowNotStandard
+	case windowIsMinimized
+	case windowIsFullScreen
 	case windowCannotMove
 	case windowCannotResize
 	case windowCannotFit(requested: CGRect, actual: CGRect)
 	case windowCannotMinimize
+	case snapshotIdentityMismatch(
+		expected: ExternalWindowIdentity,
+		actual: ExternalWindowIdentity
+	)
+	case globalMonitorUnavailable
 	case accessibilityOperationFailed(operation: String, code: AXError)
 
 	var errorDescription: String? {
@@ -49,256 +64,128 @@ enum ManagedExternalWindowError: Error, LocalizedError {
 		case .accessibilityPermissionRequired:
 			return "Teaser needs Accessibility permission to manage external windows."
 		case .alreadyBound:
-			return "A managed external window is already bound."
-		case .invalidProcessIdentifier(let processIdentifier):
-			return "The external application process identifier is invalid: \(processIdentifier)."
-		case .invalidRepositoryName:
-			return "The repository name must not be empty."
+			return "This external-window lease is already bound."
+		case .invalidIdentity(let identity):
+			return "The external-window identity is invalid: \(identity)."
 		case .invalidFrame(let frame):
 			return "The requested AppKit screen frame is invalid: \(frame)."
 		case .noScreens:
 			return "macOS did not report a menu-bar screen."
-		case .noMatchingWindow(let repositoryName):
-			return "No standard external window uniquely matches repository \(repositoryName)."
-		case .ambiguousMatchingWindows(let repositoryName, let count):
-			return "Found \(count) external windows matching repository \(repositoryName)."
-		case .windowUnavailable:
-			return "The managed external window is no longer available."
-		case .windowNotOnCurrentSpace:
-			return "The managed external window is not uniquely visible on the current Space."
+		case .windowAtPointUnavailable:
+			return "No eligible external window exists at that screen location."
+		case .ambiguousWindowIdentity(let processIdentifier):
+			return "Accessibility and Core Graphics windows for process \(processIdentifier) cannot be correlated uniquely."
+		case .windowUnavailable(let identity):
+			guard let identity else { return "The managed external window is unavailable." }
+			return "External window \(identity.windowID) from process \(identity.processIdentifier) is unavailable."
+		case .windowNotOnCurrentSpace(let identity):
+			return "External window \(identity.windowID) is not uniquely visible on the current Space."
+		case .windowNotStandard:
+			return "Teaser only manages standard application windows."
+		case .windowIsMinimized:
+			return "A minimized external window cannot be adopted by dragging."
+		case .windowIsFullScreen:
+			return "A full-screen external window cannot be adopted on its current Space."
 		case .windowCannotMove:
 			return "The external window does not allow its position to be changed."
 		case .windowCannotResize:
 			return "The external window does not allow its size to be changed."
 		case .windowCannotFit(let requested, let actual):
-			return "The external window cannot fit the requested frame \(requested); it applied \(actual)."
+			return "The external window cannot fit \(requested); it applied \(actual)."
 		case .windowCannotMinimize:
 			return "The external window does not allow its minimized state to be changed."
+		case .snapshotIdentityMismatch(let expected, let actual):
+			return "Cannot restore snapshot for \(actual) through lease \(expected)."
+		case .globalMonitorUnavailable:
+			return "macOS did not install the passive global window-drag monitor."
 		case .accessibilityOperationFailed(let operation, let code):
 			return "Accessibility operation \(operation) failed with \(code)."
 		}
 	}
 }
 
-struct ManagedExternalWindowCandidate: Equatable, Sendable {
+struct ExternalWindowAccessibilityCandidate: Equatable, Sendable {
 	let index: Int
+	let processIdentifier: pid_t
 	let role: String
 	let subrole: String?
-	let title: String
-	let document: String?
 	let accessibilityFrame: CGRect?
 	let isMinimized: Bool
-	let isOnCurrentSpace: Bool
+	let isFullScreen: Bool
 }
 
-struct ManagedExternalWindowCurrentSpaceWindow: Equatable, Sendable {
-	let windowID: CGWindowID
-	let title: String?
+struct ExternalWindowCurrentSpaceWindow: Equatable, Sendable {
+	let identity: ExternalWindowIdentity
+	let layer: Int
+	let isOnscreen: Bool
 	let accessibilityFrame: CGRect
 }
 
-struct ManagedExternalWindowAdjacentLayout: Equatable, Sendable {
-	let hostFrame: CGRect
-	let externalFrame: CGRect
-}
-
-enum ManagedExternalWindowCandidateSelectionError: Error, Equatable {
-	case noMatch(repositoryName: String)
-	case ambiguous(repositoryName: String, count: Int)
-}
-
-func selectUniqueManagedExternalWindowCandidate(
-	from candidates: [ManagedExternalWindowCandidate],
-	repositoryURL: URL
-) throws -> Int {
-	let standardizedRepositoryURL: URL = repositoryURL.standardizedFileURL
-		.resolvingSymlinksInPath()
-	let repositoryName: String = standardizedRepositoryURL.lastPathComponent
-	guard !repositoryName.isEmpty else {
-		throw ManagedExternalWindowCandidateSelectionError.noMatch(
-			repositoryName: repositoryName
-		)
-	}
-
-	let eligibleCandidates: [ManagedExternalWindowCandidate] = candidates.filter { candidate in
-		candidate.role == kAXWindowRole
-			&& candidate.subrole == kAXStandardWindowSubrole
-			&& !candidate.isMinimized
-			&& candidate.isOnCurrentSpace
-	}
-	let documentMatches: [ManagedExternalWindowCandidate] = eligibleCandidates.filter { candidate in
-		guard let document: String = candidate.document else {
-			return false
-		}
-		return externalWindowDocument(
-			document,
-			isInside: standardizedRepositoryURL
-		)
-	}
-
-	if documentMatches.count == 1, let match: ManagedExternalWindowCandidate = documentMatches.first {
-		return match.index
-	}
-	if documentMatches.count > 1 {
-		throw ManagedExternalWindowCandidateSelectionError.ambiguous(
-			repositoryName: repositoryName,
-			count: documentMatches.count
-		)
-	}
-
-	throw ManagedExternalWindowCandidateSelectionError.noMatch(
-		repositoryName: repositoryName
-	)
-}
-
-func managedExternalWindowCurrentSpaceCorrelations(
-	candidates: [ManagedExternalWindowCandidate],
-	currentSpaceWindows: [ManagedExternalWindowCurrentSpaceWindow]
+func externalWindowCurrentSpaceCorrelations(
+	accessibilityCandidates: [ExternalWindowAccessibilityCandidate],
+	currentSpaceWindows: [ExternalWindowCurrentSpaceWindow],
+	tolerance: CGFloat = 2
 ) -> [Int: CGWindowID] {
-	struct Correlation {
-		let candidateOffset: Int
-		let currentSpaceWindowOffset: Int
-	}
-
-	var correlations: [Correlation] = []
-	for (
-		currentSpaceWindowOffset,
-		currentSpaceWindow
-	) in currentSpaceWindows.enumerated() {
-		let frameMatches: [(offset: Int, element: ManagedExternalWindowCandidate)] =
-			candidates.enumerated().filter { _, candidate in
-				guard let candidateFrame: CGRect = candidate.accessibilityFrame else {
-					return false
-				}
-				return managedExternalWindowFramesAreApproximatelyEqual(
+	guard tolerance.isFinite, tolerance >= 0 else { return [:] }
+	var byCandidate: [Int: [Int]] = [:]
+	var byWindow: [Int: [Int]] = [:]
+	for (candidateOffset, candidate) in accessibilityCandidates.enumerated() {
+		guard let candidateFrame: CGRect = candidate.accessibilityFrame else { continue }
+		for (windowOffset, window) in currentSpaceWindows.enumerated() {
+			guard candidate.processIdentifier == window.identity.processIdentifier,
+				window.layer == 0,
+				window.isOnscreen,
+				managedExternalWindowFramesAreApproximatelyEqual(
 					candidateFrame,
-					currentSpaceWindow.accessibilityFrame,
-					tolerance: 2
+					window.accessibilityFrame,
+					tolerance: tolerance
 				)
-			}
-		if frameMatches.count == 1, let frameMatch = frameMatches.first {
-			correlations.append(
-				.init(
-					candidateOffset: frameMatch.offset,
-					currentSpaceWindowOffset: currentSpaceWindowOffset
-				)
-			)
-			continue
+			else { continue }
+			byCandidate[candidateOffset, default: []].append(windowOffset)
+			byWindow[windowOffset, default: []].append(candidateOffset)
 		}
-
-		guard let currentSpaceTitle: String = currentSpaceWindow.title,
-			!currentSpaceTitle.isEmpty
-		else {
-			continue
-		}
-		let normalizedCurrentSpaceTitle: String = normalizedExternalWindowMatchText(
-			currentSpaceTitle
-		)
-		let titleMatches = frameMatches.filter { _, candidate in
-			normalizedExternalWindowMatchText(candidate.title)
-				== normalizedCurrentSpaceTitle
-		}
-		guard titleMatches.count == 1, let titleMatch = titleMatches.first else {
-			continue
-		}
-		correlations.append(
-			.init(
-				candidateOffset: titleMatch.offset,
-				currentSpaceWindowOffset: currentSpaceWindowOffset
-			)
-		)
 	}
-
-	let uniqueCorrelations: [(Int, CGWindowID)] = correlations.compactMap { correlation in
-		let candidateMatchCount: Int = correlations.count {
-			$0.candidateOffset == correlation.candidateOffset
-		}
-		let currentSpaceWindowMatchCount: Int = correlations.count {
-			$0.currentSpaceWindowOffset == correlation.currentSpaceWindowOffset
-		}
-		guard candidateMatchCount == 1, currentSpaceWindowMatchCount == 1 else {
-			return nil
-		}
-		return (
-			candidates[correlation.candidateOffset].index,
-			currentSpaceWindows[correlation.currentSpaceWindowOffset].windowID
-		)
+	var result: [Int: CGWindowID] = [:]
+	for (candidateOffset, windowOffsets) in byCandidate {
+		guard windowOffsets.count == 1,
+			let windowOffset: Int = windowOffsets.first,
+			byWindow[windowOffset]?.count == 1
+		else { continue }
+		result[accessibilityCandidates[candidateOffset].index] =
+			currentSpaceWindows[windowOffset].identity.windowID
 	}
-	return Dictionary(uniqueKeysWithValues: uniqueCorrelations)
+	return result
 }
 
 func managedExternalWindowAccessibilityFrame(
-	fromAppKitScreenFrame appKitScreenFrame: CGRect,
+	fromAppKitScreenFrame frame: CGRect,
 	menuBarScreenFrame: CGRect
 ) -> CGRect {
 	.init(
-		x: appKitScreenFrame.minX,
-		y: menuBarScreenFrame.maxY - appKitScreenFrame.maxY,
-		width: appKitScreenFrame.width,
-		height: appKitScreenFrame.height
-	)
-}
-
-func managedExternalWindowAdjacentLayout(
-	in visibleFrame: CGRect,
-	gap: CGFloat = 8,
-	hostFraction: CGFloat = 0.45,
-	minimumHostWidth: CGFloat = 0,
-	minimumExternalWidth: CGFloat = 0
-) -> ManagedExternalWindowAdjacentLayout? {
-	guard visibleFrame.isValidManagedExternalWindowFrame,
-		gap.isFinite,
-		gap >= 0,
-		hostFraction.isFinite,
-		hostFraction > 0,
-		hostFraction < 1,
-		minimumHostWidth.isFinite,
-		minimumHostWidth >= 0,
-		minimumExternalWidth.isFinite,
-		minimumExternalWidth >= 0,
-		visibleFrame.width > gap
-	else {
-		return nil
-	}
-	let availableWidth: CGFloat = visibleFrame.width - gap
-	guard availableWidth >= minimumHostWidth + minimumExternalWidth else {
-		return nil
-	}
-	let preferredHostWidth: CGFloat = floor(availableWidth * hostFraction)
-	let hostWidth: CGFloat = min(
-		max(preferredHostWidth, minimumHostWidth),
-		availableWidth - minimumExternalWidth
-	)
-	let externalWidth: CGFloat = availableWidth - hostWidth
-	guard hostWidth > 0, externalWidth > 0 else {
-		return nil
-	}
-	return .init(
-		hostFrame: .init(
-			x: visibleFrame.minX,
-			y: visibleFrame.minY,
-			width: hostWidth,
-			height: visibleFrame.height
-		),
-		externalFrame: .init(
-			x: visibleFrame.minX + hostWidth + gap,
-			y: visibleFrame.minY,
-			width: externalWidth,
-			height: visibleFrame.height
-		)
+		x: frame.minX,
+		y: menuBarScreenFrame.maxY - frame.maxY,
+		width: frame.width,
+		height: frame.height
 	)
 }
 
 func managedExternalWindowAppKitScreenFrame(
-	fromAccessibilityFrame accessibilityFrame: CGRect,
+	fromAccessibilityFrame frame: CGRect,
 	menuBarScreenFrame: CGRect
 ) -> CGRect {
 	.init(
-		x: accessibilityFrame.minX,
-		y: menuBarScreenFrame.maxY - accessibilityFrame.maxY,
-		width: accessibilityFrame.width,
-		height: accessibilityFrame.height
+		x: frame.minX,
+		y: menuBarScreenFrame.maxY - frame.maxY,
+		width: frame.width,
+		height: frame.height
 	)
+}
+
+func managedExternalWindowAccessibilityPoint(
+	fromAppKitScreenPoint point: CGPoint,
+	menuBarScreenFrame: CGRect
+) -> CGPoint {
+	.init(x: point.x, y: menuBarScreenFrame.maxY - point.y)
 }
 
 func managedExternalWindowFramesAreApproximatelyEqual(
@@ -316,14 +203,742 @@ func managedExternalWindowEvent(
 	forAccessibilityNotification notification: String
 ) -> ManagedExternalWindowEvent? {
 	switch notification {
-	case kAXMovedNotification:
-		return .moved
-	case kAXResizedNotification:
-		return .resized
-	case kAXUIElementDestroyedNotification:
-		return .destroyed
-	default:
-		return nil
+	case kAXMovedNotification: return .moved
+	case kAXResizedNotification: return .resized
+	case kAXUIElementDestroyedNotification: return .destroyed
+	default: return nil
+	}
+}
+
+enum ExternalWindowPanelDropRegion: Equatable, Sendable {
+	case empty
+	case center
+	case leading
+	case trailing
+	case top
+	case bottom
+}
+
+struct ExternalWindowPanelGeometry: Equatable, Sendable {
+	let panelID: String
+	let appKitScreenFrame: CGRect
+	let isOccupied: Bool
+}
+
+struct ExternalWindowPanelDropTarget: Equatable, Sendable {
+	let panelID: String
+	let region: ExternalWindowPanelDropRegion
+}
+
+struct ExternalWindowPanelHitTestConfiguration: Equatable, Sendable {
+	let edgeFraction: CGFloat
+	let minimumEdgeWidth: CGFloat
+	let maximumEdgeWidth: CGFloat
+
+	init(
+		edgeFraction: CGFloat = 0.22,
+		minimumEdgeWidth: CGFloat = 44,
+		maximumEdgeWidth: CGFloat = 120
+	) {
+		self.edgeFraction = edgeFraction
+		self.minimumEdgeWidth = minimumEdgeWidth
+		self.maximumEdgeWidth = maximumEdgeWidth
+	}
+}
+
+func externalWindowPanelDropTarget(
+	at point: CGPoint,
+	panels: [ExternalWindowPanelGeometry],
+	configuration: ExternalWindowPanelHitTestConfiguration = .init()
+) -> ExternalWindowPanelDropTarget? {
+	guard point.x.isFinite,
+		point.y.isFinite,
+		configuration.edgeFraction.isFinite,
+		configuration.edgeFraction > 0,
+		configuration.edgeFraction < 0.5,
+		configuration.minimumEdgeWidth.isFinite,
+		configuration.minimumEdgeWidth >= 0,
+		configuration.maximumEdgeWidth.isFinite,
+		configuration.maximumEdgeWidth >= configuration.minimumEdgeWidth
+	else { return nil }
+	let containing: [ExternalWindowPanelGeometry] = panels.filter {
+		$0.appKitScreenFrame.isValidManagedExternalWindowFrame
+			&& $0.appKitScreenFrame.contains(point)
+	}
+	guard containing.count == 1, let panel = containing.first else { return nil }
+	guard panel.isOccupied else {
+		return .init(panelID: panel.panelID, region: .empty)
+	}
+	let frame: CGRect = panel.appKitScreenFrame
+	let edgeWidth: CGFloat = min(
+		max(
+			min(frame.width, frame.height) * configuration.edgeFraction,
+			configuration.minimumEdgeWidth
+		),
+		configuration.maximumEdgeWidth
+	)
+	let edges: [(ExternalWindowPanelDropRegion, CGFloat)] = [
+		(.leading, point.x - frame.minX),
+		(.trailing, frame.maxX - point.x),
+		(.top, frame.maxY - point.y),
+		(.bottom, point.y - frame.minY),
+	]
+	let edge = edges.filter { $0.1 <= edgeWidth }.min { $0.1 < $1.1 }
+	return .init(panelID: panel.panelID, region: edge?.0 ?? .center)
+}
+
+struct ExternalWindowDragQualificationConfiguration: Equatable, Sendable {
+	let minimumMouseMovement: CGFloat
+	let minimumWindowMovement: CGFloat
+	let maximumDeltaError: CGFloat
+	let maximumSizeDelta: CGFloat
+
+	init(
+		minimumMouseMovement: CGFloat = 6,
+		minimumWindowMovement: CGFloat = 4,
+		maximumDeltaError: CGFloat = 10,
+		maximumSizeDelta: CGFloat = 2
+	) {
+		self.minimumMouseMovement = minimumMouseMovement
+		self.minimumWindowMovement = minimumWindowMovement
+		self.maximumDeltaError = maximumDeltaError
+		self.maximumSizeDelta = maximumSizeDelta
+	}
+}
+
+struct ExternalWindowDragSample: Equatable, Sendable {
+	let mouseAppKitScreenLocation: CGPoint
+	let windowAppKitScreenFrame: CGRect
+}
+
+func qualifiesExternalWindowDrag(
+	initial: ExternalWindowDragSample,
+	current: ExternalWindowDragSample,
+	configuration: ExternalWindowDragQualificationConfiguration = .init()
+) -> Bool {
+	guard initial.windowAppKitScreenFrame.isValidManagedExternalWindowFrame,
+		current.windowAppKitScreenFrame.isValidManagedExternalWindowFrame,
+		configuration.minimumMouseMovement.isFinite,
+		configuration.minimumMouseMovement >= 0,
+		configuration.minimumWindowMovement.isFinite,
+		configuration.minimumWindowMovement >= 0,
+		configuration.maximumDeltaError.isFinite,
+		configuration.maximumDeltaError >= 0,
+		configuration.maximumSizeDelta.isFinite,
+		configuration.maximumSizeDelta >= 0
+	else { return false }
+	let mouseDelta = CGVector(
+		dx: current.mouseAppKitScreenLocation.x - initial.mouseAppKitScreenLocation.x,
+		dy: current.mouseAppKitScreenLocation.y - initial.mouseAppKitScreenLocation.y
+	)
+	let windowDelta = CGVector(
+		dx: current.windowAppKitScreenFrame.minX - initial.windowAppKitScreenFrame.minX,
+		dy: current.windowAppKitScreenFrame.minY - initial.windowAppKitScreenFrame.minY
+	)
+	return hypot(mouseDelta.dx, mouseDelta.dy) >= configuration.minimumMouseMovement
+		&& hypot(windowDelta.dx, windowDelta.dy) >= configuration.minimumWindowMovement
+		&& abs(mouseDelta.dx - windowDelta.dx) <= configuration.maximumDeltaError
+		&& abs(mouseDelta.dy - windowDelta.dy) <= configuration.maximumDeltaError
+		&& abs(current.windowAppKitScreenFrame.width - initial.windowAppKitScreenFrame.width)
+			<= configuration.maximumSizeDelta
+		&& abs(current.windowAppKitScreenFrame.height - initial.windowAppKitScreenFrame.height)
+			<= configuration.maximumSizeDelta
+}
+
+@MainActor
+final class ExternalWindowSelection {
+	let identity: ExternalWindowIdentity
+	let initialSnapshot: ManagedExternalWindowSnapshot
+	fileprivate let applicationElement: AXUIElement
+	fileprivate let windowElement: AXUIElement
+	fileprivate let originalAccessibilityFrame: CGRect
+	fileprivate let originalMinimizedState: Bool
+
+	fileprivate init(
+		identity: ExternalWindowIdentity,
+		applicationElement: AXUIElement,
+		windowElement: AXUIElement,
+		initialSnapshot: ManagedExternalWindowSnapshot,
+		originalAccessibilityFrame: CGRect,
+		originalMinimizedState: Bool
+	) {
+		self.identity = identity
+		self.applicationElement = applicationElement
+		self.windowElement = windowElement
+		self.initialSnapshot = initialSnapshot
+		self.originalAccessibilityFrame = originalAccessibilityFrame
+		self.originalMinimizedState = originalMinimizedState
+	}
+}
+
+struct ExternalWindowDragSnapshot {
+	let selection: ExternalWindowSelection
+	let initialSample: ExternalWindowDragSample
+	let currentSample: ExternalWindowDragSample
+}
+
+enum ExternalWindowDragCancellationReason: Equatable, Sendable {
+	case windowUnavailable
+	case observerStopped
+}
+
+enum ExternalWindowDragEvent {
+	case began(ExternalWindowDragSnapshot)
+	case changed(ExternalWindowDragSnapshot)
+	case ended(ExternalWindowDragSnapshot)
+	case cancelled(
+		identity: ExternalWindowIdentity,
+		reason: ExternalWindowDragCancellationReason
+	)
+}
+
+typealias ExternalWindowDragEventHandler = @MainActor @Sendable (
+	ExternalWindowDragEvent
+) -> Void
+
+@MainActor
+private enum ExternalWindowSystem {
+	static func permissionStatus(prompt: Bool) -> ExternalWindowPermissionStatus {
+		let trusted: Bool
+		if prompt {
+			trusted = AXIsProcessTrustedWithOptions(
+				["AXTrustedCheckOptionPrompt": true] as CFDictionary
+			)
+		} else {
+			trusted = AXIsProcessTrusted()
+		}
+		return trusted ? .authorized : .notAuthorized
+	}
+
+	static func selection(
+		atAppKitScreenPoint point: CGPoint,
+		excludingProcessIdentifiers: Set<pid_t>
+	) throws -> ExternalWindowSelection {
+		guard permissionStatus(prompt: false) == .authorized else {
+			throw ManagedExternalWindowError.accessibilityPermissionRequired
+		}
+		let accessibilityPoint: CGPoint = try accessibilityPoint(fromAppKit: point)
+		var hitElement: AXUIElement?
+		let error: AXError = AXUIElementCopyElementAtPosition(
+			AXUIElementCreateSystemWide(),
+			Float(accessibilityPoint.x),
+			Float(accessibilityPoint.y),
+			&hitElement
+		)
+		guard error == .success, let hitElement else {
+			throw ManagedExternalWindowError.windowAtPointUnavailable
+		}
+		let windowElement: AXUIElement = try enclosingWindow(of: hitElement)
+		var processIdentifier: pid_t = 0
+		guard AXUIElementGetPid(windowElement, &processIdentifier) == .success,
+			processIdentifier > 0,
+			!excludingProcessIdentifiers.contains(processIdentifier)
+		else {
+			throw ManagedExternalWindowError.windowAtPointUnavailable
+		}
+		let applicationElement: AXUIElement = AXUIElementCreateApplication(processIdentifier)
+		AXUIElementSetMessagingTimeout(applicationElement, 0.75)
+		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
+		guard let selectedIndex: Int = applicationWindows.firstIndex(where: {
+			CFEqual($0, windowElement)
+		}) else {
+			throw ManagedExternalWindowError.windowAtPointUnavailable
+		}
+		let cgWindows: [ExternalWindowCurrentSpaceWindow] = currentSpaceWindows(
+			processIdentifier: processIdentifier
+		)
+		let correlations: [Int: CGWindowID] = correlate(
+			windows: applicationWindows,
+			processIdentifier: processIdentifier,
+			currentSpaceWindows: cgWindows
+		)
+		guard let windowID: CGWindowID = correlations[selectedIndex] else {
+			throw ManagedExternalWindowError.ambiguousWindowIdentity(
+				processIdentifier: processIdentifier
+			)
+		}
+		guard let frontmostAtPoint = cgWindows.first(where: {
+			$0.layer == 0
+				&& $0.isOnscreen
+				&& $0.accessibilityFrame.contains(accessibilityPoint)
+		}),
+			frontmostAtPoint.identity.windowID == windowID
+		else {
+			throw ManagedExternalWindowError.windowAtPointUnavailable
+		}
+		return try makeSelection(
+			applicationElement: applicationElement,
+			windowElement: windowElement,
+			identity: .init(
+				processIdentifier: processIdentifier,
+				windowID: windowID
+			)
+		)
+	}
+
+	static func selection(identity: ExternalWindowIdentity) throws -> ExternalWindowSelection {
+		guard identity.processIdentifier > 0, identity.windowID != kCGNullWindowID else {
+			throw ManagedExternalWindowError.invalidIdentity(identity)
+		}
+		let applicationElement = AXUIElementCreateApplication(identity.processIdentifier)
+		AXUIElementSetMessagingTimeout(applicationElement, 0.75)
+		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
+		let correlations: [Int: CGWindowID] = correlate(
+			windows: applicationWindows,
+			processIdentifier: identity.processIdentifier,
+			currentSpaceWindows: currentSpaceWindows(
+				processIdentifier: identity.processIdentifier
+			)
+		)
+		let matches: [Int] = correlations.compactMap { index, windowID in
+			windowID == identity.windowID ? index : nil
+		}
+		guard matches.count == 1,
+			let index = matches.first,
+			applicationWindows.indices.contains(index)
+		else {
+			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
+		}
+		return try makeSelection(
+			applicationElement: applicationElement,
+			windowElement: applicationWindows[index],
+			identity: identity
+		)
+	}
+
+	static func validateCurrentSpace(
+		identity: ExternalWindowIdentity,
+		windowElement: AXUIElement,
+		applicationElement: AXUIElement
+	) throws {
+		try validateElement(identity: identity, windowElement: windowElement)
+		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
+		guard let index = applicationWindows.firstIndex(where: {
+			CFEqual($0, windowElement)
+		}) else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
+		}
+		let correlations: [Int: CGWindowID] = correlate(
+			windows: applicationWindows,
+			processIdentifier: identity.processIdentifier,
+			currentSpaceWindows: currentSpaceWindows(
+				processIdentifier: identity.processIdentifier
+			)
+		)
+		guard correlations[index] == identity.windowID else {
+			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
+		}
+	}
+
+	static func validateRegardlessOfSpace(
+		identity: ExternalWindowIdentity,
+		windowElement: AXUIElement,
+		applicationElement: AXUIElement
+	) throws {
+		try validateElement(identity: identity, windowElement: windowElement)
+		let ids: [NSNumber] = [NSNumber(value: identity.windowID)]
+		guard let descriptions = CGWindowListCreateDescriptionFromArray(ids as CFArray)
+			as? [[String: Any]],
+			descriptions.count == 1,
+			let description = descriptions.first,
+			let ownerPID = description[kCGWindowOwnerPID as String] as? NSNumber,
+			ownerPID.int32Value == identity.processIdentifier,
+			let layer = description[kCGWindowLayer as String] as? NSNumber,
+			layer.intValue == 0,
+			let bounds = description[kCGWindowBounds as String] as? NSDictionary,
+			let cgFrame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+		else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
+		}
+		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
+		let matches: [AXUIElement] = applicationWindows.filter { element in
+			guard let frame = try? accessibilityFrame(of: element) else { return false }
+			return managedExternalWindowFramesAreApproximatelyEqual(
+				frame,
+				cgFrame,
+				tolerance: 2
+			)
+		}
+		guard matches.count == 1,
+			let match = matches.first,
+			CFEqual(match, windowElement)
+		else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
+		}
+	}
+
+	static func snapshot(
+		identity: ExternalWindowIdentity,
+		windowElement: AXUIElement
+	) throws -> ManagedExternalWindowSnapshot {
+		try validateElement(identity: identity, windowElement: windowElement)
+		return .init(
+			identity: identity,
+			applicationName: NSRunningApplication(
+				processIdentifier: identity.processIdentifier
+			)?.localizedName ?? "Application",
+			title: stringAttribute(kAXTitleAttribute as CFString, of: windowElement)
+				?? "Window",
+			appKitScreenFrame: try appKitFrame(
+				fromAccessibility: accessibilityFrame(of: windowElement)
+			),
+			isMinimized: try boolAttribute(
+				kAXMinimizedAttribute as CFString,
+				of: windowElement
+			)
+		)
+	}
+
+	static func requireManageable(_ selection: ExternalWindowSelection) throws {
+		let element: AXUIElement = selection.windowElement
+		guard stringAttribute(kAXRoleAttribute as CFString, of: element) == kAXWindowRole,
+			stringAttribute(kAXSubroleAttribute as CFString, of: element)
+				== kAXStandardWindowSubrole
+		else { throw ManagedExternalWindowError.windowNotStandard }
+		guard try !boolAttribute(kAXMinimizedAttribute as CFString, of: element) else {
+			throw ManagedExternalWindowError.windowIsMinimized
+		}
+		if (try? boolAttribute("AXFullScreen" as CFString, of: element)) == true {
+			throw ManagedExternalWindowError.windowIsFullScreen
+		}
+		try requireSettable(
+			kAXPositionAttribute as CFString,
+			on: element,
+			error: .windowCannotMove
+		)
+		try requireSettable(
+			kAXSizeAttribute as CFString,
+			on: element,
+			error: .windowCannotResize
+		)
+	}
+
+	static func accessibilityFrame(of element: AXUIElement) throws -> CGRect {
+		.init(
+			origin: try pointAttribute(kAXPositionAttribute as CFString, of: element),
+			size: try sizeAttribute(kAXSizeAttribute as CFString, of: element)
+		)
+	}
+
+	static func accessibilityFrame(fromAppKit frame: CGRect) throws -> CGRect {
+		guard let screenFrame = NSScreen.screens.first?.frame else {
+			throw ManagedExternalWindowError.noScreens
+		}
+		return managedExternalWindowAccessibilityFrame(
+			fromAppKitScreenFrame: frame,
+			menuBarScreenFrame: screenFrame
+		)
+	}
+
+	static func appKitFrame(fromAccessibility frame: CGRect) throws -> CGRect {
+		guard let screenFrame = NSScreen.screens.first?.frame else {
+			throw ManagedExternalWindowError.noScreens
+		}
+		return managedExternalWindowAppKitScreenFrame(
+			fromAccessibilityFrame: frame,
+			menuBarScreenFrame: screenFrame
+		)
+	}
+
+	static func writeFrame(_ frame: CGRect, to element: AXUIElement) throws {
+		guard frame.isValidManagedExternalWindowFrame else {
+			throw ManagedExternalWindowError.invalidFrame(frame)
+		}
+		var size: CGSize = frame.size
+		guard let sizeValue = AXValueCreate(.cgSize, &size) else {
+			throw ManagedExternalWindowError.invalidFrame(frame)
+		}
+		try setAttribute(
+			kAXSizeAttribute as CFString,
+			value: sizeValue,
+			on: element,
+			operation: "resize external window"
+		)
+		var position: CGPoint = frame.origin
+		guard let positionValue = AXValueCreate(.cgPoint, &position) else {
+			throw ManagedExternalWindowError.invalidFrame(frame)
+		}
+		try setAttribute(
+			kAXPositionAttribute as CFString,
+			value: positionValue,
+			on: element,
+			operation: "move external window"
+		)
+	}
+
+	static func stringAttribute(_ attribute: CFString, of element: AXUIElement) -> String? {
+		var raw: CFTypeRef?
+		guard AXUIElementCopyAttributeValue(element, attribute, &raw) == .success else {
+			return nil
+		}
+		return raw as? String
+	}
+
+	static func boolAttribute(_ attribute: CFString, of element: AXUIElement) throws -> Bool {
+		var raw: CFTypeRef?
+		let error = AXUIElementCopyAttributeValue(element, attribute, &raw)
+		guard error == .success, let value = raw as? Bool else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "read \(attribute)",
+				code: error == .success ? .failure : error
+			)
+		}
+		return value
+	}
+
+	static func setAttribute(
+		_ attribute: CFString,
+		value: CFTypeRef,
+		on element: AXUIElement,
+		operation: String
+	) throws {
+		let error = AXUIElementSetAttributeValue(element, attribute, value)
+		guard error == .success else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: operation,
+				code: error
+			)
+		}
+	}
+
+	static func setBoolAttribute(
+		_ attribute: CFString,
+		value: Bool,
+		on element: AXUIElement,
+		operation: String
+	) throws {
+		try setAttribute(
+			attribute,
+			value: value ? kCFBooleanTrue : kCFBooleanFalse,
+			on: element,
+			operation: operation
+		)
+	}
+
+	private static func makeSelection(
+		applicationElement: AXUIElement,
+		windowElement: AXUIElement,
+		identity: ExternalWindowIdentity
+	) throws -> ExternalWindowSelection {
+		let frame: CGRect = try accessibilityFrame(of: windowElement)
+		let minimized: Bool = try boolAttribute(
+			kAXMinimizedAttribute as CFString,
+			of: windowElement
+		)
+		let selection = ExternalWindowSelection(
+			identity: identity,
+			applicationElement: applicationElement,
+			windowElement: windowElement,
+			initialSnapshot: try snapshot(
+				identity: identity,
+				windowElement: windowElement
+			),
+			originalAccessibilityFrame: frame,
+			originalMinimizedState: minimized
+		)
+		try requireManageable(selection)
+		return selection
+	}
+
+	private static func enclosingWindow(of hit: AXUIElement) throws -> AXUIElement {
+		if stringAttribute(kAXRoleAttribute as CFString, of: hit) == kAXWindowRole {
+			return hit
+		}
+		if let window = elementAttribute(kAXWindowAttribute as CFString, of: hit) {
+			return window
+		}
+		var current: AXUIElement = hit
+		for _ in 0 ..< 16 {
+			guard let parent = elementAttribute(kAXParentAttribute as CFString, of: current)
+			else { break }
+			if stringAttribute(kAXRoleAttribute as CFString, of: parent) == kAXWindowRole {
+				return parent
+			}
+			current = parent
+		}
+		throw ManagedExternalWindowError.windowAtPointUnavailable
+	}
+
+	private static func correlate(
+		windows: [AXUIElement],
+		processIdentifier: pid_t,
+		currentSpaceWindows: [ExternalWindowCurrentSpaceWindow]
+	) -> [Int: CGWindowID] {
+		let candidates = windows.enumerated().map { index, window in
+			ExternalWindowAccessibilityCandidate(
+				index: index,
+				processIdentifier: processIdentifier,
+				role: stringAttribute(kAXRoleAttribute as CFString, of: window) ?? "",
+				subrole: stringAttribute(kAXSubroleAttribute as CFString, of: window),
+				accessibilityFrame: try? accessibilityFrame(of: window),
+				isMinimized: (try? boolAttribute(
+					kAXMinimizedAttribute as CFString,
+					of: window
+				)) ?? false,
+				isFullScreen: (try? boolAttribute(
+					"AXFullScreen" as CFString,
+					of: window
+				)) ?? false
+			)
+		}
+		return externalWindowCurrentSpaceCorrelations(
+			accessibilityCandidates: candidates,
+			currentSpaceWindows: currentSpaceWindows
+		)
+	}
+
+	private static func currentSpaceWindows(
+		processIdentifier: pid_t
+	) -> [ExternalWindowCurrentSpaceWindow] {
+		guard let info = CGWindowListCopyWindowInfo(
+			[.optionOnScreenOnly, .excludeDesktopElements],
+			kCGNullWindowID
+		) as? [[String: Any]] else { return [] }
+		return info.compactMap { entry in
+			guard let ownerPID = entry[kCGWindowOwnerPID as String] as? NSNumber,
+				ownerPID.int32Value == processIdentifier,
+				let windowID = entry[kCGWindowNumber as String] as? NSNumber,
+				let layer = entry[kCGWindowLayer as String] as? NSNumber,
+				let onscreen = entry[kCGWindowIsOnscreen as String] as? NSNumber,
+				let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+				let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+			else { return nil }
+			return .init(
+				identity: .init(
+					processIdentifier: processIdentifier,
+					windowID: CGWindowID(windowID.uint32Value)
+				),
+				layer: layer.intValue,
+				isOnscreen: onscreen.boolValue,
+				accessibilityFrame: frame
+			)
+		}
+	}
+
+	static func validateElement(
+		identity: ExternalWindowIdentity,
+		windowElement: AXUIElement
+	) throws {
+		var processIdentifier: pid_t = 0
+		guard AXUIElementGetPid(windowElement, &processIdentifier) == .success,
+			processIdentifier == identity.processIdentifier,
+			stringAttribute(kAXRoleAttribute as CFString, of: windowElement)
+				== kAXWindowRole
+		else { throw ManagedExternalWindowError.windowUnavailable(identity) }
+	}
+
+	private static func accessibilityPoint(fromAppKit point: CGPoint) throws -> CGPoint {
+		guard let screenFrame = NSScreen.screens.first?.frame else {
+			throw ManagedExternalWindowError.noScreens
+		}
+		return managedExternalWindowAccessibilityPoint(
+			fromAppKitScreenPoint: point,
+			menuBarScreenFrame: screenFrame
+		)
+	}
+
+	private static func windows(of application: AXUIElement) throws -> [AXUIElement] {
+		var raw: CFTypeRef?
+		let error = AXUIElementCopyAttributeValue(
+			application,
+			kAXWindowsAttribute as CFString,
+			&raw
+		)
+		guard error == .success else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "enumerate external windows",
+				code: error
+			)
+		}
+		return raw as? [AXUIElement] ?? []
+	}
+
+	private static func requireSettable(
+		_ attribute: CFString,
+		on element: AXUIElement,
+		error unavailableError: ManagedExternalWindowError
+	) throws {
+		var settable: DarwinBoolean = false
+		let result = AXUIElementIsAttributeSettable(element, attribute, &settable)
+		guard result == .success else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "test \(attribute) writability",
+				code: result
+			)
+		}
+		guard settable.boolValue else { throw unavailableError }
+	}
+
+	private static func elementAttribute(
+		_ attribute: CFString,
+		of element: AXUIElement
+	) -> AXUIElement? {
+		var raw: CFTypeRef?
+		guard AXUIElementCopyAttributeValue(element, attribute, &raw) == .success,
+			let raw,
+			CFGetTypeID(raw) == AXUIElementGetTypeID()
+		else { return nil }
+		return unsafeDowncast(raw, to: AXUIElement.self)
+	}
+
+	private static func pointAttribute(
+		_ attribute: CFString,
+		of element: AXUIElement
+	) throws -> CGPoint {
+		let value: AXValue = try axValueAttribute(attribute, of: element)
+		guard AXValueGetType(value) == .cgPoint else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "decode \(attribute)",
+				code: .failure
+			)
+		}
+		var point: CGPoint = .zero
+		guard AXValueGetValue(value, .cgPoint, &point) else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "decode \(attribute)",
+				code: .failure
+			)
+		}
+		return point
+	}
+
+	private static func sizeAttribute(
+		_ attribute: CFString,
+		of element: AXUIElement
+	) throws -> CGSize {
+		let value: AXValue = try axValueAttribute(attribute, of: element)
+		guard AXValueGetType(value) == .cgSize else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "decode \(attribute)",
+				code: .failure
+			)
+		}
+		var size: CGSize = .zero
+		guard AXValueGetValue(value, .cgSize, &size) else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "decode \(attribute)",
+				code: .failure
+			)
+		}
+		return size
+	}
+
+	private static func axValueAttribute(
+		_ attribute: CFString,
+		of element: AXUIElement
+	) throws -> AXValue {
+		var raw: CFTypeRef?
+		let error = AXUIElementCopyAttributeValue(element, attribute, &raw)
+		guard error == .success,
+			let raw,
+			CFGetTypeID(raw) == AXValueGetTypeID()
+		else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "read \(attribute)",
+				code: error == .success ? .failure : error
+			)
+		}
+		return unsafeDowncast(raw, to: AXValue.self)
 	}
 }
 
@@ -346,7 +961,7 @@ final class ManagedExternalWindow {
 		}
 	}
 
-	private final class Observation {
+	private final class Observation: @unchecked Sendable {
 		let observer: AXObserver
 		let windowElement: AXUIElement
 		let notifications: [CFString]
@@ -381,182 +996,103 @@ final class ManagedExternalWindow {
 			)
 		}
 
-		deinit {
-			invalidate()
-		}
+		deinit { invalidate() }
 	}
 
 	private struct Binding {
-		let applicationElement: AXUIElement
-		let windowElement: AXUIElement
-		let windowID: CGWindowID
-		let processIdentifier: pid_t
-		let applicationName: String
-		let title: String
-		let repositoryName: String
-		let repositoryURL: URL
+		let selection: ExternalWindowSelection
 		let originalAccessibilityFrame: CGRect
 		let originalMinimizedState: Bool
 		var lastAppliedAccessibilityFrame: CGRect?
+		var lastAppliedMinimizedState: Bool?
 	}
 
 	var onEvent: ManagedExternalWindowEventHandler?
+	var onApplyError: ManagedExternalWindowApplyErrorHandler?
+	private(set) var identity: ExternalWindowIdentity?
 
 	private var binding: Binding?
 	private var observation: Observation?
 	private var observationGeneration: UInt = 0
 	private var activeObservationGeneration: UInt?
+	private var pendingObservedEvent: ManagedExternalWindowEvent?
+	private var observedEventTask: Task<Void, Never>?
+	private var pendingApplyFrame: CGRect?
+	private var applyTask: Task<Void, Never>?
 
-	init(onEvent: ManagedExternalWindowEventHandler? = nil) {
+	init(
+		onEvent: ManagedExternalWindowEventHandler? = nil,
+		onApplyError: ManagedExternalWindowApplyErrorHandler? = nil
+	) {
 		self.onEvent = onEvent
+		self.onApplyError = onApplyError
+	}
+
+	deinit {
+		observation?.invalidate()
+		observedEventTask?.cancel()
+		applyTask?.cancel()
 	}
 
 	static func permissionStatus(prompt: Bool) -> ExternalWindowPermissionStatus {
-		let isTrusted: Bool
-		if prompt {
-			let options: [String: Bool] = [
-				"AXTrustedCheckOptionPrompt": true,
-			]
-			isTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
-		} else {
-			isTrusted = AXIsProcessTrusted()
-		}
-		return isTrusted ? .authorized : .notAuthorized
+		ExternalWindowSystem.permissionStatus(prompt: prompt)
+	}
+
+	static func selectWindow(
+		atAppKitScreenPoint point: CGPoint,
+		excludingProcessIdentifiers: Set<pid_t> = [getpid()]
+	) throws -> ExternalWindowSelection {
+		try ExternalWindowSystem.selection(
+			atAppKitScreenPoint: point,
+			excludingProcessIdentifiers: excludingProcessIdentifiers
+		)
+	}
+
+	static func selectWindow(
+		identity: ExternalWindowIdentity
+	) throws -> ExternalWindowSelection {
+		try ExternalWindowSystem.selection(identity: identity)
 	}
 
 	@discardableResult
-	func bind(
-		applicationPID: pid_t,
-		repositoryURL: URL
-	) throws -> ManagedExternalWindowSnapshot {
+	func bind(selection: ExternalWindowSelection) throws -> ManagedExternalWindowSnapshot {
 		guard Self.permissionStatus(prompt: false) == .authorized else {
 			throw ManagedExternalWindowError.accessibilityPermissionRequired
 		}
-		guard binding == nil else {
-			throw ManagedExternalWindowError.alreadyBound
-		}
-		guard applicationPID > 0 else {
-			throw ManagedExternalWindowError.invalidProcessIdentifier(applicationPID)
-		}
-
-		let standardizedRepositoryURL: URL = repositoryURL.standardizedFileURL
-			.resolvingSymlinksInPath()
-		let trimmedRepositoryName: String = standardizedRepositoryURL.lastPathComponent
-			.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard !trimmedRepositoryName.isEmpty else {
-			throw ManagedExternalWindowError.invalidRepositoryName
-		}
-
-		let applicationElement: AXUIElement = AXUIElementCreateApplication(applicationPID)
-		AXUIElementSetMessagingTimeout(applicationElement, 0.75)
-		let windows: [AXUIElement] = try windows(of: applicationElement)
-		let currentSpaceCorrelations: [Int: CGWindowID] = correlateCurrentSpaceWindows(
-			windows: windows,
-			applicationPID: applicationPID
+		guard binding == nil else { throw ManagedExternalWindowError.alreadyBound }
+		try ExternalWindowSystem.validateCurrentSpace(
+			identity: selection.identity,
+			windowElement: selection.windowElement,
+			applicationElement: selection.applicationElement
 		)
-		let candidates: [ManagedExternalWindowCandidate] = windows.enumerated().map { index, window in
-			candidate(
-				index: index,
-				window: window,
-				isOnCurrentSpace: currentSpaceCorrelations[index] != nil
-			)
-		}
-
-		let selectedIndex: Int
-		do {
-			selectedIndex = try selectUniqueManagedExternalWindowCandidate(
-				from: candidates,
-				repositoryURL: standardizedRepositoryURL
-			)
-		} catch let error as ManagedExternalWindowCandidateSelectionError {
-			switch error {
-			case .noMatch:
-				throw ManagedExternalWindowError.noMatchingWindow(
-					repositoryName: trimmedRepositoryName
-				)
-			case .ambiguous(_, let count):
-				throw ManagedExternalWindowError.ambiguousMatchingWindows(
-					repositoryName: trimmedRepositoryName,
-					count: count
-				)
-			}
-		}
-
-		guard windows.indices.contains(selectedIndex) else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-		guard let windowID: CGWindowID = currentSpaceCorrelations[selectedIndex] else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace
-		}
-		let windowElement: AXUIElement = windows[selectedIndex]
-		try requireSettable(
-			kAXPositionAttribute as CFString,
-			on: windowElement,
-			error: .windowCannotMove
+		try ExternalWindowSystem.requireManageable(selection)
+		let newObservation: Observation = try makeObservation(selection: selection)
+		binding = .init(
+			selection: selection,
+			originalAccessibilityFrame: selection.originalAccessibilityFrame,
+			originalMinimizedState: selection.originalMinimizedState,
+			lastAppliedAccessibilityFrame: nil,
+			lastAppliedMinimizedState: nil
 		)
-		try requireSettable(
-			kAXSizeAttribute as CFString,
-			on: windowElement,
-			error: .windowCannotResize
-		)
-
-		let originalAccessibilityFrame: CGRect = try accessibilityFrame(of: windowElement)
-		let originalMinimizedState: Bool = try boolAttribute(
-			kAXMinimizedAttribute as CFString,
-			of: windowElement
-		)
-		let applicationName: String = NSRunningApplication(
-			processIdentifier: applicationPID
-		)?.localizedName ?? "Application"
-		let title: String = stringAttribute(
-			kAXTitleAttribute as CFString,
-			of: windowElement
-		) ?? trimmedRepositoryName
-
-		let newBinding: Binding = .init(
-			applicationElement: applicationElement,
-			windowElement: windowElement,
-			windowID: windowID,
-			processIdentifier: applicationPID,
-			applicationName: applicationName,
-			title: title,
-			repositoryName: trimmedRepositoryName,
-			repositoryURL: standardizedRepositoryURL,
-			originalAccessibilityFrame: originalAccessibilityFrame,
-			originalMinimizedState: originalMinimizedState,
-			lastAppliedAccessibilityFrame: nil
-		)
-		let initialSnapshot: ManagedExternalWindowSnapshot = .init(
-			applicationName: applicationName,
-			title: title,
-			processIdentifier: applicationPID,
-			repositoryName: trimmedRepositoryName,
-			appKitScreenFrame: try appKitScreenFrame(
-				fromAccessibilityFrame: originalAccessibilityFrame
-			),
-			isMinimized: false
-		)
-		let newObservation: Observation = try makeObservation(
-			applicationPID: applicationPID,
-			windowElement: windowElement
-		)
-		if originalMinimizedState {
-			try requireSettable(
-				kAXMinimizedAttribute as CFString,
-				on: windowElement,
-				error: .windowCannotMinimize
-			)
-			try setBoolAttribute(
-				kAXMinimizedAttribute as CFString,
-				value: false,
-				on: windowElement,
-				operation: "restore external window"
-			)
-		}
-		binding = newBinding
+		identity = selection.identity
 		observation = newObservation
 		activeObservationGeneration = observationGeneration
-		return initialSnapshot
+		return try snapshot()
+	}
+
+	@discardableResult
+	func bind(identity: ExternalWindowIdentity) throws -> ManagedExternalWindowSnapshot {
+		try bind(selection: Self.selectWindow(identity: identity))
+	}
+
+	func snapshot() throws -> ManagedExternalWindowSnapshot {
+		guard let binding else {
+			throw ManagedExternalWindowError.windowUnavailable(nil)
+		}
+		return try ExternalWindowSystem.snapshot(
+			identity: binding.selection.identity,
+			windowElement: binding.selection.windowElement
+		)
 	}
 
 	@discardableResult
@@ -567,246 +1103,298 @@ final class ManagedExternalWindow {
 			throw ManagedExternalWindowError.invalidFrame(requestedFrame)
 		}
 		guard var binding else {
-			throw ManagedExternalWindowError.windowUnavailable
+			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
-		try requireValid(binding)
-		try requireOnCurrentSpace(binding)
-
-		let targetAccessibilityFrame: CGRect = try accessibilityFrame(
-			fromAppKitScreenFrame: requestedFrame
+		try requireCurrentSpace(binding)
+		let targetFrame: CGRect = try ExternalWindowSystem.accessibilityFrame(
+			fromAppKit: requestedFrame
 		)
-		let currentAccessibilityFrame: CGRect = try accessibilityFrame(
-			of: binding.windowElement
+		let currentFrame: CGRect = try ExternalWindowSystem.accessibilityFrame(
+			of: binding.selection.windowElement
 		)
-		if managedExternalWindowFramesAreApproximatelyEqual(
-			currentAccessibilityFrame,
-			targetAccessibilityFrame
-		) {
-			binding.lastAppliedAccessibilityFrame = currentAccessibilityFrame
+		if managedExternalWindowFramesAreApproximatelyEqual(currentFrame, targetFrame) {
+			binding.lastAppliedAccessibilityFrame = currentFrame
 			self.binding = binding
 			return try snapshot()
 		}
-
 		do {
-			try writeAccessibilityFrame(
-				targetAccessibilityFrame,
-				to: binding.windowElement
+			try ExternalWindowSystem.writeFrame(
+				targetFrame,
+				to: binding.selection.windowElement
 			)
-			let appliedAccessibilityFrame: CGRect = try accessibilityFrame(
-				of: binding.windowElement
+			let appliedFrame: CGRect = try ExternalWindowSystem.accessibilityFrame(
+				of: binding.selection.windowElement
 			)
 			guard managedExternalWindowFramesAreApproximatelyEqual(
-				appliedAccessibilityFrame,
-				targetAccessibilityFrame
+				appliedFrame,
+				targetFrame
 			) else {
-				let actualAppKitScreenFrame: CGRect = try appKitScreenFrame(
-					fromAccessibilityFrame: appliedAccessibilityFrame
-				)
 				throw ManagedExternalWindowError.windowCannotFit(
 					requested: requestedFrame,
-					actual: actualAppKitScreenFrame
+					actual: try ExternalWindowSystem.appKitFrame(
+						fromAccessibility: appliedFrame
+					)
 				)
 			}
-			binding.lastAppliedAccessibilityFrame = appliedAccessibilityFrame
+			binding.lastAppliedAccessibilityFrame = appliedFrame
+			self.binding = binding
 		} catch {
-			try? writeAccessibilityFrame(
-				currentAccessibilityFrame,
-				to: binding.windowElement
+			try? ExternalWindowSystem.writeFrame(
+				currentFrame,
+				to: binding.selection.windowElement
 			)
 			throw error
 		}
-
-		self.binding = binding
 		return try snapshot()
+	}
+
+	func applyCoalesced(appKitScreenFrame requestedFrame: CGRect) {
+		guard requestedFrame.isValidManagedExternalWindowFrame else {
+			onApplyError?(.invalidFrame(requestedFrame))
+			return
+		}
+		pendingApplyFrame = requestedFrame
+		schedulePendingApplyIfNeeded()
+	}
+
+	@discardableResult
+	func restore(
+		snapshot: ManagedExternalWindowSnapshot
+	) throws -> ManagedExternalWindowSnapshot {
+		guard let identity else {
+			throw ManagedExternalWindowError.windowUnavailable(nil)
+		}
+		guard snapshot.identity == identity else {
+			throw ManagedExternalWindowError.snapshotIdentityMismatch(
+				expected: identity,
+				actual: snapshot.identity
+			)
+		}
+		_ = try apply(appKitScreenFrame: snapshot.appKitScreenFrame)
+		try setMinimized(snapshot.isMinimized)
+		return try self.snapshot()
+	}
+
+	func raise() throws {
+		guard let binding else {
+			throw ManagedExternalWindowError.windowUnavailable(nil)
+		}
+		try requireCurrentSpace(binding)
+		let error: AXError = AXUIElementPerformAction(
+			binding.selection.windowElement,
+			kAXRaiseAction as CFString
+		)
+		guard error == .success else {
+			throw ManagedExternalWindowError.accessibilityOperationFailed(
+				operation: "raise external window",
+				code: error
+			)
+		}
 	}
 
 	func focusAndRaise() throws {
 		guard let binding else {
-			throw ManagedExternalWindowError.windowUnavailable
+			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
-		try requireValid(binding)
-		try requireOnCurrentSpace(binding)
-		try setMinimized(false)
-
-		_ = NSRunningApplication(processIdentifier: binding.processIdentifier)?.activate(options: [])
-		try setAttribute(
+		let isMinimized: Bool = try ExternalWindowSystem.boolAttribute(
+			kAXMinimizedAttribute as CFString,
+			of: binding.selection.windowElement
+		)
+		if isMinimized { try setMinimized(false) }
+		try requireCurrentSpace(binding)
+		_ = NSRunningApplication(
+			processIdentifier: binding.selection.identity.processIdentifier
+		)?.activate(options: [])
+		try ExternalWindowSystem.setAttribute(
 			kAXFocusedWindowAttribute as CFString,
-			value: binding.windowElement,
-			on: binding.applicationElement,
+			value: binding.selection.windowElement,
+			on: binding.selection.applicationElement,
 			operation: "focus external window"
 		)
-		let raiseError: AXError = AXUIElementPerformAction(
-			binding.windowElement,
-			kAXRaiseAction as CFString
-		)
-		guard raiseError == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "raise external window",
-				code: raiseError
-			)
-		}
+		try raise()
 	}
 
 	func setMinimized(_ minimized: Bool) throws {
-		guard let binding else {
-			throw ManagedExternalWindowError.windowUnavailable
+		guard var binding else {
+			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
-		try requireValid(binding)
-		try requireOnCurrentSpace(binding)
-		let currentState: Bool = try boolAttribute(
+		if minimized {
+			try requireCurrentSpace(binding)
+		} else {
+			try ExternalWindowSystem.validateRegardlessOfSpace(
+				identity: binding.selection.identity,
+				windowElement: binding.selection.windowElement,
+				applicationElement: binding.selection.applicationElement
+			)
+		}
+		let current: Bool = try ExternalWindowSystem.boolAttribute(
 			kAXMinimizedAttribute as CFString,
-			of: binding.windowElement
+			of: binding.selection.windowElement
 		)
-		guard currentState != minimized else {
+		guard current != minimized else {
+			binding.lastAppliedMinimizedState = current
+			self.binding = binding
 			return
 		}
-		try requireSettable(
+		var settable: DarwinBoolean = false
+		let result = AXUIElementIsAttributeSettable(
+			binding.selection.windowElement,
 			kAXMinimizedAttribute as CFString,
-			on: binding.windowElement,
-			error: .windowCannotMinimize
+			&settable
 		)
-		try setBoolAttribute(
+		guard result == .success, settable.boolValue else {
+			throw ManagedExternalWindowError.windowCannotMinimize
+		}
+		try ExternalWindowSystem.setBoolAttribute(
 			kAXMinimizedAttribute as CFString,
 			value: minimized,
-			on: binding.windowElement,
+			on: binding.selection.windowElement,
 			operation: minimized ? "minimize external window" : "restore external window"
 		)
+		binding.lastAppliedMinimizedState = minimized
+		self.binding = binding
 	}
 
 	@discardableResult
 	func release(restoringOriginalFrame: Bool) -> Bool {
 		guard let binding else {
-			stopObserving()
+			clearBinding()
 			return true
 		}
 		guard restoringOriginalFrame else {
-			stopObserving()
-			self.binding = nil
+			clearBinding()
 			return true
 		}
-		guard isValid(binding) else {
-			return false
-		}
-
 		do {
-			try requireSameWindowRegardlessOfSpace(binding)
-			if let lastAppliedAccessibilityFrame = binding.lastAppliedAccessibilityFrame {
-				let currentAccessibilityFrame: CGRect = try accessibilityFrame(
-					of: binding.windowElement
+			try ExternalWindowSystem.validateRegardlessOfSpace(
+				identity: binding.selection.identity,
+				windowElement: binding.selection.windowElement,
+				applicationElement: binding.selection.applicationElement
+			)
+			if let appliedFrame = binding.lastAppliedAccessibilityFrame {
+				let currentFrame = try ExternalWindowSystem.accessibilityFrame(
+					of: binding.selection.windowElement
 				)
 				if managedExternalWindowFramesAreApproximatelyEqual(
-					currentAccessibilityFrame,
-					lastAppliedAccessibilityFrame
+					currentFrame,
+					appliedFrame
 				) {
-					try writeAccessibilityFrame(
+					try ExternalWindowSystem.writeFrame(
 						binding.originalAccessibilityFrame,
-						to: binding.windowElement
+						to: binding.selection.windowElement
 					)
 				}
 			}
-
-			let currentMinimizedState: Bool = try boolAttribute(
-				kAXMinimizedAttribute as CFString,
-				of: binding.windowElement
-			)
-			if currentMinimizedState != binding.originalMinimizedState {
-				try setBoolAttribute(
+			if let appliedMinimized = binding.lastAppliedMinimizedState {
+				let currentMinimized = try ExternalWindowSystem.boolAttribute(
 					kAXMinimizedAttribute as CFString,
-					value: binding.originalMinimizedState,
-					on: binding.windowElement,
-					operation: "restore external window minimized state"
+					of: binding.selection.windowElement
 				)
+				if currentMinimized == appliedMinimized,
+					currentMinimized != binding.originalMinimizedState
+				{
+					try ExternalWindowSystem.setBoolAttribute(
+						kAXMinimizedAttribute as CFString,
+						value: binding.originalMinimizedState,
+						on: binding.selection.windowElement,
+						operation: "restore external window minimized state"
+					)
+				}
 			}
-			stopObserving()
-			self.binding = nil
+			clearBinding()
 			return true
 		} catch {
 			return false
 		}
 	}
 
-	private func makeObservation(
-		applicationPID: pid_t,
-		windowElement: AXUIElement
-	) throws -> Observation {
-		observationGeneration &+= 1
-		let relay: ObserverRelay = .init(
-			owner: self,
-			generation: observationGeneration
+	private func schedulePendingApplyIfNeeded() {
+		guard applyTask == nil else { return }
+		applyTask = Task { @MainActor [weak self] in
+			await Task.yield()
+			guard let self else { return }
+			self.applyTask = nil
+			guard let frame = self.pendingApplyFrame else { return }
+			self.pendingApplyFrame = nil
+			do {
+				_ = try self.apply(appKitScreenFrame: frame)
+			} catch let error as ManagedExternalWindowError {
+				self.onApplyError?(error)
+			} catch {
+				self.onApplyError?(.windowUnavailable(self.identity))
+			}
+			if self.pendingApplyFrame != nil {
+				self.schedulePendingApplyIfNeeded()
+			}
+		}
+	}
+
+	private func requireCurrentSpace(_ binding: Binding) throws {
+		try ExternalWindowSystem.validateCurrentSpace(
+			identity: binding.selection.identity,
+			windowElement: binding.selection.windowElement,
+			applicationElement: binding.selection.applicationElement
 		)
+	}
+
+	private func makeObservation(selection: ExternalWindowSelection) throws -> Observation {
+		observationGeneration &+= 1
+		let relay = ObserverRelay(owner: self, generation: observationGeneration)
 		var createdObserver: AXObserver?
-		let createError: AXError = AXObserverCreate(
-			applicationPID,
-			{ _, _, notification, refcon in
-				guard let refcon,
-					let event: ManagedExternalWindowEvent = managedExternalWindowEvent(
+		let createError = AXObserverCreate(
+			selection.identity.processIdentifier,
+			{ _, _, notification, context in
+				guard let context,
+					let event = managedExternalWindowEvent(
 						forAccessibilityNotification: notification as String
 					)
-				else {
-					return
-				}
-				let relay: ObserverRelay = Unmanaged<ObserverRelay>
-					.fromOpaque(refcon)
+				else { return }
+				Unmanaged<ObserverRelay>
+					.fromOpaque(context)
 					.takeUnretainedValue()
-				relay.receive(event)
+					.receive(event)
 			},
 			&createdObserver
 		)
-		guard createError == .success, let observer: AXObserver = createdObserver else {
+		guard createError == .success, let observer = createdObserver else {
 			throw ManagedExternalWindowError.accessibilityOperationFailed(
 				operation: "create external window observer",
 				code: createError
 			)
 		}
-
 		let notifications: [CFString] = [
 			kAXMovedNotification as CFString,
 			kAXResizedNotification as CFString,
 			kAXUIElementDestroyedNotification as CFString,
 		]
-		var installedNotifications: [CFString] = []
-		for notification: CFString in notifications {
-			let addError: AXError = AXObserverAddNotification(
+		var installed: [CFString] = []
+		for notification in notifications {
+			let error = AXObserverAddNotification(
 				observer,
-				windowElement,
+				selection.windowElement,
 				notification,
 				Unmanaged.passUnretained(relay).toOpaque()
 			)
-			guard addError == .success else {
-				for installedNotification: CFString in installedNotifications {
-					AXObserverRemoveNotification(
-						observer,
-						windowElement,
-						installedNotification
-					)
+			guard error == .success else {
+				for existing in installed {
+					AXObserverRemoveNotification(observer, selection.windowElement, existing)
 				}
 				throw ManagedExternalWindowError.accessibilityOperationFailed(
 					operation: "observe external window notification \(notification)",
-					code: addError
+					code: error
 				)
 			}
-			installedNotifications.append(notification)
+			installed.append(notification)
 		}
-
 		let runLoop: CFRunLoop = CFRunLoopGetMain()
-		CFRunLoopAddSource(
-			runLoop,
-			AXObserverGetRunLoopSource(observer),
-			.commonModes
-		)
+		CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
 		return .init(
 			observer: observer,
-			windowElement: windowElement,
+			windowElement: selection.windowElement,
 			notifications: notifications,
 			runLoop: runLoop,
 			relay: relay
 		)
-	}
-
-	private func stopObserving() {
-		activeObservationGeneration = nil
-		observation?.invalidate()
-		observation = nil
 	}
 
 	private func receiveObservedEvent(
@@ -815,472 +1403,267 @@ final class ManagedExternalWindow {
 	) {
 		guard activeObservationGeneration == generation else { return }
 		if event == .destroyed {
-			stopObserving()
-			binding = nil
+			clearBinding()
+			onEvent?(.destroyed)
+			return
 		}
-		onEvent?(event)
-	}
-
-	private func snapshot() throws -> ManagedExternalWindowSnapshot {
-		guard let binding else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-		try requireValid(binding)
-		let accessibilityFrame: CGRect = try accessibilityFrame(of: binding.windowElement)
-		return .init(
-			applicationName: binding.applicationName,
-			title: binding.title,
-			processIdentifier: binding.processIdentifier,
-			repositoryName: binding.repositoryName,
-			appKitScreenFrame: try appKitScreenFrame(
-				fromAccessibilityFrame: accessibilityFrame
+		if let binding,
+			let appliedFrame = binding.lastAppliedAccessibilityFrame,
+			let currentFrame = try? ExternalWindowSystem.accessibilityFrame(
+				of: binding.selection.windowElement
 			),
-			isMinimized: try boolAttribute(
-				kAXMinimizedAttribute as CFString,
-				of: binding.windowElement
-			)
-		)
-	}
-
-	private func windows(of applicationElement: AXUIElement) throws -> [AXUIElement] {
-		var rawValue: CFTypeRef?
-		let error: AXError = AXUIElementCopyAttributeValue(
-			applicationElement,
-			kAXWindowsAttribute as CFString,
-			&rawValue
-		)
-		guard error == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "enumerate external windows",
-				code: error
-			)
+			managedExternalWindowFramesAreApproximatelyEqual(currentFrame, appliedFrame)
+		{
+			return
 		}
-		return rawValue as? [AXUIElement] ?? []
+		pendingObservedEvent = event == .resized ? .resized : (pendingObservedEvent ?? .moved)
+		guard observedEventTask == nil else { return }
+		observedEventTask = Task { @MainActor [weak self] in
+			await Task.yield()
+			guard let self else { return }
+			self.observedEventTask = nil
+			guard let event = self.pendingObservedEvent else { return }
+			self.pendingObservedEvent = nil
+			self.onEvent?(event)
+		}
 	}
 
-	private func candidate(
-		index: Int,
-		window: AXUIElement,
-		isOnCurrentSpace: Bool
-	) -> ManagedExternalWindowCandidate {
-		let windowFrame: CGRect? = try? accessibilityFrame(of: window)
-		return .init(
-			index: index,
-			role: stringAttribute(kAXRoleAttribute as CFString, of: window) ?? "",
-			subrole: stringAttribute(kAXSubroleAttribute as CFString, of: window),
-			title: stringAttribute(kAXTitleAttribute as CFString, of: window) ?? "",
-			document: stringAttribute(kAXDocumentAttribute as CFString, of: window),
-			accessibilityFrame: windowFrame,
-			isMinimized: (try? boolAttribute(kAXMinimizedAttribute as CFString, of: window))
-				?? false,
-			isOnCurrentSpace: isOnCurrentSpace
-		)
+	private func clearBinding() {
+		applyTask?.cancel()
+		applyTask = nil
+		pendingApplyFrame = nil
+		observedEventTask?.cancel()
+		observedEventTask = nil
+		pendingObservedEvent = nil
+		activeObservationGeneration = nil
+		observation?.invalidate()
+		observation = nil
+		binding = nil
+		identity = nil
+	}
+}
+
+@MainActor
+final class WindowDragObserver {
+	private enum MousePhase: Sendable {
+		case down
+		case dragged
+		case up
 	}
 
-	private func currentSpaceWindows(
-		applicationPID: pid_t
-	) -> [ManagedExternalWindowCurrentSpaceWindow] {
-		let options: CGWindowListOption = [
-			.optionOnScreenOnly,
-			.excludeDesktopElements,
+	private final class MonitorRelay: @unchecked Sendable {
+		private weak var owner: WindowDragObserver?
+
+		init(owner: WindowDragObserver) {
+			self.owner = owner
+		}
+
+		func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
+			Task { @MainActor [weak owner] in
+				owner?.receive(phase: phase, appKitScreenLocation: appKitScreenLocation)
+			}
+		}
+	}
+
+	private final class MonitorToken: @unchecked Sendable {
+		let value: Any
+
+		init(value: Any) {
+			self.value = value
+		}
+
+		deinit { NSEvent.removeMonitor(value) }
+	}
+
+	private struct PendingDrag {
+		let selection: ExternalWindowSelection
+		let initialSample: ExternalWindowDragSample
+		var currentSample: ExternalWindowDragSample
+		var isQualified: Bool
+	}
+
+	var onEvent: ExternalWindowDragEventHandler?
+	let qualificationConfiguration: ExternalWindowDragQualificationConfiguration
+	let excludedProcessIdentifiers: Set<pid_t>
+	private var monitor: MonitorToken?
+	private var relay: MonitorRelay?
+	private var pendingDrag: PendingDrag?
+
+	init(
+		qualificationConfiguration: ExternalWindowDragQualificationConfiguration = .init(),
+		excludedProcessIdentifiers: Set<pid_t> = [getpid()],
+		onEvent: ExternalWindowDragEventHandler? = nil
+	) {
+		self.qualificationConfiguration = qualificationConfiguration
+		self.excludedProcessIdentifiers = excludedProcessIdentifiers
+		self.onEvent = onEvent
+	}
+
+	func start(promptForAccessibility: Bool = false) throws {
+		guard monitor == nil else { return }
+		guard ManagedExternalWindow.permissionStatus(prompt: promptForAccessibility)
+			== .authorized
+		else {
+			throw ManagedExternalWindowError.accessibilityPermissionRequired
+		}
+		let relay = MonitorRelay(owner: self)
+		let mask: NSEvent.EventTypeMask = [
+			.leftMouseDown,
+			.leftMouseDragged,
+			.leftMouseUp,
 		]
-		guard let windowInfo: [[String: Any]] = CGWindowListCopyWindowInfo(
-			options,
-			kCGNullWindowID
-		) as? [[String: Any]] else {
-			return []
-		}
-
-		return windowInfo.compactMap { entry in
-			guard let ownerPID: NSNumber = entry[kCGWindowOwnerPID as String] as? NSNumber,
-				ownerPID.int32Value == applicationPID,
-				let windowID: NSNumber = entry[kCGWindowNumber as String] as? NSNumber,
-				let layer: NSNumber = entry[kCGWindowLayer as String] as? NSNumber,
-				layer.intValue == 0,
-				let isOnscreen: NSNumber = entry[kCGWindowIsOnscreen as String] as? NSNumber,
-				isOnscreen.boolValue,
-				let boundsDictionary: NSDictionary = entry[kCGWindowBounds as String]
-					as? NSDictionary
-			else {
-				return nil
+		guard let monitor = NSEvent.addGlobalMonitorForEvents(
+			matching: mask,
+			handler: { event in
+				let phase: MousePhase
+				switch event.type {
+				case .leftMouseDown: phase = .down
+				case .leftMouseDragged: phase = .dragged
+				case .leftMouseUp: phase = .up
+				default: return
+				}
+				relay.receive(
+					phase: phase,
+					appKitScreenLocation: NSEvent.mouseLocation
+				)
 			}
-			let bounds: CFDictionary = boundsDictionary as CFDictionary
-			guard let frame: CGRect = CGRect(dictionaryRepresentation: bounds) else {
-				return nil
+		) else {
+			throw ManagedExternalWindowError.globalMonitorUnavailable
+		}
+		self.relay = relay
+		self.monitor = .init(value: monitor)
+	}
+
+	func stop() {
+		if let pendingDrag, pendingDrag.isQualified {
+			onEvent?(
+				.cancelled(
+					identity: pendingDrag.selection.identity,
+					reason: .observerStopped
+				)
+			)
+		}
+		pendingDrag = nil
+		monitor = nil
+		relay = nil
+	}
+
+	private func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
+		switch phase {
+		case .down:
+			beginPendingDrag(at: appKitScreenLocation)
+		case .dragged:
+			updatePendingDrag(at: appKitScreenLocation)
+		case .up:
+			endPendingDrag(at: appKitScreenLocation)
+		}
+	}
+
+	private func beginPendingDrag(at location: CGPoint) {
+		pendingDrag = nil
+		guard let selection = try? ManagedExternalWindow.selectWindow(
+			atAppKitScreenPoint: location,
+			excludingProcessIdentifiers: excludedProcessIdentifiers
+		) else { return }
+		let sample = ExternalWindowDragSample(
+			mouseAppKitScreenLocation: location,
+			windowAppKitScreenFrame: selection.initialSnapshot.appKitScreenFrame
+		)
+		pendingDrag = .init(
+			selection: selection,
+			initialSample: sample,
+			currentSample: sample,
+			isQualified: false
+		)
+	}
+
+	private func updatePendingDrag(at location: CGPoint) {
+		guard var pendingDrag else { return }
+		do {
+			try ExternalWindowSystem.validateElement(
+				identity: pendingDrag.selection.identity,
+				windowElement: pendingDrag.selection.windowElement
+			)
+			let current = try snapshot(pendingDrag.selection)
+			pendingDrag.currentSample = .init(
+				mouseAppKitScreenLocation: location,
+				windowAppKitScreenFrame: current.appKitScreenFrame
+			)
+			let dragSnapshot = ExternalWindowDragSnapshot(
+				selection: pendingDrag.selection,
+				initialSample: pendingDrag.initialSample,
+				currentSample: pendingDrag.currentSample
+			)
+			if pendingDrag.isQualified {
+				onEvent?(.changed(dragSnapshot))
+			} else if qualifiesExternalWindowDrag(
+				initial: pendingDrag.initialSample,
+				current: pendingDrag.currentSample,
+				configuration: qualificationConfiguration
+			) {
+				pendingDrag.isQualified = true
+				onEvent?(.began(dragSnapshot))
 			}
-			return .init(
-				windowID: CGWindowID(windowID.uint32Value),
-				title: entry[kCGWindowName as String] as? String,
-				accessibilityFrame: frame
+			self.pendingDrag = pendingDrag
+		} catch {
+			cancelPendingDrag(reason: .windowUnavailable)
+		}
+	}
+
+	private func endPendingDrag(at location: CGPoint) {
+		guard let pendingDrag else { return }
+		defer { self.pendingDrag = nil }
+		guard pendingDrag.isQualified else { return }
+		do {
+			try validate(pendingDrag.selection)
+			let current = try snapshot(pendingDrag.selection)
+			onEvent?(
+				.ended(
+					.init(
+						selection: pendingDrag.selection,
+						initialSample: pendingDrag.initialSample,
+						currentSample: .init(
+							mouseAppKitScreenLocation: location,
+							windowAppKitScreenFrame: current.appKitScreenFrame
+						)
+					)
+				)
+			)
+		} catch {
+			onEvent?(
+				.cancelled(
+					identity: pendingDrag.selection.identity,
+					reason: .windowUnavailable
+				)
 			)
 		}
 	}
 
-	private func correlateCurrentSpaceWindows(
-		windows: [AXUIElement],
-		applicationPID: pid_t
-	) -> [Int: CGWindowID] {
-		let candidates: [ManagedExternalWindowCandidate] = windows.enumerated().map {
-			index,
-			window in
-			candidate(index: index, window: window, isOnCurrentSpace: false)
-		}
-		return managedExternalWindowCurrentSpaceCorrelations(
-			candidates: candidates,
-			currentSpaceWindows: currentSpaceWindows(
-				applicationPID: applicationPID
-			)
+	private func cancelPendingDrag(reason: ExternalWindowDragCancellationReason) {
+		guard let pendingDrag else { return }
+		self.pendingDrag = nil
+		guard pendingDrag.isQualified else { return }
+		onEvent?(
+			.cancelled(identity: pendingDrag.selection.identity, reason: reason)
 		)
 	}
 
-	private func requireOnCurrentSpace(_ binding: Binding) throws {
-		let applicationWindows: [AXUIElement] = try windows(
-			of: binding.applicationElement
-		)
-		guard let boundWindowIndex: Int = applicationWindows.firstIndex(where: {
-			CFEqual($0, binding.windowElement)
-		}) else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-		let currentSpaceCorrelations: [Int: CGWindowID] = correlateCurrentSpaceWindows(
-			windows: applicationWindows,
-			applicationPID: binding.processIdentifier
-		)
-		guard currentSpaceCorrelations[boundWindowIndex] == binding.windowID else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace
-		}
-	}
-
-	private func requireSameWindowRegardlessOfSpace(_ binding: Binding) throws {
-		let windowIDs: [NSNumber] = [NSNumber(value: binding.windowID)]
-		guard let windowInfo: [[String: Any]] = CGWindowListCreateDescriptionFromArray(
-			windowIDs as CFArray
-		) as? [[String: Any]] else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-		let matchingEntries: [[String: Any]] = windowInfo.filter { entry in
-			guard let windowID: NSNumber = entry[kCGWindowNumber as String] as? NSNumber,
-				CGWindowID(windowID.uint32Value) == binding.windowID,
-				let ownerPID: NSNumber = entry[kCGWindowOwnerPID as String] as? NSNumber,
-				ownerPID.int32Value == binding.processIdentifier,
-				let layer: NSNumber = entry[kCGWindowLayer as String] as? NSNumber,
-				layer.intValue == 0
-			else {
-				return false
-			}
-			return true
-		}
-		guard matchingEntries.count == 1,
-			let matchingEntry: [String: Any] = matchingEntries.first,
-			let boundsDictionary: NSDictionary = matchingEntry[kCGWindowBounds as String]
-				as? NSDictionary,
-			let windowFrame: CGRect = CGRect(
-				dictionaryRepresentation: boundsDictionary as CFDictionary
-			),
-			managedExternalWindowFramesAreApproximatelyEqual(
-				try accessibilityFrame(of: binding.windowElement),
-				windowFrame,
-				tolerance: 2
-			),
-			let document: String = stringAttribute(
-				kAXDocumentAttribute as CFString,
-				of: binding.windowElement
-			),
-			externalWindowDocument(document, isInside: binding.repositoryURL)
-		else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-	}
-
-	private func requireValid(_ binding: Binding) throws {
-		guard isValid(binding) else {
-			throw ManagedExternalWindowError.windowUnavailable
-		}
-	}
-
-	private func isValid(_ binding: Binding) -> Bool {
-		var currentProcessIdentifier: pid_t = 0
-		guard AXUIElementGetPid(
-			binding.windowElement,
-			&currentProcessIdentifier
-		) == .success,
-			currentProcessIdentifier == binding.processIdentifier,
-			stringAttribute(kAXRoleAttribute as CFString, of: binding.windowElement)
-				== kAXWindowRole
-		else {
-			return false
-		}
-		return true
-	}
-
-	private func requireSettable(
-		_ attribute: CFString,
-		on element: AXUIElement,
-		error unavailableError: ManagedExternalWindowError
-	) throws {
-		var settable: DarwinBoolean = false
-		let result: AXError = AXUIElementIsAttributeSettable(
-			element,
-			attribute,
-			&settable
-		)
-		guard result == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "test \(attribute) writability",
-				code: result
-			)
-		}
-		guard settable.boolValue else {
-			throw unavailableError
-		}
-	}
-
-	private func accessibilityFrame(
-		fromAppKitScreenFrame frame: CGRect
-	) throws -> CGRect {
-		guard let menuBarScreenFrame: CGRect = NSScreen.screens.first?.frame else {
-			throw ManagedExternalWindowError.noScreens
-		}
-		return managedExternalWindowAccessibilityFrame(
-			fromAppKitScreenFrame: frame,
-			menuBarScreenFrame: menuBarScreenFrame
+	private func validate(_ selection: ExternalWindowSelection) throws {
+		try ExternalWindowSystem.validateCurrentSpace(
+			identity: selection.identity,
+			windowElement: selection.windowElement,
+			applicationElement: selection.applicationElement
 		)
 	}
 
-	private func appKitScreenFrame(
-		fromAccessibilityFrame frame: CGRect
-	) throws -> CGRect {
-		guard let menuBarScreenFrame: CGRect = NSScreen.screens.first?.frame else {
-			throw ManagedExternalWindowError.noScreens
-		}
-		return managedExternalWindowAppKitScreenFrame(
-			fromAccessibilityFrame: frame,
-			menuBarScreenFrame: menuBarScreenFrame
+	private func snapshot(
+		_ selection: ExternalWindowSelection
+	) throws -> ManagedExternalWindowSnapshot {
+		try ExternalWindowSystem.snapshot(
+			identity: selection.identity,
+			windowElement: selection.windowElement
 		)
 	}
-
-	private func accessibilityFrame(of window: AXUIElement) throws -> CGRect {
-		let position: CGPoint = try pointAttribute(
-			kAXPositionAttribute as CFString,
-			of: window
-		)
-		let size: CGSize = try sizeAttribute(
-			kAXSizeAttribute as CFString,
-			of: window
-		)
-		return .init(origin: position, size: size)
-	}
-
-	private func writeAccessibilityFrame(
-		_ frame: CGRect,
-		to window: AXUIElement
-	) throws {
-		var size: CGSize = frame.size
-		guard let sizeValue: AXValue = AXValueCreate(.cgSize, &size) else {
-			throw ManagedExternalWindowError.invalidFrame(frame)
-		}
-		try setAttribute(
-			kAXSizeAttribute as CFString,
-			value: sizeValue,
-			on: window,
-			operation: "resize external window"
-		)
-
-		var position: CGPoint = frame.origin
-		guard let positionValue: AXValue = AXValueCreate(.cgPoint, &position) else {
-			throw ManagedExternalWindowError.invalidFrame(frame)
-		}
-		try setAttribute(
-			kAXPositionAttribute as CFString,
-			value: positionValue,
-			on: window,
-			operation: "move external window"
-		)
-	}
-
-	private func stringAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) -> String? {
-		var rawValue: CFTypeRef?
-		let error: AXError = AXUIElementCopyAttributeValue(element, attribute, &rawValue)
-		guard error == .success else {
-			return nil
-		}
-		return rawValue as? String
-	}
-
-	private func boolAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) throws -> Bool {
-		var rawValue: CFTypeRef?
-		let error: AXError = AXUIElementCopyAttributeValue(element, attribute, &rawValue)
-		guard error == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "read \(attribute)",
-				code: error
-			)
-		}
-		guard let value: Bool = rawValue as? Bool else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		return value
-	}
-
-	private func pointAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) throws -> CGPoint {
-		let value: AXValue = try axValueAttribute(attribute, of: element)
-		guard AXValueGetType(value) == .cgPoint else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		var point: CGPoint = .zero
-		guard AXValueGetValue(value, .cgPoint, &point) else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		return point
-	}
-
-	private func sizeAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) throws -> CGSize {
-		let value: AXValue = try axValueAttribute(attribute, of: element)
-		guard AXValueGetType(value) == .cgSize else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		var size: CGSize = .zero
-		guard AXValueGetValue(value, .cgSize, &size) else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		return size
-	}
-
-	private func axValueAttribute(
-		_ attribute: CFString,
-		of element: AXUIElement
-	) throws -> AXValue {
-		var rawValue: CFTypeRef?
-		let error: AXError = AXUIElementCopyAttributeValue(element, attribute, &rawValue)
-		guard error == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "read \(attribute)",
-				code: error
-			)
-		}
-		guard let rawValue,
-			CFGetTypeID(rawValue) == AXValueGetTypeID()
-		else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: "decode \(attribute)",
-				code: .failure
-			)
-		}
-		let value: AXValue = rawValue as! AXValue
-		return value
-	}
-
-	private func setAttribute(
-		_ attribute: CFString,
-		value: CFTypeRef,
-		on element: AXUIElement,
-		operation: String
-	) throws {
-		let error: AXError = AXUIElementSetAttributeValue(element, attribute, value)
-		guard error == .success else {
-			throw ManagedExternalWindowError.accessibilityOperationFailed(
-				operation: operation,
-				code: error
-			)
-		}
-	}
-
-	private func setBoolAttribute(
-		_ attribute: CFString,
-		value: Bool,
-		on element: AXUIElement,
-		operation: String
-	) throws {
-		let booleanValue: CFBoolean = value ? kCFBooleanTrue : kCFBooleanFalse
-		try setAttribute(
-			attribute,
-			value: booleanValue,
-			on: element,
-			operation: operation
-		)
-	}
-}
-
-private func normalizedExternalWindowMatchText(_ value: String) -> String {
-	value
-		.trimmingCharacters(in: .whitespacesAndNewlines)
-		.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-}
-
-private func externalWindowDocument(
-	_ value: String,
-	isInside repositoryURL: URL
-) -> Bool {
-	guard let documentURL: URL = externalWindowFileURL(value) else {
-		return false
-	}
-	let documentPath: String = documentURL.standardizedFileURL
-		.resolvingSymlinksInPath()
-		.path
-	let repositoryPath: String = repositoryURL.standardizedFileURL
-		.resolvingSymlinksInPath()
-		.path
-	guard documentPath != repositoryPath else {
-		return true
-	}
-	let repositoryPrefix: String = repositoryPath.hasSuffix("/")
-		? repositoryPath
-		: repositoryPath + "/"
-	return documentPath.hasPrefix(repositoryPrefix)
-}
-
-private func externalWindowFileURL(_ value: String?) -> URL? {
-	guard let value else { return nil }
-	let trimmedValue: String = value.trimmingCharacters(in: .whitespacesAndNewlines)
-	guard !trimmedValue.isEmpty else { return nil }
-	if trimmedValue.hasPrefix("/") {
-		guard !trimmedValue.hasPrefix("//") else { return nil }
-		return URL(fileURLWithPath: trimmedValue)
-	}
-	guard let url: URL = URL(string: trimmedValue),
-		url.isFileURL,
-		url.user == nil,
-		url.password == nil,
-		url.port == nil,
-		url.path.hasPrefix("/"),
-		!url.path.hasPrefix("//")
-	else {
-		return nil
-	}
-	if let host: String = url.host,
-		!host.isEmpty,
-		host.caseInsensitiveCompare("localhost") != .orderedSame
-	{
-		return nil
-	}
-	return url
 }
 
 private extension CGRect {
