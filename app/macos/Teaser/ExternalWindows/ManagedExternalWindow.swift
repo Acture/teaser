@@ -2,6 +2,11 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import OSLog
+
+enum ExternalWindowDiagnostics {
+	static let logger: Logger = .init(subsystem: "com.acture.teaser", category: "window-adoption")
+}
 
 enum ExternalWindowPermissionStatus: Equatable, Sendable {
 	case authorized
@@ -734,7 +739,7 @@ private enum ExternalWindowSystem {
 		)
 	}
 
-	private static func currentSpaceWindows(
+	static func currentSpaceWindows(
 		processIdentifier: pid_t? = nil
 	) -> [ExternalWindowCurrentSpaceWindow] {
 		guard let info = CGWindowListCopyWindowInfo(
@@ -987,6 +992,11 @@ final class ManagedExternalWindow {
 		identity: ExternalWindowIdentity
 	) throws -> ExternalWindowSelection {
 		try ExternalWindowSystem.selection(identity: identity)
+	}
+
+	static func visibleWindowIdentities(processIdentifier: pid_t) -> [ExternalWindowIdentity] {
+		ExternalWindowSystem.currentSpaceWindows(processIdentifier: processIdentifier)
+			.filter { $0.layer == 0 && $0.isOnscreen }.map(\.identity)
 	}
 
 	@discardableResult
@@ -1527,10 +1537,11 @@ final class WindowDragObserver {
 		}
 		pollingTimer = timer
 		RunLoop.main.add(timer, forMode: .common)
-		NSLog("Teaser: window drag observer started")
+		ExternalWindowDiagnostics.logger.notice("observer-started")
 	}
 
 	func stop() {
+		if monitor != nil { ExternalWindowDiagnostics.logger.notice("observer-stopped") }
 		pollingTimer?.invalidate()
 		pollingTimer = nil
 		mouseIsDown = false
@@ -1594,13 +1605,16 @@ final class WindowDragObserver {
 			)
 		} catch {
 			selectionFailure = error.localizedDescription
-			NSLog("Teaser: window selection failed: %@", error.localizedDescription)
+			// This error type contains geometry/API errors, never window titles
+			// or provider document contents. Keep the reason available in logs.
+			ExternalWindowDiagnostics.logger.notice("candidate-rejected: \(error.localizedDescription, privacy: .public)")
 			return
 		}
 		let sample = ExternalWindowDragSample(
 			mouseAppKitScreenLocation: location,
 			windowAppKitScreenFrame: selection.initialSnapshot.appKitScreenFrame
 		)
+		ExternalWindowDiagnostics.logger.notice("candidate-selected pid=\(selection.identity.processIdentifier, privacy: .public) window=\(selection.identity.windowID, privacy: .public)")
 		pendingDrag = .init(
 			selection: selection,
 			initialSample: sample,
@@ -1637,11 +1651,12 @@ final class WindowDragObserver {
 				configuration: qualificationConfiguration
 			) {
 				pendingDrag.isQualified = true
-				NSLog("Teaser: window drag qualified pid=%d window=%u", pendingDrag.selection.identity.processIdentifier, pendingDrag.selection.identity.windowID)
+				ExternalWindowDiagnostics.logger.notice("drag-qualified pid=\(pendingDrag.selection.identity.processIdentifier, privacy: .public) window=\(pendingDrag.selection.identity.windowID, privacy: .public)")
 				onEvent?(.began(dragSnapshot))
 			}
 			self.pendingDrag = pendingDrag
 		} catch {
+			ExternalWindowDiagnostics.logger.notice("drag-sample-rejected: \(error.localizedDescription, privacy: .public)")
 			onDiagnostic?(error.localizedDescription)
 			cancelPendingDrag(reason: .windowUnavailable)
 		}
@@ -1656,6 +1671,7 @@ final class WindowDragObserver {
 		do {
 			try validate(pendingDrag.selection)
 			let current = try snapshot(pendingDrag.selection)
+			ExternalWindowDiagnostics.logger.notice("drag-ended pid=\(pendingDrag.selection.identity.processIdentifier, privacy: .public) window=\(pendingDrag.selection.identity.windowID, privacy: .public)")
 			onEvent?(
 				.ended(
 					.init(
@@ -1669,6 +1685,7 @@ final class WindowDragObserver {
 				)
 			)
 		} catch {
+			ExternalWindowDiagnostics.logger.notice("drop-revalidation-rejected: \(error.localizedDescription, privacy: .public)")
 			onDiagnostic?(error.localizedDescription)
 			onEvent?(
 				.cancelled(

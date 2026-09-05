@@ -205,6 +205,7 @@ final class DesktopStageController: NSObject {
 			try solveAndApply(synchronously: true)
 			try dragObserver.start()
 			try managedWindowFocusObserver.start()
+			ExternalWindowDiagnostics.logger.notice("stage-ready panels=\(self.layout?.panelFrames.count ?? 0, privacy: .public)")
 			controlWindow.close()
 			setStatus("Drag a window by its title bar into a Panel")
 		} catch {
@@ -492,6 +493,9 @@ final class DesktopStageController: NSObject {
 			dropHighlight = dropHighlight(
 				at: snapshot.currentSample.mouseAppKitScreenLocation
 			)
+			if case .began = event {
+				ExternalWindowDiagnostics.logger.notice("drag-target highlighted=\(self.dropHighlight != nil, privacy: .public)")
+			}
 			updateChrome()
 		case .ended(let snapshot):
 			draggingIdentity = nil
@@ -505,6 +509,7 @@ final class DesktopStageController: NSObject {
 	}
 
 	private func acceptDrop(_ drag: ExternalWindowDragSnapshot) {
+		ExternalWindowDiagnostics.logger.notice("drop-received")
 		let identity: ExternalWindowIdentity = drag.selection.identity
 		let sourcePanelID: PanelID? = panelAssignments.first {
 			$0.value == identity

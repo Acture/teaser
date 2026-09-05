@@ -100,6 +100,24 @@ and divider handles for input, never a display-sized mouse shield.
 selected Panel. Layout Undo is `Ctrl+Option+Z` in Arrange or the menu action;
 `Cmd+Z` remains exclusively with the app receiving keyboard input.
 
+For read-only window-selection diagnostics, run the signed bundle's executable
+with `--inspect-windows PID`. It reports current-Space window IDs, AX permission,
+and selection failures without showing the stage, prompting, or moving windows:
+
+```fish
+target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
+```
+
+Replace `PID` with the selected provider process. No selectable window returns
+exit status 1; invalid arguments return 2. This is not a drag/placement test.
+`--observe-window-drag PID WINDOW_ID` passively watches one specified window for
+20 seconds without showing or adopting anything. It prints `BEGAN` and `ENDED`
+and returns 0 only after a complete qualified drag; timeout returns 1. A human or
+an authorized UI test driver must actually drag that window during observation.
+Runtime drag milestones use the `com.acture.teaser` log subsystem and
+`window-adoption` category; window titles and provider document contents are not
+included.
+
 To run the current foreground daemon prototype:
 
 ```fish

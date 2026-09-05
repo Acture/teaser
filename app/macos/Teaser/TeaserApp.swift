@@ -4,6 +4,9 @@ import AppKit
 @MainActor
 enum TeaserMain {
 	static func main() {
+		if let exitCode: Int32 = ExternalWindowInspection.run(arguments: Array(CommandLine.arguments.dropFirst())) {
+			Darwin.exit(exitCode)
+		}
 		let application: NSApplication = .shared
 		let delegate: TeaserApplicationDelegate = .init()
 		application.delegate = delegate
