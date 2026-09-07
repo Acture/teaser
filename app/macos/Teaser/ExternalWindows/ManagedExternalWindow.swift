@@ -365,7 +365,7 @@ func qualifiesExternalWindowDrag(
 }
 
 @MainActor
-final class ExternalWindowSelection {
+final class ExternalWindowSelection: ExternalWindowHandle {
 	let identity: ExternalWindowIdentity
 	let initialSnapshot: ManagedExternalWindowSnapshot
 	fileprivate let applicationElement: AXUIElement
@@ -391,7 +391,7 @@ final class ExternalWindowSelection {
 }
 
 struct ExternalWindowDragSnapshot {
-	let selection: ExternalWindowSelection
+	let selection: any ExternalWindowHandle
 	let initialSample: ExternalWindowDragSample
 	let currentSample: ExternalWindowDragSample
 }
@@ -1434,133 +1434,200 @@ final class ManagedExternalWindow {
 	}
 }
 
+extension ManagedExternalWindow: ExternalWindowLease {
+	/// A lease binds live Accessibility references only. A substitute handle is
+	/// rejected here instead of being adapted into a usable AX object.
+	@discardableResult
+	func bind(handle: any ExternalWindowHandle) throws -> ManagedExternalWindowSnapshot {
+		guard let selection = handle as? ExternalWindowSelection else {
+			throw ManagedExternalWindowError.windowUnavailable(handle.identity)
+		}
+		return try bind(selection: selection)
+	}
+}
+
+/// The production `ExternalWindowService`. Accessibility objects stay inside this
+/// file; the boundary carries only identities, snapshots, and opaque handles.
+@MainActor
+final class SystemExternalWindowService: ExternalWindowService {
+	static let shared: SystemExternalWindowService = .init()
+
+	func permissionStatus(prompt: Bool) -> ExternalWindowPermissionStatus {
+		ExternalWindowSystem.permissionStatus(prompt: prompt)
+	}
+
+	func selectWindow(
+		atAppKitScreenPoint point: CGPoint,
+		excludingProcessIdentifiers: Set<pid_t>
+	) throws -> any ExternalWindowHandle {
+		try ExternalWindowSystem.selection(
+			atAppKitScreenPoint: point,
+			excludingProcessIdentifiers: excludingProcessIdentifiers
+		)
+	}
+
+	func selectWindow(identity: ExternalWindowIdentity) throws -> any ExternalWindowHandle {
+		try ExternalWindowSystem.selection(identity: identity)
+	}
+
+	func validateIdentity(of handle: any ExternalWindowHandle) throws {
+		let selection: ExternalWindowSelection = try Self.selection(handle)
+		try ExternalWindowSystem.validateElement(
+			identity: selection.identity,
+			windowElement: selection.windowElement
+		)
+	}
+
+	func validateCurrentSpace(of handle: any ExternalWindowHandle) throws {
+		let selection: ExternalWindowSelection = try Self.selection(handle)
+		try ExternalWindowSystem.validateCurrentSpace(
+			identity: selection.identity,
+			windowElement: selection.windowElement,
+			applicationElement: selection.applicationElement
+		)
+	}
+
+	func snapshot(
+		of handle: any ExternalWindowHandle
+	) throws -> ManagedExternalWindowSnapshot {
+		let selection: ExternalWindowSelection = try Self.selection(handle)
+		return try ExternalWindowSystem.snapshot(
+			identity: selection.identity,
+			windowElement: selection.windowElement
+		)
+	}
+
+	func bundleIdentifier(forProcessIdentifier processIdentifier: pid_t) -> String? {
+		NSRunningApplication(processIdentifier: processIdentifier)?.bundleIdentifier
+	}
+
+	func makeLease(
+		onEvent: @escaping ManagedExternalWindowEventHandler,
+		onApplyError: @escaping ManagedExternalWindowApplyErrorHandler
+	) -> any ExternalWindowLease {
+		ManagedExternalWindow(onEvent: onEvent, onApplyError: onApplyError)
+	}
+
+	private static func selection(
+		_ handle: any ExternalWindowHandle
+	) throws -> ExternalWindowSelection {
+		guard let selection = handle as? ExternalWindowSelection else {
+			throw ManagedExternalWindowError.windowUnavailable(handle.identity)
+		}
+		return selection
+	}
+}
+
 @MainActor
 final class WindowDragObserver {
-	private enum MousePhase: Sendable {
-		case down
-		case dragged
-		case up
-	}
-
-	private final class MonitorRelay: @unchecked Sendable {
-		private weak var owner: WindowDragObserver?
-
-		init(owner: WindowDragObserver) {
-			self.owner = owner
-		}
-
-		func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
-			Task { @MainActor [weak owner, self] in
-				guard owner?.relay === self else { return }
-				owner?.receive(phase: phase, appKitScreenLocation: appKitScreenLocation)
-			}
-		}
-	}
-
-	private final class MonitorToken: @unchecked Sendable {
-		let value: Any
-
-		init(value: Any) {
-			self.value = value
-		}
-
-		deinit { NSEvent.removeMonitor(value) }
-	}
-
 	private struct PendingDrag {
-		let selection: ExternalWindowSelection
+		let handle: any ExternalWindowHandle
 		let initialSample: ExternalWindowDragSample
 		var currentSample: ExternalWindowDragSample
 		var isQualified: Bool
 	}
 
+	/// Resampling floor for a held drag; the production pointer source delivers
+	/// button-state samples at the same rate.
+	private static let samplingInterval: TimeInterval = 1.0 / 30.0
+	/// A rejected candidate is reported only once the press becomes a real drag.
+	private static let diagnosticMovementThreshold: CGFloat = 10
+
 	var onEvent: ExternalWindowDragEventHandler?
 	var onDiagnostic: (@MainActor @Sendable (String) -> Void)?
 	let qualificationConfiguration: ExternalWindowDragQualificationConfiguration
 	let excludedProcessIdentifiers: Set<pid_t>
-	private var monitor: MonitorToken?
-	private var relay: MonitorRelay?
+	private let service: any ExternalWindowService
+	private let clock: any ExternalWindowClock
+	private let pointerSource: any ExternalWindowPointerSource
+	private var isObserving: Bool = false
 	private var pendingDrag: PendingDrag?
-	private var pollingTimer: Timer?
 	private var mouseIsDown: Bool = false
 	private var selectionFailure: String?
 	private var pressLocation: CGPoint?
-	private var lastSampleTime: TimeInterval = 0
+	private var lastSampleTime: TimeInterval?
 
 	init(
+		service: any ExternalWindowService,
+		clock: any ExternalWindowClock,
+		pointerSource: any ExternalWindowPointerSource,
 		qualificationConfiguration: ExternalWindowDragQualificationConfiguration = .init(),
 		excludedProcessIdentifiers: Set<pid_t> = [getpid()],
 		onEvent: ExternalWindowDragEventHandler? = nil
 	) {
+		self.service = service
+		self.clock = clock
+		self.pointerSource = pointerSource
 		self.qualificationConfiguration = qualificationConfiguration
 		self.excludedProcessIdentifiers = excludedProcessIdentifiers
 		self.onEvent = onEvent
 	}
 
+	convenience init(
+		qualificationConfiguration: ExternalWindowDragQualificationConfiguration = .init(),
+		excludedProcessIdentifiers: Set<pid_t> = [getpid()],
+		onEvent: ExternalWindowDragEventHandler? = nil
+	) {
+		self.init(
+			service: SystemExternalWindowService.shared,
+			clock: SystemExternalWindowClock(),
+			pointerSource: SystemExternalWindowPointerSource(),
+			qualificationConfiguration: qualificationConfiguration,
+			excludedProcessIdentifiers: excludedProcessIdentifiers,
+			onEvent: onEvent
+		)
+	}
+
 	func start(promptForAccessibility: Bool = false) throws {
-		guard monitor == nil else { return }
-		guard ManagedExternalWindow.permissionStatus(prompt: promptForAccessibility)
-			== .authorized
-		else {
+		guard !isObserving else { return }
+		guard service.permissionStatus(prompt: promptForAccessibility) == .authorized else {
 			throw ManagedExternalWindowError.accessibilityPermissionRequired
 		}
-		let relay = MonitorRelay(owner: self)
-		let mask: NSEvent.EventTypeMask = [
-			.leftMouseDown,
-			.leftMouseDragged,
-			.leftMouseUp,
-		]
-		guard let monitor = NSEvent.addGlobalMonitorForEvents(
-			matching: mask,
-			handler: { event in
-				let phase: MousePhase
-				switch event.type {
-				case .leftMouseDown: phase = .down
-				case .leftMouseDragged: phase = .dragged
-				case .leftMouseUp: phase = .up
-				default: return
-				}
-				relay.receive(
-					phase: phase,
-					appKitScreenLocation: NSEvent.mouseLocation
-				)
-			}
-		) else {
-			throw ManagedExternalWindowError.globalMonitorUnavailable
+		try pointerSource.start { [weak self] event in
+			self?.receive(event)
 		}
-		self.relay = relay
-		self.monitor = .init(value: monitor)
-		// Native title-bar tracking can omit NSEvent drag/up deliveries. Sample
-		// actual button state and the selected window until release as well.
-		let timer: Timer = .init(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-			MainActor.assumeIsolated { self?.pollMouse() }
-		}
-		pollingTimer = timer
-		RunLoop.main.add(timer, forMode: .common)
+		isObserving = true
 		ExternalWindowDiagnostics.logger.notice("observer-started")
 	}
 
 	func stop() {
-		if monitor != nil { ExternalWindowDiagnostics.logger.notice("observer-stopped") }
-		pollingTimer?.invalidate()
-		pollingTimer = nil
+		if isObserving { ExternalWindowDiagnostics.logger.notice("observer-stopped") }
+		isObserving = false
+		pointerSource.stop()
 		mouseIsDown = false
 		pressLocation = nil
 		selectionFailure = nil
+		lastSampleTime = nil
 		if let pendingDrag, pendingDrag.isQualified {
 			onEvent?(
 				.cancelled(
-					identity: pendingDrag.selection.identity,
+					identity: pendingDrag.handle.identity,
 					reason: .observerStopped
 				)
 			)
 		}
 		pendingDrag = nil
-		monitor = nil
-		relay = nil
 	}
 
-	private func receive(phase: MousePhase, appKitScreenLocation: CGPoint) {
+	private func receive(_ event: ExternalWindowPointerEvent) {
+		switch event {
+		case .monitored(let phase, let location):
+			receive(phase: phase, appKitScreenLocation: location)
+		case .sampled(let isButtonDown, let location):
+			if isButtonDown && !mouseIsDown {
+				receive(phase: .down, appKitScreenLocation: location)
+			} else if !isButtonDown && mouseIsDown {
+				receive(phase: .up, appKitScreenLocation: location)
+			} else if isButtonDown {
+				receive(phase: .dragged, appKitScreenLocation: location)
+			}
+		}
+	}
+
+	private func receive(
+		phase: ExternalWindowPointerPhase,
+		appKitScreenLocation: CGPoint
+	) {
 		switch phase {
 		case .down:
 			guard !mouseIsDown else { return }
@@ -1569,7 +1636,8 @@ final class WindowDragObserver {
 			beginPendingDrag(at: appKitScreenLocation)
 		case .dragged:
 			if let selectionFailure, let pressLocation,
-				hypot(appKitScreenLocation.x - pressLocation.x, appKitScreenLocation.y - pressLocation.y) >= 10
+				hypot(appKitScreenLocation.x - pressLocation.x, appKitScreenLocation.y - pressLocation.y)
+					>= Self.diagnosticMovementThreshold
 			{
 				onDiagnostic?(selectionFailure)
 				self.selectionFailure = nil
@@ -1581,25 +1649,13 @@ final class WindowDragObserver {
 		}
 	}
 
-	private func pollMouse() {
-		let isDown: Bool = CGEventSource.buttonState(.combinedSessionState, button: .left)
-		let point: CGPoint = NSEvent.mouseLocation
-		if isDown && !mouseIsDown {
-			receive(phase: .down, appKitScreenLocation: point)
-		} else if !isDown && mouseIsDown {
-			receive(phase: .up, appKitScreenLocation: point)
-		} else if isDown {
-			receive(phase: .dragged, appKitScreenLocation: point)
-		}
-	}
-
 	private func beginPendingDrag(at location: CGPoint) {
-		lastSampleTime = 0
+		lastSampleTime = nil
 		pendingDrag = nil
 		selectionFailure = nil
-		let selection: ExternalWindowSelection
+		let handle: any ExternalWindowHandle
 		do {
-			selection = try ManagedExternalWindow.selectWindow(
+			handle = try service.selectWindow(
 				atAppKitScreenPoint: location,
 				excludingProcessIdentifiers: excludedProcessIdentifiers
 			)
@@ -1612,11 +1668,11 @@ final class WindowDragObserver {
 		}
 		let sample = ExternalWindowDragSample(
 			mouseAppKitScreenLocation: location,
-			windowAppKitScreenFrame: selection.initialSnapshot.appKitScreenFrame
+			windowAppKitScreenFrame: handle.initialSnapshot.appKitScreenFrame
 		)
-		ExternalWindowDiagnostics.logger.notice("candidate-selected pid=\(selection.identity.processIdentifier, privacy: .public) window=\(selection.identity.windowID, privacy: .public)")
+		ExternalWindowDiagnostics.logger.notice("candidate-selected pid=\(handle.identity.processIdentifier, privacy: .public) window=\(handle.identity.windowID, privacy: .public)")
 		pendingDrag = .init(
-			selection: selection,
+			handle: handle,
 			initialSample: sample,
 			currentSample: sample,
 			isQualified: false
@@ -1625,21 +1681,18 @@ final class WindowDragObserver {
 
 	private func updatePendingDrag(at location: CGPoint) {
 		guard var pendingDrag else { return }
-		let now: TimeInterval = ProcessInfo.processInfo.systemUptime
-		guard now - lastSampleTime >= 1.0 / 30.0 else { return }
+		let now: TimeInterval = clock.now
+		if let lastSampleTime, now - lastSampleTime < Self.samplingInterval { return }
 		lastSampleTime = now
 		do {
-			try ExternalWindowSystem.validateElement(
-				identity: pendingDrag.selection.identity,
-				windowElement: pendingDrag.selection.windowElement
-			)
-			let current = try snapshot(pendingDrag.selection)
+			try service.validateIdentity(of: pendingDrag.handle)
+			let current = try service.snapshot(of: pendingDrag.handle)
 			pendingDrag.currentSample = .init(
 				mouseAppKitScreenLocation: location,
 				windowAppKitScreenFrame: current.appKitScreenFrame
 			)
 			let dragSnapshot = ExternalWindowDragSnapshot(
-				selection: pendingDrag.selection,
+				selection: pendingDrag.handle,
 				initialSample: pendingDrag.initialSample,
 				currentSample: pendingDrag.currentSample
 			)
@@ -1651,7 +1704,7 @@ final class WindowDragObserver {
 				configuration: qualificationConfiguration
 			) {
 				pendingDrag.isQualified = true
-				ExternalWindowDiagnostics.logger.notice("drag-qualified pid=\(pendingDrag.selection.identity.processIdentifier, privacy: .public) window=\(pendingDrag.selection.identity.windowID, privacy: .public)")
+				ExternalWindowDiagnostics.logger.notice("drag-qualified pid=\(pendingDrag.handle.identity.processIdentifier, privacy: .public) window=\(pendingDrag.handle.identity.windowID, privacy: .public)")
 				onEvent?(.began(dragSnapshot))
 			}
 			self.pendingDrag = pendingDrag
@@ -1663,19 +1716,19 @@ final class WindowDragObserver {
 	}
 
 	private func endPendingDrag(at location: CGPoint) {
-		lastSampleTime = 0
+		lastSampleTime = nil
 		updatePendingDrag(at: location)
 		guard let pendingDrag else { return }
 		defer { self.pendingDrag = nil }
 		guard pendingDrag.isQualified else { return }
 		do {
-			try validate(pendingDrag.selection)
-			let current = try snapshot(pendingDrag.selection)
-			ExternalWindowDiagnostics.logger.notice("drag-ended pid=\(pendingDrag.selection.identity.processIdentifier, privacy: .public) window=\(pendingDrag.selection.identity.windowID, privacy: .public)")
+			try service.validateCurrentSpace(of: pendingDrag.handle)
+			let current = try service.snapshot(of: pendingDrag.handle)
+			ExternalWindowDiagnostics.logger.notice("drag-ended pid=\(pendingDrag.handle.identity.processIdentifier, privacy: .public) window=\(pendingDrag.handle.identity.windowID, privacy: .public)")
 			onEvent?(
 				.ended(
 					.init(
-						selection: pendingDrag.selection,
+						selection: pendingDrag.handle,
 						initialSample: pendingDrag.initialSample,
 						currentSample: .init(
 							mouseAppKitScreenLocation: location,
@@ -1689,7 +1742,7 @@ final class WindowDragObserver {
 			onDiagnostic?(error.localizedDescription)
 			onEvent?(
 				.cancelled(
-					identity: pendingDrag.selection.identity,
+					identity: pendingDrag.handle.identity,
 					reason: .windowUnavailable
 				)
 			)
@@ -1701,24 +1754,7 @@ final class WindowDragObserver {
 		self.pendingDrag = nil
 		guard pendingDrag.isQualified else { return }
 		onEvent?(
-			.cancelled(identity: pendingDrag.selection.identity, reason: reason)
-		)
-	}
-
-	private func validate(_ selection: ExternalWindowSelection) throws {
-		try ExternalWindowSystem.validateCurrentSpace(
-			identity: selection.identity,
-			windowElement: selection.windowElement,
-			applicationElement: selection.applicationElement
-		)
-	}
-
-	private func snapshot(
-		_ selection: ExternalWindowSelection
-	) throws -> ManagedExternalWindowSnapshot {
-		try ExternalWindowSystem.snapshot(
-			identity: selection.identity,
-			windowElement: selection.windowElement
+			.cancelled(identity: pendingDrag.handle.identity, reason: reason)
 		)
 	}
 }

@@ -139,6 +139,18 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 | TASK-015 | Promote the AX spike into generic drag-to-adopt window orchestration. Correlate global mouse movement with one exact standard, movable, resizable current-Space window; expose targets only during a qualified drag; adopt an empty target, edge-split an occupied target, move an existing lease, or detach outside the layout. Apply every layout atomically with frame readback, compensation rollback, single-step Undo, close/move observation, explicit focus handoff, and safe same-window release. Fail closed on ambiguity or permission denial and never locate by title, path, or provider-specific polling. | | |
 | TASK-016 | Implement the versioned CLI protocol in `crates/teaser-core/src/ipc` and `crates/teaser-cli`; support `teaser`, `teaser shell [--cwd PATH]`, and `teaser open <PATH>`; validate paths, socket ownership, stale sockets, bounded app-launch retry, and structured errors. | | |
 
+The adoption chain has one replaceable boundary and one business entry point.
+`DesktopStageOrchestrator` owns drag handling, drop targets, leases, layout
+transactions, and Undo, and creates no AppKit window; `DesktopStageController`
+supplies the real chrome, displays, and persistence. `ExternalWindowService`,
+`ExternalWindowLease`, `ExternalWindowHandle`, `ExternalWindowPointerSource`, and
+`ExternalWindowClock` are the only substitution points, and `AXUIElement` values
+stay inside the Accessibility implementation: a substituted handle is rejected
+there rather than adapted, so PID, `CGWindowID`, and AX identity checks are
+unchanged. TEST-012 therefore proves the boundary and the orchestration only.
+Real drag acceptance and real provider adoption remain unverified and still
+require a signed bundle with granted Accessibility.
+
 The default P-511 showcase uses actual provider windows and six unequal Workspace
 regions. Missing providers leave empty hinted Panels; they are never replaced by a
 fixture-rendered copy.
@@ -274,6 +286,7 @@ diagnostic and growth weights are stored for later optimization.
 - **TEST-005**: tmux tests cover parser fuzzing, arbitrary bytes, Unicode, bracketed paste, mouse protocol, pane mapping, escaped output, pause/continue, backpressure, resize, capture repair, reconnect, and degraded semantics.
 - **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on `teaserd` exit, ordinary terminal use, and absence of structured tmux/block capabilities.
 - **TEST-007**: Accessibility tests cover permission denied, exact AX/Core Graphics identity, window-versus-content drag qualification, four edge targets, empty/occupied targets, move/swap/detach, frame readback and rollback, Undo, Virtual/Input Focus separation, same-application multiple windows, close, multiple displays, current-Space behavior, identity loss, and safe frame restoration.
+- **TEST-012**: Adoption-chain tests run headless in the default gate: they substitute pointer events, window snapshots, and time at `ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`, `ExternalWindowPointerSource`, and `ExternalWindowClock`, drive the same `DesktopStageOrchestrator` the application drives, and assert drop highlights, Panel bindings, diagnostics, and recorded window operations without a global event monitor, a visible window, a permission request, or any movement of a user's window.
 - **TEST-008**: IPC/security tests cover ownership, mode `0600`, stale sockets, oversized frames, invalid paths, malformed versions, process impersonation, and redacted logs.
 - **TEST-009**: Persistence tests cover schema migration, atomic-write or WAL recovery, interrupted writes, permissions, display affinity, requested ratios, kinds, Notes, external provider hints without live identity, safe re-drag after restart, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
 - **TEST-010**: Comparative performance tests record direct-terminal and tmux-bridge SLOs while proving no hot-path UniFFI/JSON/SQLite activity.
