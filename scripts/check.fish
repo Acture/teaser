@@ -11,6 +11,7 @@ set vendor_readme $repo_root/vendor/README.md
 set swift_test_dir $repo_root/target/swift-tests
 set swift_test_binary $swift_test_dir/TeaserProbeTests
 set external_window_test_binary $swift_test_dir/TeaserExternalWindowTests
+set adoption_test_binary $swift_test_dir/TeaserWindowAdoptionTests
 set layout_test_binary $swift_test_dir/TeaserLayoutTests
 set topology_test_binary $swift_test_dir/TeaserDesktopStageTopologyTests
 set controls_test_binary $swift_test_dir/TeaserDesktopStageControlsTests
@@ -196,6 +197,7 @@ xcrun swiftc \
     -framework Combine \
     app/macos/Teaser/Model/*.swift \
     app/macos/Teaser/Layout/*.swift \
+    app/macos/Teaser/DesktopStage/DesktopOverlayModel.swift \
     app/macos/Teaser/DesktopStage/DesktopOverlayController.swift \
     app/macos/Teaser/DesktopStage/DesktopStageControlWindow.swift \
     app/macos/Teaser/Notes/NotesWindowController.swift \
@@ -212,11 +214,33 @@ xcrun swiftc \
     -framework AppKit \
     -framework ApplicationServices \
     -framework CoreGraphics \
+    app/macos/Teaser/ExternalWindows/ExternalWindowEnvironment.swift \
     app/macos/Teaser/ExternalWindows/ManagedExternalWindow.swift \
     app/macos/TeaserExternalWindowTests/main.swift \
     -o $external_window_test_binary
 or exit 1
 $external_window_test_binary
+or exit 1
+xcrun swiftc \
+    -swift-version 6 \
+    -strict-concurrency=complete \
+    -warnings-as-errors \
+    -module-cache-path $swift_module_cache \
+    -framework AppKit \
+    -framework ApplicationServices \
+    -framework CoreGraphics \
+    app/macos/Teaser/Model/*.swift \
+    app/macos/Teaser/Layout/*.swift \
+    app/macos/Teaser/DesktopStage/DesktopOverlayModel.swift \
+    app/macos/Teaser/DesktopStage/DesktopStageDisplayTopology.swift \
+    app/macos/Teaser/DesktopStage/DesktopStageShortcutMonitor.swift \
+    app/macos/Teaser/DesktopStage/DesktopStageOrchestrator.swift \
+    app/macos/Teaser/ExternalWindows/ExternalWindowEnvironment.swift \
+    app/macos/Teaser/ExternalWindows/ManagedExternalWindow.swift \
+    app/macos/TeaserWindowAdoptionTests/main.swift \
+    -o $adoption_test_binary
+or exit 1
+$adoption_test_binary
 or exit 1
 
 cargo fmt --check

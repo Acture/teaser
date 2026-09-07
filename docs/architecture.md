@@ -2,7 +2,7 @@
 
 Status: design baseline; desktop-stage implementation in progress
 
-Last updated: 2026-09-05
+Last updated: 2026-09-07
 
 ## 1. System boundary
 
@@ -15,10 +15,12 @@ when its Panels are backed by windows owned by several applications.
 
 ```text
 Teaser.app
-├── DesktopStageController                     current-Space window orchestration
-│   ├── WorkspacePresentation                  display → WorkspaceTree → PanelTree
+├── DesktopStageController                     AppKit shell: chrome, displays, store
+│   ├── DesktopStageOrchestrator               window-free adoption + layout core
+│   │   ├── WorkspacePresentation              display → WorkspaceTree → PanelTree
+│   │   ├── ExternalWindowService              queries, leases, permission state
+│   │   └── ManagedExternalWindow              exact provider-owned top-level window
 │   ├── NotesWindowController                  Teaser-owned Notes
-│   ├── ManagedExternalWindow                  exact provider-owned top-level window
 │   ├── DesktopOverlayController               passive visuals + bounded hit windows
 │   └── DesktopStageControlWindow              explicit start / stop / quit
 ├── TerminalSurfaceAdapter
@@ -242,6 +244,17 @@ Control-Option-Escape immediately remove Teaser chrome and Notes before releasin
 provider leases. Switching Space stops the stage; overlays do not join every Space
 or full-screen application. The display-sized visual window always ignores mouse
 events; only bounded labels and divider handles intercept input in Arrange mode.
+
+Adoption orchestration is separated from the AppKit windows that present it.
+`DesktopStageOrchestrator` owns drag handling, drop targets, leases, layout
+transactions, and Undo without creating a window; `DesktopStageController` owns
+the chrome, display topology, permission UX, and persistence.
+`ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`,
+`ExternalWindowPointerSource`, and `ExternalWindowClock` form the only
+replaceable boundary, so the default test gate drives the exact production
+orchestration with deterministic input and no user desktop. `AXUIElement` values
+never cross that boundary: a substituted handle is rejected by the Accessibility
+implementation rather than adapted, and identity checks are unchanged.
 
 The live AX identity and pre-adoption frame are ephemeral. Graceful release restores
 the original frame only while the exact window still exists and remains at the frame
