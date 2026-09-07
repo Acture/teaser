@@ -53,8 +53,11 @@ fish scripts/check.fish
 ```
 
 It verifies the `Teaser.app` build, pinned Ghostty inputs, Rust formatting, Clippy
-warnings, Rust tests, Swift terminal-attachment, external-window, layout, topology,
-shortcut, and hidden-window safety tests, and whitespace. The component Rust gates are:
+warnings, Rust tests, Swift terminal-attachment, external-window, window-adoption,
+layout, topology, shortcut, and hidden-window safety tests, and whitespace. The
+window-adoption tests run headless: they substitute the external-window boundary
+and must never install a global event monitor, show a window, request Accessibility,
+or move a user's window. The component Rust gates are:
 
 ```fish
 cargo fmt --check
