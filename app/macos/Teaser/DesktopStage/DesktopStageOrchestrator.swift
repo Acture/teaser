@@ -356,7 +356,6 @@ final class DesktopStageOrchestrator {
 			return
 		}
 		let targetPanelID: PanelID = .init(target.panelID)
-		let targetIsOccupied: Bool = isPanelOccupied(targetPanelID)
 
 		do {
 			switch target.region {
@@ -370,23 +369,19 @@ final class DesktopStageOrchestrator {
 					try focusModel(on: targetPanelID)
 				}
 			case .center:
-				guard let sourcePanelID else {
+				switch centerDrop(on: targetPanelID, dragging: identity) {
+				case .rejected:
 					throw DesktopStageOrchestratorError.occupiedDropTarget
-				}
-				guard sourcePanelID != targetPanelID else {
+				case .returnToOwnPanel:
 					relayout(synchronously: true)
 					setStatus("Window returned to its Panel")
 					return
-				}
-				guard targetIsOccupied,
-					let targetIdentity: ExternalWindowIdentity = panelAssignments[targetPanelID]
-				else {
-					throw DesktopStageOrchestratorError.occupiedDropTarget
-				}
-				try performTransaction(label: "Panels swapped") {
-					panelAssignments[sourcePanelID] = targetIdentity
-					panelAssignments[targetPanelID] = identity
-					try focusModel(on: targetPanelID)
+				case .swap(let sourcePanelID, let targetIdentity):
+					try performTransaction(label: "Panels swapped") {
+						panelAssignments[sourcePanelID] = targetIdentity
+						panelAssignments[targetPanelID] = identity
+						try focusModel(on: targetPanelID)
+					}
 				}
 			case .leading, .trailing, .top, .bottom:
 				guard let edge: LayoutEdge = layoutEdge(for: target.region) else {
@@ -982,10 +977,11 @@ final class DesktopStageOrchestrator {
 		case .empty:
 			label = "Adopt window"
 		case .center:
-			// A Panel occupied by Teaser-owned content has no window to trade, so
-			// only a Panel that actually holds one may promise a swap.
-			label = isDraggingManagedWindow && panelAssignments[panelID] != nil
-				? "Swap Panels" : "Occupied · use an edge"
+			switch centerDrop(on: panelID, dragging: draggingIdentity) {
+			case .swap: label = "Swap Panels"
+			case .returnToOwnPanel: label = "Return to this Panel"
+			case .rejected: label = "Occupied · use an edge"
+			}
 		case .leading, .trailing, .top, .bottom:
 			label = "Split and adopt"
 		}
@@ -1036,6 +1032,32 @@ final class DesktopStageOrchestrator {
 	}
 
 	// MARK: - Presentation queries
+
+	/// What dropping the dragged window on a Panel's center will do. The drop
+	/// highlight and `acceptDrop` both read this, so the label cannot promise
+	/// something the drop will refuse.
+	private enum CenterDrop {
+		case returnToOwnPanel
+		case swap(sourcePanelID: PanelID, targetIdentity: ExternalWindowIdentity)
+		/// Nothing to trade: an unmanaged window, or a Panel whose content is
+		/// Teaser's own rather than an adopted window.
+		case rejected
+	}
+
+	private func centerDrop(
+		on targetPanelID: PanelID,
+		dragging identity: ExternalWindowIdentity?
+	) -> CenterDrop {
+		guard let identity,
+			let sourcePanelID: PanelID = panelAssignments.first(where: {
+				$0.value == identity
+			})?.key
+		else { return .rejected }
+		guard sourcePanelID != targetPanelID else { return .returnToOwnPanel }
+		guard let targetIdentity: ExternalWindowIdentity = panelAssignments[targetPanelID]
+		else { return .rejected }
+		return .swap(sourcePanelID: sourcePanelID, targetIdentity: targetIdentity)
+	}
 
 	func isPanelOccupied(_ panelID: PanelID) -> Bool {
 		if panelAssignments[panelID] != nil { return true }
