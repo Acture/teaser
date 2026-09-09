@@ -253,7 +253,7 @@ private func assertEdgeInsertionLandsWhereItWasAimed() throws {
 			presentation: presentation,
 			displayFrames: displayFrames
 		)
-		let targetFrame: LayoutRect = try unwrapFrame(
+		let targetFrame: LayoutRect = try unwrap(
 			before.panelFrames[ShowcasePreset.claudePanelID],
 			"missing solved target Panel"
 		)
@@ -280,7 +280,7 @@ private func assertEdgeInsertionLandsWhereItWasAimed() throws {
 			presentation: presentation,
 			displayFrames: displayFrames
 		)
-		let inserted: LayoutRect = try unwrapFrame(
+		let inserted: LayoutRect = try unwrap(
 			after.panelFrames[insertedID],
 			"missing solved inserted Panel"
 		)
@@ -309,9 +309,9 @@ private func assertEdgeInsertionLandsWhereItWasAimed() throws {
 	}
 }
 
-private func unwrapFrame(_ frame: LayoutRect?, _ message: String) throws -> LayoutRect {
-	guard let frame else { throw TestFailure.assertion(message) }
-	return frame
+private func unwrap<Value>(_ value: Value?, _ message: String) throws -> Value {
+	guard let value else { throw TestFailure.assertion(message) }
+	return value
 }
 
 private func testVirtualFocusSurvivesPresentationRoundTrip() throws {

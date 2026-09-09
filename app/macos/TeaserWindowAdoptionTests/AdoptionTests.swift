@@ -127,11 +127,7 @@ private func testEveryOccupiedEdgeHighlightsItsOwnSplit() throws {
 	try harness.adopt(first, into: leftPanelID)
 
 	let panel: CGRect = try harness.panelFrame(leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	let expectations: [(LayoutEdge, CGPoint, CGRect)] = [
 		(
 			.leading,
@@ -275,7 +271,7 @@ private func testDivergentPointerAndWindowMotionNeverAdopts() throws {
 	)
 }
 
-// MARK: - D. Product contracts for each drop region
+// MARK: - C. Product contracts for each drop region
 
 @MainActor
 private func testOccupiedCenterRejectsUnmanagedWindow() throws {
@@ -283,11 +279,7 @@ private func testOccupiedCenterRejectsUnmanagedWindow() throws {
 	let adopted: FakeWindow = harness.addWindow()
 	try harness.adopt(adopted, into: leftPanelID)
 
-	let intruder: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let intruder: FakeWindow = harness.addSecondWindow()
 	let center: CGPoint = try harness.center(of: leftPanelID)
 	harness.beginDrag(intruder, to: center)
 	try expect(
@@ -316,13 +308,7 @@ private func testEdgeDropSplitsAndAdopts() throws {
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
 
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		name: "Second",
-		title: "Second Window",
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	let occupied: CGRect = try harness.panelFrame(leftPanelID)
 	let trailing: CGPoint = .init(x: occupied.maxX - 12, y: occupied.midY)
 	harness.beginDrag(second, to: trailing)
@@ -364,11 +350,7 @@ private func testTopEdgeDropSplitsOnTheOtherAxis() throws {
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
 
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	let occupied: CGRect = try harness.panelFrame(leftPanelID)
 	harness.dropWindow(second, at: .init(x: occupied.midX, y: occupied.maxY - 12))
 
@@ -423,11 +405,7 @@ private func testManagedWindowsSwapOnAnOccupiedCenter() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
 
 	let destination: CGPoint = try harness.center(of: rightPanelID)
@@ -466,7 +444,12 @@ private func testManagedWindowDroppedOnItsOwnPanelReturns() throws {
 	let panel: CGRect = try harness.panelFrame(leftPanelID)
 
 	let nudged: CGPoint = .init(x: panel.midX + 30, y: panel.midY - 20)
-	harness.dropWindow(window, at: nudged)
+	harness.beginDrag(window, to: nudged)
+	try expect(
+		harness.orchestrator.dropHighlight?.label == "Return to this Panel",
+		"a window over its own Panel must not be promised a swap: \(harness.orchestrator.dropHighlight?.label ?? "none")"
+	)
+	harness.releasePointer(at: nudged)
 	try expect(
 		harness.orchestrator.panelAssignments == [leftPanelID: window.identity],
 		"a window dropped back on its own Panel keeps that Panel"
@@ -554,7 +537,7 @@ private func testUndoReleasesTheAdoptedWindow() throws {
 	)
 }
 
-// MARK: - E. Conditions that must stop an adoption
+// MARK: - D. Conditions that must stop an adoption
 
 @MainActor
 private func testWindowLostDuringDragCancelsAndDiagnoses() throws {
@@ -716,7 +699,7 @@ private func testClosedProviderWindowFreesItsPanel() throws {
 	)
 }
 
-// MARK: - F. Geometry failures, readback, and compensation
+// MARK: - E. Geometry failures, readback, and compensation
 
 @MainActor
 private func testWindowThatRefusesToMoveRollsBackAndReports() throws {
@@ -787,11 +770,7 @@ private func testPartialMultiWindowApplyRollsBackInReverseOrder() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
 
 	let leftBefore: CGRect = try harness.readBackFrame(first.identity)
@@ -845,11 +824,7 @@ private func testFailedCompensationReportsBothErrorsAndKeepsLeases() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
 
 	second.minimumSize = .init(width: 1_400, height: 1_400)
@@ -912,7 +887,7 @@ private func testUnrestorableWindowRetainsItsLease() throws {
 	)
 }
 
-// MARK: - G. Stop, shutdown, and what the user does afterwards
+// MARK: - F. Stop, shutdown, and what the user does afterwards
 
 @MainActor
 private func testStoppingTheStageRestoresAdoptedWindows() throws {
@@ -1029,7 +1004,7 @@ private func testShutdownReleasesEveryLeaseAndObserver() throws {
 	)
 }
 
-// MARK: - H. Environment invariants
+// MARK: - G. Environment invariants
 
 @MainActor
 private func testDeniedPermissionNeverObservesOrPrompts() throws {
@@ -1127,7 +1102,7 @@ func adoptionCases() -> [TestCase] {
 	]
 }
 
-// MARK: - I. Gaps closed after the first audit of this matrix
+// MARK: - H. Cross-Workspace, content Panels, and teardown ordering
 
 @MainActor
 private func testContentPanelIsNeverOfferedAsASwap() throws {
@@ -1197,11 +1172,7 @@ private func testManagedWindowSplitOntoAnotherEdgeFreesItsOldPanel() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
 
 	let target: CGRect = try harness.panelFrame(rightPanelID)
@@ -1237,11 +1208,7 @@ private func testFailedSplitLeavesNoHalfCreatedPanel() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	second.minimumSize = .init(width: 1_800, height: 1_800)
 
 	let target: CGRect = try harness.panelFrame(leftPanelID)
@@ -1458,17 +1425,9 @@ private func testCompensationContinuesPastAWindowThatRefusesRestoration() throws
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
-	let third: FakeWindow = harness.addWindow(
-		pid: thirdProviderPID,
-		windowID: 12,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let third: FakeWindow = harness.addThirdWindow()
 	let rightFrame: CGRect = try harness.panelFrame(rightPanelID)
 	harness.dropWindow(third, at: .init(x: rightFrame.maxX - 12, y: rightFrame.midY))
 	let adoptedPanelID: PanelID = .init("adopted-1")
@@ -1479,11 +1438,7 @@ private func testCompensationContinuesPastAWindowThatRefusesRestoration() throws
 
 	// Panels apply in Panel-ID order: adopted-1, left, right. The last one
 	// fails, and the middle one refuses to be put back.
-	let framesBefore: [ExternalWindowIdentity: CGRect] = [
-		third.identity: try harness.readBackFrame(third.identity),
-		first.identity: try harness.readBackFrame(first.identity),
-		second.identity: try harness.readBackFrame(second.identity),
-	]
+	let thirdFrameBefore: CGRect = try harness.readBackFrame(third.identity)
 	second.minimumSize = .init(width: 1_800, height: 1_800)
 	first.refusesRestore = true
 	let logLength: Int = harness.log.operations.count
@@ -1502,7 +1457,7 @@ private func testCompensationContinuesPastAWindowThatRefusesRestoration() throws
 		"compensation must continue past the refusal to the window behind it: \(sequence)"
 	)
 	try expect(
-		try harness.readBackFrame(third.identity) == framesBefore[third.identity],
+		try harness.readBackFrame(third.identity) == thirdFrameBefore,
 		"the window behind the refusal must still be put back"
 	)
 	try expect(
@@ -1518,5 +1473,4 @@ private func testCompensationContinuesPastAWindowThatRefusesRestoration() throws
 		],
 		"a failed relayout must not change which window owns which Panel"
 	)
-	_ = framesBefore[second.identity]
 }

@@ -86,12 +86,8 @@ final class FakeOperationLog {
 		operations.firstIndex(of: operation)
 	}
 
-	func count(where predicate: (FakeWindowOperation) -> Bool) -> Int {
-		operations.filter(predicate).count
-	}
-
 	func bindCount(for identity: ExternalWindowIdentity) -> Int {
-		count { $0 == .bind(identity) }
+		operations.filter { $0 == .bind(identity) }.count
 	}
 
 	func applies(for identity: ExternalWindowIdentity) -> [CGRect] {
@@ -618,36 +614,25 @@ final class CountingIdentifierSource: DesktopStageIdentifierSource {
 final class RecordingStageHost: DesktopStageOrchestratorHost {
 	/// Panels the host claims as Teaser-owned content.
 	var contentPanels: Set<PanelID> = []
-	private(set) var stateChanges: Int = 0
-	private(set) var solvedLayouts: [PresentationLayout] = []
 	private(set) var createdPanels: [PanelID] = []
-	private(set) var raisedContent: [PanelID] = []
 	private(set) var inputHandoffs: [PanelID] = []
-	private(set) var saveRequests: Int = 0
-	private(set) var willStopCount: Int = 0
 	private let log: FakeOperationLog
 
 	init(log: FakeOperationLog) {
 		self.log = log
 	}
 
-	func orchestratorDidChangeState(_ orchestrator: DesktopStageOrchestrator) {
-		stateChanges += 1
-	}
+	func orchestratorDidChangeState(_ orchestrator: DesktopStageOrchestrator) {}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
 		didSolve layout: PresentationLayout
-	) {
-		solvedLayouts.append(layout)
-	}
+	) {}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
 		raiseContentIn panelID: PanelID
-	) {
-		raisedContent.append(panelID)
-	}
+	) {}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
@@ -665,12 +650,9 @@ final class RecordingStageHost: DesktopStageOrchestratorHost {
 		createdPanels.append(panelID)
 	}
 
-	func orchestratorDidRequestSave(_ orchestrator: DesktopStageOrchestrator) {
-		saveRequests += 1
-	}
+	func orchestratorDidRequestSave(_ orchestrator: DesktopStageOrchestrator) {}
 
 	func orchestratorWillStopStage(_ orchestrator: DesktopStageOrchestrator) {
-		willStopCount += 1
 		log.record(.hostWillStopStage)
 	}
 }
@@ -686,17 +668,18 @@ let secondProviderPID: pid_t = 4_243
 let thirdProviderPID: pid_t = 4_244
 let testDisplayFrame: CGRect = .init(x: 0, y: 0, width: 2_000, height: 1_000)
 
+func fixturePanel(_ id: PanelID, _ title: String) -> PanelDescriptor {
+	.init(
+		id: id,
+		title: title,
+		kindID: .generic,
+		providerHint: nil,
+		profileOverride: nil,
+		nativeContent: .none
+	)
+}
+
 func testPresentation() throws -> WorkspacePresentation {
-	func panel(_ id: PanelID, _ title: String) -> PanelDescriptor {
-		.init(
-			id: id,
-			title: title,
-			kindID: .generic,
-			providerHint: nil,
-			profileOverride: nil,
-			nativeContent: .none
-		)
-	}
 	let workspace: WorkspaceDescriptor = .init(
 		id: testWorkspaceID,
 		title: "Alpha",
@@ -710,8 +693,8 @@ func testPresentation() throws -> WorkspacePresentation {
 			second: .leaf(rightPanelID)
 		),
 		panels: [
-			leftPanelID: panel(leftPanelID, "Left"),
-			rightPanelID: panel(rightPanelID, "Right"),
+			leftPanelID: fixturePanel(leftPanelID, "Left"),
+			rightPanelID: fixturePanel(rightPanelID, "Right"),
 		]
 	)
 	return .init(
@@ -758,16 +741,7 @@ func testPresentationWithTwoWorkspaces() throws -> WorkspacePresentation {
 		detail: "Second Workspace",
 		displayAffinity: testDisplayID,
 		panelTree: .leaf(betaPanelID),
-		panels: [
-			betaPanelID: .init(
-				id: betaPanelID,
-				title: "Beta Panel",
-				kindID: .generic,
-				providerHint: nil,
-				profileOverride: nil,
-				nativeContent: .none
-			),
-		]
+		panels: [betaPanelID: fixturePanel(betaPanelID, "Beta Panel")]
 	)
 	presentation.workspaces[betaWorkspaceID] = beta
 	presentation.displayLayouts[testDisplayID] = .init(
@@ -783,30 +757,20 @@ func testPresentationWithTwoWorkspaces() throws -> WorkspacePresentation {
 	return presentation
 }
 
+/// The substituted pointer world: a fixture window set, a manual clock, and the
+/// gestures that drive them. Both harnesses compose one of these, so "what a
+/// window drag is" is defined once.
 @MainActor
-final class Harness {
+final class PointerDriver {
 	let log: FakeOperationLog = .init()
 	let service: FakeExternalWindowService
 	let clock: ManualClock = .init()
 	let pointer: RecordingPointerSource
-	let host: RecordingStageHost
-	let orchestrator: DesktopStageOrchestrator
 	private(set) var pointerLocation: CGPoint = .zero
 
-	init(presentation: WorkspacePresentation) {
+	init() {
 		service = .init(log: log)
 		pointer = .init(log: log)
-		host = .init(log: log)
-		orchestrator = .init(
-			presentation: presentation,
-			notes: [:],
-			service: service,
-			clock: clock,
-			pointerSource: pointer,
-			identifiers: CountingIdentifierSource()
-		)
-		orchestrator.host = host
-		orchestrator.setDisplays([.init(id: testDisplayID, frame: layoutRect(testDisplayFrame))])
 	}
 
 	@discardableResult
@@ -828,26 +792,31 @@ final class Harness {
 		return window
 	}
 
-	func panelFrame(_ panelID: PanelID) throws -> CGRect {
-		nsRect(
-			try unwrap(
-				orchestrator.layout?.panelFrames[panelID],
-				"missing solved Panel \(panelID.rawValue)"
-			)
+	/// The second and third providers appear in most multi-window cases, and
+	/// their frames must start outside the layout so a drop is a real move.
+	@discardableResult
+	func addSecondWindow() -> FakeWindow {
+		addWindow(
+			pid: secondProviderPID,
+			windowID: 11,
+			name: "Second",
+			title: "Second Window",
+			frame: .init(x: 1_100, y: 20, width: 400, height: 200)
 		)
 	}
 
-	func center(of panelID: PanelID) throws -> CGPoint {
-		let frame: CGRect = try panelFrame(panelID)
-		return .init(x: frame.midX, y: frame.midY)
+	@discardableResult
+	func addThirdWindow() -> FakeWindow {
+		addWindow(
+			pid: thirdProviderPID,
+			windowID: 12,
+			name: "Third",
+			title: "Third Window",
+			frame: .init(x: 1_100, y: 20, width: 400, height: 200)
+		)
 	}
 
-	/// The frame the window world reports for an identity, which is what a read
-	/// back through the boundary sees rather than what Teaser believes.
-	func readBackFrame(_ identity: ExternalWindowIdentity) throws -> CGRect {
-		try service.window(identity).appKitScreenFrame
-	}
-
+	/// Where a user grabs a window to move it.
 	func grabPoint(_ window: FakeWindow) -> CGPoint {
 		.init(
 			x: window.appKitScreenFrame.midX,
@@ -867,8 +836,7 @@ final class Harness {
 	/// Moves the pointer and the window together, which is what makes a drag a
 	/// window drag rather than a content drag.
 	func dragWindow(_ window: FakeWindow, to point: CGPoint) {
-		window.offset(dx: point.x - pointerLocation.x, dy: point.y - pointerLocation.y)
-		pointerLocation = point
+		moveWithoutDelivery(window, to: point)
 		clock.advance(1)
 		pointer.send(.monitored(phase: .dragged, appKitScreenLocation: point))
 	}
@@ -880,23 +848,128 @@ final class Harness {
 		pointer.send(.monitored(phase: .dragged, appKitScreenLocation: point))
 	}
 
-	func releasePointer(at point: CGPoint) {
+	/// Moves pointer and window together with no delivery at all, which is what
+	/// native title-bar tracking that withholds events looks like.
+	func moveWithoutDelivery(_ window: FakeWindow, to point: CGPoint) {
+		window.offset(dx: point.x - pointerLocation.x, dy: point.y - pointerLocation.y)
 		pointerLocation = point
+	}
+
+	/// One periodic button-state reading, the delivery that keeps a drag alive
+	/// when the global monitor stays silent.
+	func sample(isButtonDown: Bool, at point: CGPoint? = nil) {
+		let location: CGPoint = point ?? pointerLocation
+		pointerLocation = location
 		clock.advance(1)
-		pointer.send(.monitored(phase: .up, appKitScreenLocation: point))
+		pointer.send(.sampled(isButtonDown: isButtonDown, appKitScreenLocation: location))
 	}
 
-	func releasePointer() {
-		releasePointer(at: pointerLocation)
+	func releasePointer(at point: CGPoint? = nil) {
+		let location: CGPoint = point ?? pointerLocation
+		pointerLocation = location
+		clock.advance(1)
+		pointer.send(.monitored(phase: .up, appKitScreenLocation: location))
 	}
 
-	/// A complete qualified title-bar drag from the window's own title bar to
-	/// `point`, leaving the drop unfinished so highlights stay observable.
-	@discardableResult
-	func beginDrag(_ window: FakeWindow, to point: CGPoint) -> CGPoint {
+	func beginDrag(_ window: FakeWindow, to point: CGPoint) {
 		press(window)
 		dragWindow(window, to: point)
-		return point
+	}
+}
+
+@MainActor
+final class Harness {
+	let driver: PointerDriver = .init()
+	let host: RecordingStageHost
+	let orchestrator: DesktopStageOrchestrator
+
+	var log: FakeOperationLog { driver.log }
+	var service: FakeExternalWindowService { driver.service }
+	var clock: ManualClock { driver.clock }
+	var pointer: RecordingPointerSource { driver.pointer }
+	var pointerLocation: CGPoint { driver.pointerLocation }
+
+	init(presentation: WorkspacePresentation) {
+		host = .init(log: driver.log)
+		orchestrator = .init(
+			presentation: presentation,
+			notes: [:],
+			service: driver.service,
+			clock: driver.clock,
+			pointerSource: driver.pointer,
+			identifiers: CountingIdentifierSource()
+		)
+		orchestrator.host = host
+		orchestrator.setDisplays([.init(id: testDisplayID, frame: layoutRect(testDisplayFrame))])
+	}
+
+	@discardableResult
+	func addWindow(
+		pid: pid_t = providerPID,
+		windowID: CGWindowID = 10,
+		name: String = "Provider",
+		title: String = "Provider Window",
+		frame: CGRect = .init(x: 1_200, y: 600, width: 600, height: 300)
+	) -> FakeWindow {
+		driver.addWindow(
+			pid: pid,
+			windowID: windowID,
+			name: name,
+			title: title,
+			frame: frame
+		)
+	}
+
+	@discardableResult
+	func addSecondWindow() -> FakeWindow { driver.addSecondWindow() }
+
+	@discardableResult
+	func addThirdWindow() -> FakeWindow { driver.addThirdWindow() }
+
+	func grabPoint(_ window: FakeWindow) -> CGPoint { driver.grabPoint(window) }
+
+	func press(_ window: FakeWindow) { driver.press(window) }
+
+	func press(at point: CGPoint) { driver.press(at: point) }
+
+	func dragWindow(_ window: FakeWindow, to point: CGPoint) {
+		driver.dragWindow(window, to: point)
+	}
+
+	func dragPointerOnly(to point: CGPoint) { driver.dragPointerOnly(to: point) }
+
+	func moveWithoutDelivery(_ window: FakeWindow, to point: CGPoint) {
+		driver.moveWithoutDelivery(window, to: point)
+	}
+
+	func sample(isButtonDown: Bool, at point: CGPoint? = nil) {
+		driver.sample(isButtonDown: isButtonDown, at: point)
+	}
+
+	func releasePointer(at point: CGPoint? = nil) { driver.releasePointer(at: point) }
+
+	func beginDrag(_ window: FakeWindow, to point: CGPoint) {
+		driver.beginDrag(window, to: point)
+	}
+
+	func panelFrame(_ panelID: PanelID) throws -> CGRect {
+		nsRect(
+			try unwrap(
+				orchestrator.layout?.panelFrames[panelID],
+				"missing solved Panel \(panelID.rawValue)"
+			)
+		)
+	}
+
+	func center(of panelID: PanelID) throws -> CGPoint {
+		let frame: CGRect = try panelFrame(panelID)
+		return .init(x: frame.midX, y: frame.midY)
+	}
+
+	/// The frame the window world reports for an identity, which is what a read
+	/// back through the boundary sees rather than what Teaser believes.
+	func readBackFrame(_ identity: ExternalWindowIdentity) throws -> CGRect {
+		try service.window(identity).appKitScreenFrame
 	}
 
 	/// Completes a drag and returns the frame the user left the window at, which
