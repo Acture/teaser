@@ -184,6 +184,8 @@ fn parse_session_id(response: &Value) -> SessionId {
 	response["session_id"].as_str().unwrap().parse().unwrap()
 }
 
+const EXIT_DEADLINE: Duration = Duration::from_secs(30);
+
 fn permissions(path: &Path) -> u32 {
 	fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
 }
@@ -289,14 +291,19 @@ fn spawn_teaserd(runtime_dir: &Path) -> Child {
 		.unwrap()
 }
 
+/// Same contract as `wait_until_ready`: the deadline only converts a hang into a
+/// failure, so it is generous rather than a disguised performance assertion.
 fn wait_for_exit(child: &mut Child) -> ExitStatus {
-	for _ in 0..100 {
+	let started = Instant::now();
+	loop {
 		if let Some(status) = child.try_wait().unwrap() {
 			return status;
 		}
+		if started.elapsed() >= EXIT_DEADLINE {
+			let _ = child.kill();
+			let _ = child.wait();
+			panic!("second teaserd did not reject the occupied runtime within {EXIT_DEADLINE:?}");
+		}
 		thread::sleep(Duration::from_millis(10));
 	}
-	let _ = child.kill();
-	let _ = child.wait();
-	panic!("second teaserd did not reject the occupied runtime within one second");
 }
