@@ -18,20 +18,22 @@ enum ObservedDragEvent: Equatable {
 
 @MainActor
 final class ObserverHarness {
-	let log: FakeOperationLog = .init()
-	let service: FakeExternalWindowService
-	let clock: ManualClock = .init()
-	let pointer: RecordingPointerSource
+	let driver: PointerDriver = .init()
 	let observer: WindowDragObserver
 	private(set) var events: [ObservedDragEvent] = []
 	private(set) var diagnostics: [String] = []
-	private(set) var pointerLocation: CGPoint = .zero
+
+	var service: FakeExternalWindowService { driver.service }
+	var clock: ManualClock { driver.clock }
+	var pointer: RecordingPointerSource { driver.pointer }
+	var pointerLocation: CGPoint { driver.pointerLocation }
 
 	init() {
-		let log: FakeOperationLog = self.log
-		service = .init(log: log)
-		pointer = .init(log: log)
-		observer = .init(service: service, clock: clock, pointerSource: pointer)
+		observer = .init(
+			service: driver.service,
+			clock: driver.clock,
+			pointerSource: driver.pointer
+		)
 		observer.onEvent = { [weak self] event in self?.record(event) }
 		observer.onDiagnostic = { [weak self] message in
 			self?.diagnostics.append(message)
@@ -52,61 +54,28 @@ final class ObserverHarness {
 		windowID: CGWindowID = 10,
 		frame: CGRect = .init(x: 200, y: 200, width: 400, height: 300)
 	) -> FakeWindow {
-		let window: FakeWindow = .init(
-			processIdentifier: pid,
-			windowID: windowID,
-			applicationName: "Provider",
-			title: "Provider Window",
-			appKitScreenFrame: frame
-		)
-		service.windows.insert(window, at: 0)
-		return window
+		driver.addWindow(pid: pid, windowID: windowID, frame: frame)
 	}
 
-	func press(_ window: FakeWindow) {
-		press(at: .init(
-			x: window.appKitScreenFrame.midX,
-			y: window.appKitScreenFrame.maxY - 8
-		))
-	}
+	func press(_ window: FakeWindow) { driver.press(window) }
 
-	func press(at point: CGPoint) {
-		pointerLocation = point
-		pointer.send(.monitored(phase: .down, appKitScreenLocation: point))
-	}
+	func press(at point: CGPoint) { driver.press(at: point) }
 
 	func dragWindow(_ window: FakeWindow, to point: CGPoint) {
-		moveWithoutDelivery(window, to: point)
-		clock.advance(1)
-		pointer.send(.monitored(phase: .dragged, appKitScreenLocation: point))
+		driver.dragWindow(window, to: point)
 	}
 
-	func dragPointerOnly(to point: CGPoint) {
-		pointerLocation = point
-		clock.advance(1)
-		pointer.send(.monitored(phase: .dragged, appKitScreenLocation: point))
-	}
+	func dragPointerOnly(to point: CGPoint) { driver.dragPointerOnly(to: point) }
 
-	/// Moves the pointer and the window together without delivering any event,
-	/// which is what a native title-bar drag that withholds deliveries looks like.
 	func moveWithoutDelivery(_ window: FakeWindow, to point: CGPoint) {
-		window.offset(dx: point.x - pointerLocation.x, dy: point.y - pointerLocation.y)
-		pointerLocation = point
+		driver.moveWithoutDelivery(window, to: point)
 	}
 
 	func sample(isButtonDown: Bool, at point: CGPoint? = nil) {
-		let location: CGPoint = point ?? pointerLocation
-		pointerLocation = location
-		clock.advance(1)
-		pointer.send(.sampled(isButtonDown: isButtonDown, appKitScreenLocation: location))
+		driver.sample(isButtonDown: isButtonDown, at: point)
 	}
 
-	func releasePointer(at point: CGPoint? = nil) {
-		let location: CGPoint = point ?? pointerLocation
-		pointerLocation = location
-		clock.advance(1)
-		pointer.send(.monitored(phase: .up, appKitScreenLocation: location))
-	}
+	func releasePointer(at point: CGPoint? = nil) { driver.releasePointer(at: point) }
 
 	private func record(_ event: ExternalWindowDragEvent) {
 		switch event {
@@ -423,7 +392,7 @@ private func testStaleButtonSampleAfterTheDropDoesNotReadopt() throws {
 	)
 }
 
-// MARK: - Gaps closed after the first audit of this matrix
+// MARK: - Qualification thresholds, sampler-only drags, and restart
 
 @MainActor
 private func testSubThresholdNudgeIsNotADrag() throws {
@@ -692,15 +661,11 @@ private func testUnmanageableWindowsAreNeverAdopted() throws {
 }
 
 @MainActor
-private func testEdgeAndCentreBoundaryIsWhereTheHitTestSaysItIs() throws {
+private func testEdgeAndCenterBoundaryIsWhereTheHitTestSaysItIs() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	let panel: CGRect = try harness.panelFrame(leftPanelID)
 	// min(width, height) * 0.22 exceeds the 120 pt ceiling on this Panel, so the
 	// edge band is exactly 120 pt wide.
@@ -716,7 +681,7 @@ private func testEdgeAndCentreBoundaryIsWhereTheHitTestSaysItIs() throws {
 	try expect(
 		harness.orchestrator.dropHighlight?.edge == nil
 			&& harness.orchestrator.dropHighlight?.label == "Occupied · use an edge",
-		"a point past the edge band must be the centre: \(String(describing: harness.orchestrator.dropHighlight?.edge))"
+		"a point past the edge band must be the center: \(String(describing: harness.orchestrator.dropHighlight?.edge))"
 	)
 	harness.releasePointer()
 }
@@ -726,13 +691,7 @@ private func testSplitPanelDescribesTheWindowThatCreatedIt() throws {
 	let harness: Harness = try makeStartedHarness()
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
-	let second: FakeWindow = harness.addWindow(
-		pid: secondProviderPID,
-		windowID: 11,
-		name: "Second",
-		title: "Second Window",
-		frame: .init(x: 1_100, y: 20, width: 400, height: 200)
-	)
+	let second: FakeWindow = harness.addSecondWindow()
 	let panel: CGRect = try harness.panelFrame(leftPanelID)
 	harness.dropWindow(second, at: .init(x: panel.maxX - 12, y: panel.midY))
 
@@ -779,7 +738,7 @@ func dragObserverCases() -> [TestCase] {
 		.init("restarted stage observes the next drag", testRestartedStageObservesTheNextDrag),
 		.init("rejection is not reported after its press ended", testRejectionIsNotReportedAfterItsPressEnded),
 		.init("unmanageable windows are never adopted", testUnmanageableWindowsAreNeverAdopted),
-		.init("edge and centre boundary is where the hit test says it is", testEdgeAndCentreBoundaryIsWhereTheHitTestSaysItIs),
+		.init("edge and center boundary is where the hit test says it is", testEdgeAndCenterBoundaryIsWhereTheHitTestSaysItIs),
 		.init("split Panel describes the window that created it", testSplitPanelDescribesTheWindowThatCreatedIt),
 	]
 }
