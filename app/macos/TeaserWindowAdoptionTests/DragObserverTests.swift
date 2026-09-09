@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+@testable import TeaserKit
 
 // Regressions for the event sequencing `WindowDragObserver` has to survive: the
 // global monitor and the button-state sampler arriving interleaved, the same

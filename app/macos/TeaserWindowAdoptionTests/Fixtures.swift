@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Darwin
 import Foundation
+@testable import TeaserKit
 
 // The substituted external-window environment shared by every adoption
 // regression: deterministic pointer events, a manual clock, a fixture window

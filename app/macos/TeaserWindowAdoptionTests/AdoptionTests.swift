@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+@testable import TeaserKit
 
 // Regressions that drive `DesktopStageOrchestrator`: press, window movement,
 // drop-target highlighting, release, binding, layout application, compensation,

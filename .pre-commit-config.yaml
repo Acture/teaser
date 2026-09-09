@@ -1,0 +1,151 @@
+# The repository gate. Formatting and static analysis run on commit; tests and
+# the application bundle build also run on pre-push.
+#
+#     pre-commit install          # wires both stages, once
+#     pre-commit run --all-files --hook-stage pre-push
+#
+# Every project-specific entry is `repo: local` with `language: system`, so the
+# gate runs the same toolchain a developer already has rather than fetching an
+# environment of its own.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # These replace `git diff --check HEAD`, which only ever compared the
+      # working tree against HEAD and so passed vacuously on a clean tree.
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: ^patches/
+      - id: end-of-file-fixer
+        exclude: ^patches/
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --check
+        language: system
+        pass_filenames: false
+        files: (\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        files: (\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace --all-targets
+        language: system
+        pass_filenames: false
+        files: (\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)
+        stages: [pre-push]
+
+      # Check applicability only; compiling Ghostty remains a separate gate.
+      # Keep this list complete when adding patches. Check both patches even
+      # when only the gitlink changes; gitlinks do not have the `file` type.
+      - id: ghostty-patches-apply
+        name: Ghostty patches apply
+        entry: git apply --check --directory=vendor/ghostty
+        args:
+          - patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
+          - patches/ghostty/0002-external-surface-io.patch
+        language: system
+        pass_filenames: false
+        types: []
+        files: ^(patches/ghostty/.*\.patch|vendor/ghostty|\.gitmodules|\.pre-commit-config\.yaml)$
+
+      # One hook per harness: each is a plain executable that exits non-zero on
+      # failure. `swift run` builds incrementally, so a hook also works alone
+      # in a clean checkout and cannot execute a stale binary after an edit.
+      - id: swift-test-probe
+        name: TeaserProbeTests
+        entry: swift run TeaserProbeTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-layout
+        name: TeaserLayoutTests
+        entry: swift run TeaserLayoutTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-presentation-store
+        name: TeaserPresentationStoreTests
+        entry: swift run TeaserPresentationStoreTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-topology
+        name: TeaserDesktopStageTopologyTests
+        entry: swift run TeaserDesktopStageTopologyTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-controls
+        name: TeaserDesktopStageControlsTests
+        entry: swift run TeaserDesktopStageControlsTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-safety
+        name: TeaserDesktopStageSafetyTests
+        entry: swift run TeaserDesktopStageSafetyTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-external-window
+        name: TeaserExternalWindowTests
+        entry: swift run TeaserExternalWindowTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      - id: swift-test-window-adoption
+        name: TeaserWindowAdoptionTests
+        entry: swift run TeaserWindowAdoptionTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
+      # SwiftPM does not assemble an .app bundle, so this stays a script.
+      - id: teaser-app-bundle
+        name: Teaser.app builds
+        entry: fish scripts/app.fish --build-only
+        language: system
+        pass_filenames: false
+        files: (^app/macos/Teaser/|^scripts/app\.fish$|^Package\.swift$)
+        stages: [pre-push]
+
+      - id: fish-syntax
+        name: fish -n
+        entry: fish -n
+        language: system
+        files: \.fish$
+
+      - id: fish-indent
+        name: fish_indent --check
+        entry: fish_indent --check
+        language: system
+        files: \.fish$

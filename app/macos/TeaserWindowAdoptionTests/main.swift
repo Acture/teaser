@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+@testable import TeaserKit
 
 // Runs the desktop-free adoption regression matrix. Every case drives the same
 // `DesktopStageOrchestrator` and `WindowDragObserver` the application drives,
