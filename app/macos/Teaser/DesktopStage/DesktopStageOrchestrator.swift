@@ -982,7 +982,10 @@ final class DesktopStageOrchestrator {
 		case .empty:
 			label = "Adopt window"
 		case .center:
-			label = isDraggingManagedWindow ? "Swap Panels" : "Occupied · use an edge"
+			// A Panel occupied by Teaser-owned content has no window to trade, so
+			// only a Panel that actually holds one may promise a swap.
+			label = isDraggingManagedWindow && panelAssignments[panelID] != nil
+				? "Swap Panels" : "Occupied · use an edge"
 		case .leading, .trailing, .top, .bottom:
 			label = "Split and adopt"
 		}

@@ -188,6 +188,39 @@ private func testEdgeInsertionAndLongAxisSplit() throws {
 	try expect(first.leaves == [ShowcasePreset.claudePanelID], "old Panel stays first")
 	try expect(second.leaves == [panel.id], "new empty Panel is inserted second")
 
+	// A tall Panel splits on the other axis, which routes through the same
+	// first-is-lower convention: the new Panel takes the lower half.
+	var tall: WorkspacePresentation = ShowcasePreset.presentation()
+	let tallPanel: PanelDescriptor = .init(
+		id: .init("foch-tall"),
+		title: "Tall",
+		kindID: .generic,
+		providerHint: nil,
+		profileOverride: nil,
+		nativeContent: .none
+	)
+	try tall.splitPanel(
+		ShowcasePreset.claudePanelID,
+		with: tallPanel,
+		in: ShowcasePreset.fochWorkspaceID,
+		targetFrame: .init(x: 0, y: 0, width: 400, height: 900),
+		splitID: .init("foch-tall-split")
+	)
+	guard case .split(_, let tallAxis, _, let tallFirst, let tallSecond) = tall
+		.workspaces[ShowcasePreset.fochWorkspaceID]!.panelTree
+	else {
+		throw TestFailure.assertion("splitPanel must replace the target leaf")
+	}
+	try expect(tallAxis == .vertical, "a tall Panel splits on its long axis")
+	try expect(
+		tallFirst.leaves == [tallPanel.id],
+		"the new Panel takes the lower half of a tall split"
+	)
+	try expect(
+		tallSecond.leaves == [ShowcasePreset.claudePanelID],
+		"the target keeps the upper half of a tall split"
+	)
+
 	var edgeTree: LayoutTree<String> = .leaf("target")
 	try edgeTree.insert(
 		"new",
@@ -199,9 +232,86 @@ private func testEdgeInsertionAndLongAxisSplit() throws {
 	else {
 		throw TestFailure.assertion("edge insertion must create a split")
 	}
+	// The solver lays a split's first child at the lower coordinate on its axis,
+	// so a top insertion follows the target rather than preceding it.
 	try expect(edgeAxis == .vertical, "top insertion must use a vertical split")
-	try expect(edgeFirst.leaves == ["new"], "top insertion places the new leaf first")
-	try expect(edgeSecond.leaves == ["target"], "target follows a top insertion")
+	try expect(edgeFirst.leaves == ["target"], "target keeps the lower half")
+	try expect(edgeSecond.leaves == ["new"], "top insertion places the new leaf second")
+
+	try assertEdgeInsertionLandsWhereItWasAimed()
+}
+
+/// Tree order is only half the contract: an edge insertion has to occupy the
+/// half of the target the user aimed at once the layout is solved.
+private func assertEdgeInsertionLandsWhereItWasAimed() throws {
+	let displayFrames: [DisplayID: LayoutRect] = [
+		ShowcasePreset.mainDisplayID: .init(x: 0, y: 0, width: 2_560, height: 1_440),
+	]
+	for edge: LayoutEdge in [.leading, .trailing, .top, .bottom] {
+		var presentation: WorkspacePresentation = ShowcasePreset.presentation()
+		let before: PresentationLayout = try ConstrainedLayoutSolver.solve(
+			presentation: presentation,
+			displayFrames: displayFrames
+		)
+		let targetFrame: LayoutRect = try unwrapFrame(
+			before.panelFrames[ShowcasePreset.claudePanelID],
+			"missing solved target Panel"
+		)
+		let insertedID: PanelID = .init("inserted-\(edge.rawValue)")
+		let target: PanelDescriptor = try panelDescriptor(
+			ShowcasePreset.claudePanelID,
+			in: presentation
+		)
+		try presentation.insertPanel(
+			.init(
+				id: insertedID,
+				title: target.title,
+				kindID: target.kindID,
+				providerHint: target.providerHint,
+				profileOverride: target.profileOverride,
+				nativeContent: .none
+			),
+			in: ShowcasePreset.fochWorkspaceID,
+			at: edge,
+			of: ShowcasePreset.claudePanelID,
+			splitID: .init("split-\(edge.rawValue)")
+		)
+		let after: PresentationLayout = try ConstrainedLayoutSolver.solve(
+			presentation: presentation,
+			displayFrames: displayFrames
+		)
+		let inserted: LayoutRect = try unwrapFrame(
+			after.panelFrames[insertedID],
+			"missing solved inserted Panel"
+		)
+		switch edge {
+		case .leading:
+			try expect(
+				inserted.maxX <= targetFrame.midX + 1,
+				"a leading insertion must take the leading half, got \(inserted)"
+			)
+		case .trailing:
+			try expect(
+				inserted.minX >= targetFrame.midX - 1,
+				"a trailing insertion must take the trailing half, got \(inserted)"
+			)
+		case .top:
+			try expect(
+				inserted.minY >= targetFrame.midY - 1,
+				"a top insertion must take the upper half, got \(inserted)"
+			)
+		case .bottom:
+			try expect(
+				inserted.maxY <= targetFrame.midY + 1,
+				"a bottom insertion must take the lower half, got \(inserted)"
+			)
+		}
+	}
+}
+
+private func unwrapFrame(_ frame: LayoutRect?, _ message: String) throws -> LayoutRect {
+	guard let frame else { throw TestFailure.assertion(message) }
+	return frame
 }
 
 private func testVirtualFocusSurvivesPresentationRoundTrip() throws {

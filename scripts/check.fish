@@ -237,7 +237,7 @@ xcrun swiftc \
     app/macos/Teaser/DesktopStage/DesktopStageOrchestrator.swift \
     app/macos/Teaser/ExternalWindows/ExternalWindowEnvironment.swift \
     app/macos/Teaser/ExternalWindows/ManagedExternalWindow.swift \
-    app/macos/TeaserWindowAdoptionTests/main.swift \
+    app/macos/TeaserWindowAdoptionTests/*.swift \
     -o $adoption_test_binary
 or exit 1
 $adoption_test_binary

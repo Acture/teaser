@@ -1646,6 +1646,10 @@ final class WindowDragObserver {
 		case .up:
 			mouseIsDown = false
 			endPendingDrag(at: appKitScreenLocation)
+			// A press owns its own rejection. Releasing retires it, so a later
+			// stray movement cannot report it over whatever the user did since.
+			pressLocation = nil
+			selectionFailure = nil
 		}
 	}
 
