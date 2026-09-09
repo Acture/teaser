@@ -65,7 +65,7 @@ second renderer.
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-001 | Create a Cargo workspace in `Cargo.toml` containing `crates/teaser-core`, `crates/teaser-cli`, `crates/teaser-bridge`, `crates/teaser-acp`, and `crates/teaser-tmux`; create the Swift macOS app under `app/macos` with bundle identifier `com.acture.teaser`; add `scripts/bootstrap.fish` and `scripts/check.fish` using fish syntax only. | | |
+| TASK-001 | Create a Cargo workspace in `Cargo.toml` containing `crates/teaser-core`, `crates/teaser-cli`, `crates/teaser-bridge`, `crates/teaser-acp`, and `crates/teaser-tmux`; create the Swift macOS app under `app/macos` with bundle identifier `com.acture.teaser`; define Swift build targets in `Package.swift` and quality gates in `.pre-commit-config.yaml`. | | |
 | TASK-002 | Register Ghostty as a clean Git submodule under `vendor/ghostty`, pinned to CON-002; keep Teaser deltas in parent-owned patches; document provenance, verification, and explicit updates in `vendor/README.md`; copy required MIT notices into `THIRD_PARTY_NOTICES.md`. | Yes | 2026-07-23 |
 | TASK-003 | Implement `TerminalSurfaceAdapter` in `app/macos/Teaser/Terminal/TerminalSurfaceAdapter.swift`; host one Ghostty surface in an `NSView` and attach it to a `teaserd`-owned Session without creating a second PTY; verify clean-clone resources, binary flow control, app tick/wakeup, main-thread and lifetime behavior, resize, focus, selection, clipboard, English input, Chinese IME, process exit, 120 Hz, and a signed development bundle. | | |
 | TASK-004 | Add `benchmarks/terminal` with reproducible direct-Ghostty and Teaser harnesses using the same Ghostty revision, config, hardware, workload, and display rate; measure p50/p95 input-to-present, sustained output, CPU, memory, and dropped frames; record the methodology and initial 10% direct-terminal target before v0.1. | | |
@@ -154,8 +154,9 @@ require a signed bundle with granted Accessibility.
 #### Adoption regression matrix
 
 The first batch of TEST-012 lives in `app/macos/TeaserWindowAdoptionTests` and
-runs in `fish scripts/check.fish`. `Fixtures.swift` holds the substituted world
-and the `PointerDriver` both harnesses compose, `AdoptionTests.swift` drives
+runs with `swift run TeaserWindowAdoptionTests`, also included in the pre-push
+hooks. `Fixtures.swift` holds the substituted world and the `PointerDriver`
+both harnesses compose, `AdoptionTests.swift` drives
 `DesktopStageOrchestrator`, and `DragObserverTests.swift` drives
 `WindowDragObserver` directly, because a duplicated `began` or a missing `ended`
 is not observable in orchestration state alone. One ordered operation log
@@ -226,8 +227,8 @@ Covered contracts, each naming the regressions that defend it:
 
 Run evidence, 2026-09-10: `Teaser window-adoption regression passed: 66 cases
 (no desktop, no monitors, no prompts)`, plus `Teaser layout tests passed` and a
-green `fish scripts/check.fish`. Every mutation below was applied, run, and
-reverted; none is committed:
+green full gate before the SwiftPM migration. Every mutation below was applied,
+run, and reverted; none is committed:
 
 - `handleDragEvent` stops updating `dropHighlight` — caught by 16 of 66,
   starting at qualified drag adopts an empty Panel.
@@ -269,6 +270,25 @@ reverted; none is committed:
   describes the window that created it.
 - The drop hit test's edge band widened to 400 pt — edge and center
   boundary is where the hit test says it is.
+
+SwiftPM migration revalidation, 2026-09-10: the pre-push hooks passed all eight
+Swift harnesses, including the same 66 adoption cases and 24 attachment-pump
+cases, all Rust workspace tests, formatting, Clippy, patch applicability, and
+the app bundle build. `Package.swift` replaces the repeated compiler source
+lists with one `TeaserKit` module. The generated build commands carry Swift 6
+language mode and warnings-as-errors for the library and all eight harnesses.
+The full command is `pre-commit run --all-files --hook-stage pre-push`.
+
+Two temporary fault probes verified the new hook wiring, then were restored:
+
+- Change the first Ghostty patch's trailing context from
+  `Terminal: semantic prompt continuations` to a nonexistent test name. Running
+  `pre-commit run ghostty-patches-apply --files vendor/ghostty` exits 1 with
+  `patch does not apply`, proving that a gitlink-only trigger checks the patches.
+- Append a synthetic failure before the adoption runner's final guard. The
+  `swift-test-window-adoption` pre-push hook, invoked with `--files` naming the
+  edited runner, recompiles it and exits 1 with the injected diagnostic. The
+  hook invokes `swift run` so even a standalone run builds the current sources.
 
 Four defects this matrix found are fixed here, and their reverted forms are
 mutations above.

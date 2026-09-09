@@ -48,16 +48,20 @@ migration unless explicitly requested.
 
 The canonical full gate is:
 
-```fish
-fish scripts/check.fish
+```text
+pre-commit run --all-files --hook-stage pre-push
 ```
 
-It verifies the `Teaser.app` build, pinned Ghostty inputs, Rust formatting, Clippy
+Install both Git hook stages with `pre-commit install`. The full gate verifies
+the `Teaser.app` build, Ghostty patch applicability, Rust formatting, Clippy
 warnings, Rust tests, Swift terminal-attachment, external-window, window-adoption,
 layout, topology, shortcut, and hidden-window safety tests, and whitespace. The
 window-adoption tests run headless: they substitute the external-window boundary
 and must never install a global event monitor, show a window, request Accessibility,
-or move a user's window. The component Rust gates are:
+or move a user's window. `Package.swift` requires Swift 6.2 or newer and builds
+one shared `TeaserKit` module for eight executable test harnesses. Run one with
+`swift run TeaserWindowAdoptionTests`; these are not `swift test` targets.
+The component Rust gates are:
 
 ```fish
 cargo fmt --check
@@ -94,7 +98,8 @@ control generated layout. Name Rust modules and functions in `snake_case`,
 Rust/Swift types in `UpperCamelCase`, and Swift members in `lowerCamelCase`.
 
 Prefer immutable typed values and small traits only at seams with multiple real
-implementations. Write repository scripts in fish syntax. Fail fast at internal
+implementations. Use native toolchain commands and pre-commit hooks for quality
+gates; keep existing `.fish` scripts valid fish. Fail fast at internal
 boundaries and add bounded, diagnostic logging around long-running or expensive
 operations.
 

@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+@testable import TeaserKit
 
 private enum TestFailure: Error { case assertion(String) }
 

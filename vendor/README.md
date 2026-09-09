@@ -146,12 +146,13 @@ readback, child exit, and ordered teardown after socket workers and Surface
 feeds quiesce. It does not compare captured pixels. `--probe-session` accepts
 no program or working directory and is only an integration fixture; it is not
 the production Session creation path. The Metal download and GUI probe are
-intentionally not part of `scripts/check.fish`.
+intentionally not part of the pre-commit quality gate.
 
 ### Update the pin
 
 Fetch an explicitly verified upstream tag, check out its exact commit in the
 submodule, and stage the resulting gitlink. Then rebase parent-owned patches,
 update this file and `THIRD_PARTY_NOTICES.md`, review the old-to-new upstream
-diff, and rerun the semantic test plus `fish scripts/check.fish`. Never use
+diff, and rerun the semantic test plus
+`pre-commit run --all-files --hook-stage pre-push`. Never use
 `git submodule update --remote` as an implicit upgrade.

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+@testable import TeaserKit
 
 private enum TestFailure: Error, CustomStringConvertible {
 	case assertion(String)

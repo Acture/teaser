@@ -59,14 +59,36 @@ See [Architecture](docs/architecture.md), [Roadmap](ROADMAP.md), and the
 
 ## Development
 
-Run the full quality gate from the repository root:
+Use Swift 6.2 or newer, Rust, and pre-commit. Install the Git hooks once:
 
-```fish
-fish scripts/check.fish
+```text
+pre-commit install
 ```
 
-It builds `Teaser.app` and checks Swift integration tests, formatting, Clippy
-warnings, all Rust workspace tests, and whitespace errors.
+Run the full quality gate from the repository root:
+
+```text
+pre-commit run --all-files --hook-stage pre-push
+```
+
+The hooks build `Teaser.app` and check Swift integration tests, formatting,
+Clippy warnings, all Rust workspace tests, whitespace, and Ghostty patch
+applicability. Formatting and static analysis also run on commit. Initialize
+`vendor/ghostty` as described in [Vendored Dependencies](vendor/README.md) before
+running the full gate; it does not require building Ghostty or installing Zig.
+
+`Package.swift` builds the shared `TeaserKit` module once for the eight Swift
+test executables. Build them with `swift build`, or build and run one suite:
+
+```text
+swift run TeaserWindowAdoptionTests
+```
+
+These are executable harnesses, so use `swift run`, not `swift test`. The adoption
+suite runs without desktop interaction, global monitors, or permission prompts.
+SwiftPM excludes the application entry point and the Ghostty-backed adapter;
+the app bundle and the [native Ghostty probe](vendor/README.md) have separate
+build paths.
 
 Build the current macOS app prototype with:
 

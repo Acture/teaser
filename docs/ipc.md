@@ -84,8 +84,8 @@ PTY Session until the Checkout resolver exists.
 
 ## Verification
 
-```fish
-fish scripts/check.fish
+```text
+pre-commit run --all-files --hook-stage pre-push
 ```
 
 Swift fake-transport tests cover nonblocking enqueue, ordered writes, queue
