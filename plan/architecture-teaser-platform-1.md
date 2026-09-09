@@ -151,6 +151,81 @@ unchanged. TEST-012 therefore proves the boundary and the orchestration only.
 Real drag acceptance and real provider adoption remain unverified and still
 require a signed bundle with granted Accessibility.
 
+#### Adoption regression matrix
+
+The first batch of TEST-012 lives in `app/macos/TeaserWindowAdoptionTests` and
+runs in `fish scripts/check.fish`. `Fixtures.swift` holds the substituted world,
+`AdoptionTests.swift` drives `DesktopStageOrchestrator`, and
+`DragObserverTests.swift` drives `WindowDragObserver` directly, because a
+duplicated `began` or a missing `ended` is not observable in orchestration state
+alone. One ordered operation log records pointer, lease, and host calls together,
+so ordering claims are assertions about a sequence rather than about counters
+that happen to agree.
+
+The substituted boundary mirrors the Accessibility implementation rather than
+being merely convenient: post-selection reads fail as an unavailable window
+rather than as a permission error, a handle holds the fixture object the way
+production holds an `AXUIElement`, binding re-checks permission, current Space,
+and manageability, writes require the current Space, and a release that cannot
+validate its window returns failure and keeps the lease. A test that passes
+because the substitute was lenient is not evidence about the product.
+
+| Contract | Regressions |
+|---|---|
+| Drag in: correct Panel highlights, the same window binds, the placement reads back | qualified drag adopts an empty Panel; highlight follows the pointer across Panels; button-state samples drive the same chain; sampler alone keeps the highlight following the pointer; split Panel describes the window that created it |
+| Content drag never adopts | content drag never adopts; resize drag never adopts; correlated resize is not a drag; window moved without the pointer never adopts; divergent pointer and window motion never adopts; sub-threshold nudge is not a drag; unqualified drag is never announced |
+| Interleaved deliveries, duplicate notifications, missing drag/up | duplicate press does not restart the drag; duplicate release ends the drag once; monitored and sampled deliveries interleave into one drag; missing drag deliveries still complete the drop; missing release is closed by button sampling; release inside the sampling interval still drops; stale button sample after the drop does not readopt; cancelled drag stays disarmed while the button is held; restarted stage observes the next drag; time advancement gates resampling |
+| Empty Panel, occupied center, edge split, managed move/swap, drag out | qualified drag adopts an empty Panel; occupied center rejects an unmanaged window; every occupied edge highlights its own split; edge and centre boundary is where the hit test says it is; edge drop splits and adopts; top-edge drop splits on the other axis; managed window moves to an empty Panel without rebinding; managed windows swap on an occupied center; managed window dropped on its own Panel returns; managed window split onto another edge frees its old Panel; content Panel is never offered as a swap; content Panel is occupied for an unmanaged window; window moved across Workspaces follows its focus; drops move Virtual Focus to where the window landed; drop outside every Panel detaches without restoring; detached window is readopted without rebinding; undo releases the adopted window |
+| Window closed, identity lost, permission lost, wrong Space, unmanageable | window lost during drag cancels and diagnoses; substitute window at the same point is never adopted; permission lost during drag stops adoption; window off the current Space at release is not adopted; closed provider window frees its Panel; unmanageable windows are never adopted; cancelled drag ignores its late release; rejected candidate is diagnosed once the drag is real; rejection is not reported after its press ended; denied permission never observes or prompts |
+| Write failure, readback mismatch, partial success, failed compensation | window that refuses to move rolls back and reports; frame readback mismatch refuses the adoption; failed split leaves no half-created Panel; partial multi-window apply rolls back in reverse order; compensation continues past a window that refuses restoration; failed compensation reports both errors and keeps leases; unrestorable window retains its lease; undo that cannot release reports and retains its lease |
+| Stop, shutdown, and what the user does afterwards | stopping the stage restores adopted windows; stopping mid-drag cancels without adopting; stopping the observer cancels an in-flight drag; stopping leaves a detached window where the user put it; user-moved window is not snapped back on stop; stopped stage never moves the window again; shutdown releases every lease and observer; input handoff prefers the adopted window; default run touches no desktop state; no window is ever displayed |
+
+Run evidence, 2026-09-10: `Teaser window-adoption regression passed: 66 cases (no
+desktop, no monitors, no prompts)`, plus `Teaser layout tests passed` and a green
+`fish scripts/check.fish`. Seventeen temporary product mutations were applied,
+run, and reverted; none is committed, and each is listed with the regressions
+that caught it:
+
+| Mutation | Regressions that caught it |
+|---|---|
+| `handleDragEvent` stops updating `dropHighlight` | 15 of 66, starting at qualified drag adopts an empty Panel |
+| `applySynchronously` rolls back to each lease's current frame instead of its pre-apply snapshot | partial multi-window apply rolls back in reverse order; failed compensation reports both errors and keeps leases; compensation continues past a window that refuses restoration |
+| Rollback breaks at the first window that refuses restoration | compensation continues past a window that refuses restoration |
+| A Teaser-content Panel is offered as a swap again | content Panel is never offered as a swap |
+| A retired press keeps reporting its rejection | rejection is not reported after its press ended |
+| `stopStage` closes Teaser chrome after provider leases release | stopping the stage restores adopted windows |
+| `stopStage` restores every window, detached ones included | stopping leaves a detached window where the user put it |
+| `LayoutEdge.insertsBeforeTarget` reverted to `.leading \|\| .top` | top-edge drop splits on the other axis; the layout edge-geometry assertions |
+| The split branch never vacates the Panel a managed window left | managed window split onto another edge frees its old Panel |
+| Drops no longer move Virtual Focus | drops move Virtual Focus to where the window landed; window moved across Workspaces follows its focus |
+| The sampler stops synthesizing movement while the button is held | sampler alone keeps the highlight following the pointer |
+| `endPendingDrag` no longer resets the sampling throttle | release inside the sampling interval still drops |
+| Drag qualification movement floors dropped to 1 pt | sub-threshold nudge is not a drag; release inside the sampling interval still drops |
+| The drag-qualification size guard disabled | correlated resize is not a drag |
+| `stop()` no longer clears the press state | restarted stage observes the next drag |
+| A split Panel no longer describes the window that created it | split Panel describes the window that created it |
+| The drop hit test's edge band widened to 400 pt | edge and centre boundary is where the hit test says it is |
+
+Three defects this matrix found are fixed here, and their reverted forms are the
+mutations above.
+
+`ConstrainedLayoutSolver` lays a split's first child at the lower coordinate on
+its axis and layout frames are AppKit screen frames, so a `.top` edge insertion
+placed the new Panel in the lower half while the drop highlight promised the
+upper half; the same inversion sent a `Ctrl-Option-D` split of a tall Panel to
+the wrong half. `LayoutEdge.insertsBeforeTarget` now reads `.leading || .bottom`,
+and TEST-001 asserts both the tree order and the solved geometry of all four
+edges.
+
+A Panel holding Teaser-owned content counts as occupied, so dragging an already
+adopted window over the showcase Notes Panel promised "Swap Panels" and then
+refused the drop, because a content Panel has no window to trade. The highlight
+now promises a swap only where one can happen.
+
+A press that selected no eligible window kept its rejection after the button came
+up, so a later unrelated movement reported it over whatever the user had done
+since — including over a completed adoption. Releasing now retires the press.
+
 The default P-511 showcase uses actual provider windows and six unequal Workspace
 regions. Missing providers leave empty hinted Panels; they are never replaced by a
 fixture-rendered copy.
@@ -279,14 +354,14 @@ diagnostic and growth weights are stored for later optimization.
 
 ## 6. Testing
 
-- **TEST-001**: Workspace/Panel layout tests preserve identities, valid Virtual Focus, requested ratios, exact fill, non-overlap, connected rectangular Workspaces, minimum sizes, deterministic unequal layouts, and exact state across split/move/resize/tile/focus/switch/display/restore sequences.
+- **TEST-001**: Workspace/Panel layout tests preserve identities, valid Virtual Focus, requested ratios, exact fill, non-overlap, connected rectangular Workspaces, minimum sizes, deterministic unequal layouts, solved edge-insertion geometry for all four edges, and exact state across split/move/resize/tile/focus/switch/display/restore sequences.
 - **TEST-002**: Ghostty embedding tests cover clean-clone resources, runtime tick/wakeup, lifetime, signed bundle, render, resize, focus, clipboard, selection, Kitty graphics, English input, and Chinese IME.
 - **TEST-003**: Block tests cover OSC 133/OSC 7, multiline prompts, wrapping, resize, scrollback, eviction, signals, exit status, nested shells, alternate screen, snapshot limits, retention controls, confirmed rerun, and search scope.
 - **TEST-004**: ACP tests cover protocol negotiation, capability gaps, Claude/Codex initialization, updates, tools, permissions, plans, resources, cancellation, auth failure, malformed messages, adapter crash, and restart limits.
 - **TEST-005**: tmux tests cover parser fuzzing, arbitrary bytes, Unicode, bracketed paste, mouse protocol, pane mapping, escaped output, pause/continue, backpressure, resize, capture repair, reconnect, and degraded semantics.
 - **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on `teaserd` exit, ordinary terminal use, and absence of structured tmux/block capabilities.
 - **TEST-007**: Accessibility tests cover permission denied, exact AX/Core Graphics identity, window-versus-content drag qualification, four edge targets, empty/occupied targets, move/swap/detach, frame readback and rollback, Undo, Virtual/Input Focus separation, same-application multiple windows, close, multiple displays, current-Space behavior, identity loss, and safe frame restoration.
-- **TEST-012**: Adoption-chain tests run headless in the default gate: they substitute pointer events, window snapshots, and time at `ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`, `ExternalWindowPointerSource`, and `ExternalWindowClock`, drive the same `DesktopStageOrchestrator` the application drives, and assert drop highlights, Panel bindings, diagnostics, and recorded window operations without a global event monitor, a visible window, a permission request, or any movement of a user's window.
+- **TEST-012**: Adoption-chain tests run headless in the default gate: they substitute pointer events, window snapshots, and time at `ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`, `ExternalWindowPointerSource`, and `ExternalWindowClock`, drive the same `DesktopStageOrchestrator` and `WindowDragObserver` the application drives, and assert drop highlights, Panel bindings, operation ordering, frame readback, diagnostics, and restoration records without a global event monitor, a visible window, a permission request, or any movement of a user's window. The covered contracts and the mutations that prove the assertions bite are recorded in the adoption regression matrix in Phase 1.
 - **TEST-008**: IPC/security tests cover ownership, mode `0600`, stale sockets, oversized frames, invalid paths, malformed versions, process impersonation, and redacted logs.
 - **TEST-009**: Persistence tests cover schema migration, atomic-write or WAL recovery, interrupted writes, permissions, display affinity, requested ratios, kinds, Notes, external provider hints without live identity, safe re-drag after restart, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
 - **TEST-010**: Comparative performance tests record direct-terminal and tmux-bridge SLOs while proving no hot-path UniFFI/JSON/SQLite activity.

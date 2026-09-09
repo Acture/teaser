@@ -20,8 +20,11 @@ enum LayoutEdge: String, Codable, Equatable, Hashable, Sendable {
 		}
 	}
 
+	/// The solver lays a split's first child at the lower coordinate on its axis,
+	/// and layout frames are AppKit screen frames, so first means leading on the
+	/// horizontal axis and bottom on the vertical one.
 	var insertsBeforeTarget: Bool {
-		self == .leading || self == .top
+		self == .leading || self == .bottom
 	}
 }
 
