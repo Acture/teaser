@@ -1542,9 +1542,14 @@ final class WindowDragObserver {
 	private let pointerSource: any ExternalWindowPointerSource
 	private var isObserving: Bool = false
 	private var pendingDrag: PendingDrag?
-	private var mouseIsDown: Bool = false
-	private var selectionFailure: String?
-	private var pressLocation: CGPoint?
+	/// One held press. Its rejection reason lives and dies with it, so a later
+	/// delivery cannot report a press that has already ended.
+	private struct PressState {
+		let location: CGPoint
+		var selectionFailure: String?
+	}
+
+	private var press: PressState?
 	private var lastSampleTime: TimeInterval?
 
 	init(
@@ -1594,9 +1599,7 @@ final class WindowDragObserver {
 		if isObserving { ExternalWindowDiagnostics.logger.notice("observer-stopped") }
 		isObserving = false
 		pointerSource.stop()
-		mouseIsDown = false
-		pressLocation = nil
-		selectionFailure = nil
+		press = nil
 		lastSampleTime = nil
 		if let pendingDrag, pendingDrag.isQualified {
 			onEvent?(
@@ -1614,9 +1617,9 @@ final class WindowDragObserver {
 		case .monitored(let phase, let location):
 			receive(phase: phase, appKitScreenLocation: location)
 		case .sampled(let isButtonDown, let location):
-			if isButtonDown && !mouseIsDown {
+			if isButtonDown && press == nil {
 				receive(phase: .down, appKitScreenLocation: location)
-			} else if !isButtonDown && mouseIsDown {
+			} else if !isButtonDown && press != nil {
 				receive(phase: .up, appKitScreenLocation: location)
 			} else if isButtonDown {
 				receive(phase: .dragged, appKitScreenLocation: location)
@@ -1630,33 +1633,34 @@ final class WindowDragObserver {
 	) {
 		switch phase {
 		case .down:
-			guard !mouseIsDown else { return }
-			mouseIsDown = true
-			pressLocation = appKitScreenLocation
+			guard press == nil else { return }
+			press = .init(location: appKitScreenLocation)
 			beginPendingDrag(at: appKitScreenLocation)
 		case .dragged:
-			if let selectionFailure, let pressLocation,
-				hypot(appKitScreenLocation.x - pressLocation.x, appKitScreenLocation.y - pressLocation.y)
-					>= Self.diagnosticMovementThreshold
+			// Only a live press can report a rejection, and only once it has
+			// travelled far enough to be a real drag rather than a click.
+			if let current: PressState = press,
+				let failure: String = current.selectionFailure,
+				hypot(
+					appKitScreenLocation.x - current.location.x,
+					appKitScreenLocation.y - current.location.y
+				) >= Self.diagnosticMovementThreshold
 			{
-				onDiagnostic?(selectionFailure)
-				self.selectionFailure = nil
+				onDiagnostic?(failure)
+				press?.selectionFailure = nil
 			}
 			updatePendingDrag(at: appKitScreenLocation)
 		case .up:
-			mouseIsDown = false
 			endPendingDrag(at: appKitScreenLocation)
-			// A press owns its own rejection. Releasing retires it, so a later
-			// stray movement cannot report it over whatever the user did since.
-			pressLocation = nil
-			selectionFailure = nil
+			// The press owned its rejection; releasing retires both together.
+			press = nil
 		}
 	}
 
 	private func beginPendingDrag(at location: CGPoint) {
 		lastSampleTime = nil
 		pendingDrag = nil
-		selectionFailure = nil
+		press?.selectionFailure = nil
 		let handle: any ExternalWindowHandle
 		do {
 			handle = try service.selectWindow(
@@ -1664,7 +1668,7 @@ final class WindowDragObserver {
 				excludingProcessIdentifiers: excludedProcessIdentifiers
 			)
 		} catch {
-			selectionFailure = error.localizedDescription
+			press?.selectionFailure = error.localizedDescription
 			// This error type contains geometry/API errors, never window titles
 			// or provider document contents. Keep the reason available in logs.
 			ExternalWindowDiagnostics.logger.notice("candidate-rejected: \(error.localizedDescription, privacy: .public)")
