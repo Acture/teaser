@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use teaser_core::SessionId;
@@ -196,10 +196,10 @@ struct TestRuntime {
 impl TestRuntime {
 	fn new() -> Self {
 		let runtime_id = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
-		let path = PathBuf::from(format!(
-			"/tmp/teaserd-test-{}-{runtime_id}",
-			std::process::id(),
-		));
+		// `temp_dir` honours TMPDIR, so a sandboxed or per-session runner gets a
+		// directory it is actually allowed to write.
+		let path =
+			std::env::temp_dir().join(format!("teaserd-test-{}-{runtime_id}", std::process::id(),));
 		let socket_path = path.join("control.sock");
 		Self { path, socket_path }
 	}
@@ -240,8 +240,17 @@ impl TestDaemon {
 		&self.socket_path
 	}
 
+	/// Only converts a hang into a failure. A bind takes microseconds once the
+	/// daemon is running, but the first execution of a freshly linked binary can
+	/// stall on macOS code-signing validation, and this suite starts one daemon
+	/// per test in parallel. A deadline tight enough to trip on that measures the
+	/// machine's load, not the daemon.
+	const READY_DEADLINE: Duration = Duration::from_secs(30);
+	const READY_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 	fn wait_until_ready(&mut self, previous_socket_inode: Option<u64>) {
-		for _ in 0..100 {
+		let started = Instant::now();
+		loop {
 			if let Ok(metadata) = fs::symlink_metadata(&self.socket_path)
 				&& metadata.file_type().is_socket()
 				&& Some(metadata.ino()) != previous_socket_inode
@@ -251,9 +260,14 @@ impl TestDaemon {
 			if let Some(status) = self.child.try_wait().unwrap() {
 				panic!("teaserd exited before binding its socket: {status}");
 			}
-			thread::sleep(Duration::from_millis(10));
+			let waited = started.elapsed();
+			assert!(
+				waited < Self::READY_DEADLINE,
+				"teaserd did not bind {} within {waited:?}",
+				self.socket_path.display(),
+			);
+			thread::sleep(Self::READY_POLL_INTERVAL);
 		}
-		panic!("teaserd did not bind its socket within one second");
 	}
 }
 
