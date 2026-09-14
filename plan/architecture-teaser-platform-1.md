@@ -312,6 +312,35 @@ came up, so a later unrelated movement reported it over whatever the user had
 done since — including over a completed adoption. Press location and rejection
 are now one value whose lifetime is the press.
 
+Library integration evidence, 2026-09-14 (P-595): the adoption harness passes
+72 cases, including SplitView-driven provider apply/Undo, rejected and invalid
+fractions, vertical orientation, display-level Workspace resize, offline editing,
+and failed-release/stale-gesture safety. The controls harness additionally checks
+scoped subscriptions, cancellation, stale callbacks, restart, and owner teardown
+through a fake shortcut source; it never registers system hotkeys. The full
+pre-push gate passes with the pinned Swift dependencies.
+
+The signed app was copied to a fresh temporary directory, passed
+`codesign --verify --strict`, and printed `KeyboardShortcuts resources: Space`
+through `--check-bundle-resources` with resource override environment variables
+unset. That branch exits before creating `NSApplication`. This proves packaged
+resource lookup, not interactive shortcut delivery or visual acceptance.
+
+The separate Swindler compile probe passes with its pinned upstream revision,
+including the internal Window-to-AX-element bridge. Reproduce it without
+initializing window services:
+
+```fish
+swift build --package-path probes/swindler-compatibility \
+    --scratch-path target/library-probes/swindler-compatibility/.build \
+    --product SwindlerProbe --force-resolved-versions
+```
+
+Its test-only import is not a production adapter. Lifecycle and asynchronous
+write/release integration remain open under P-511; see `docs/architecture.md`
+section 4.3. Real Zed dragging, native keyboard delivery/conflicts, and visible
+editor interaction remain unverified by this headless run.
+
 The default P-511 showcase uses actual provider windows and six unequal Workspace
 regions. Missing providers leave empty hinted Panels; they are never replaced by a
 fixture-rendered copy.
@@ -422,6 +451,8 @@ diagnostic and growth weights are stored for later optimization.
 - **DEP-007**: tmux control mode and the system OpenSSH client; tests record minimum supported versions.
 - **DEP-008**: Mosh executable for optional opaque sessions; absence disables only that capability.
 - **DEP-009**: Homebrew for developer dependencies and eventual cask distribution.
+- **DEP-010**: SplitView `3.5.3` and KeyboardShortcuts `3.1.0`, MIT; exact SwiftPM
+  pins and resource/license bundling are part of the app gate.
 
 ## 5. Files
 

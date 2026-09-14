@@ -77,8 +77,8 @@ applicability. Formatting and static analysis also run on commit. Initialize
 `vendor/ghostty` as described in [Vendored Dependencies](vendor/README.md) before
 running the full gate; it does not require building Ghostty or installing Zig.
 
-`Package.swift` builds the shared `TeaserKit` module once for the eight Swift
-test executables. Build them with `swift build`, or build and run one suite:
+`Package.swift` defines the shared `TeaserKit` module, the `Teaser` executable,
+and eight Swift test executables. Build them with `swift build`, or run one suite:
 
 ```text
 swift run TeaserWindowAdoptionTests
@@ -86,9 +86,10 @@ swift run TeaserWindowAdoptionTests
 
 These are executable harnesses, so use `swift run`, not `swift test`. The adoption
 suite runs without desktop interaction, global monitors, or permission prompts.
-SwiftPM excludes the application entry point and the Ghostty-backed adapter;
-the app bundle and the [native Ghostty probe](vendor/README.md) have separate
-build paths.
+Only the Ghostty-backed adapter is excluded until its native library is built.
+The app script uses SwiftPM's Xcode backend for macOS resource lookup, assembles
+the bundle, signs it, and checks library resources without opening any window.
+The [native Ghostty probe](vendor/README.md) remains a separate build.
 
 Build the current macOS app prototype with:
 
@@ -121,6 +122,16 @@ and divider handles for input, never a display-sized mouse shield.
 `Ctrl+Option+F` focuses a Workspace, and `Ctrl+Option+Return` hands input to the
 selected Panel. Layout Undo is `Ctrl+Option+Z` in Arrange or the menu action;
 `Cmd+Z` remains exclusively with the app receiving keyboard input.
+KeyboardShortcuts registers these bindings only while the stage is running;
+plain Escape and layout Undo are registered only in Arrange. Binding conflicts
+with another app still need real-desktop verification; Stop and Quit remain
+available from the control window and menu.
+
+**Layout Editor…** in the control window opens a normal, closable SplitView
+layout map. Select a display or Workspace and drag its dividers. Releasing the
+divider commits to the same constrained layout, provider placement, Undo, and
+persistence used by desktop handles. While stopped, it edits saved proportions
+without starting the stage. The map labels are not replicas of provider apps.
 
 For read-only window-selection diagnostics, run the signed bundle's executable
 with `--inspect-windows PID`. It reports current-Space window IDs, AX permission,
@@ -129,6 +140,9 @@ and selection failures without showing the stage, prompting, or moving windows:
 ```fish
 target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
 ```
+
+`--check-bundle-resources` instead checks the upstream shortcut localization
+accessor without creating `NSApplication`, registering hotkeys, or observing windows.
 
 Replace `PID` with the selected provider process. No selectable window returns
 exit status 1; invalid arguments return 2. This is not a drag/placement test.
@@ -168,8 +182,7 @@ wire format and current limits.
 
 - no Warp, Zed, Claude Code, or Codex fork;
 - no browser-based host or custom terminal renderer;
-- no GUI reparenting, pixel-capture proxy, synthetic application input, or private
-  macOS API;
+- no GUI reparenting, pixel-capture proxy, or synthetic application input;
 - no third-party plugin SDK or compatibility promise;
 - no custom agent protocol when ACP already covers the semantic control plane;
 - no replacement for every CLI application's own interface.

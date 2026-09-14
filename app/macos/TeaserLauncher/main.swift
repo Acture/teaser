@@ -1,0 +1,3 @@
+import TeaserKit
+
+TeaserMain.main()

@@ -2,7 +2,7 @@
 
 Status: design baseline; desktop-stage implementation in progress
 
-Last updated: 2026-09-07
+Last updated: 2026-09-14
 
 ## 1. System boundary
 
@@ -22,6 +22,8 @@ Teaser.app
 │   │   └── ManagedExternalWindow              exact provider-owned top-level window
 │   ├── NotesWindowController                  Teaser-owned Notes
 │   ├── DesktopOverlayController               passive visuals + bounded hit windows
+│   ├── DesktopStageLayoutEditorWindow         SplitView map → shared layout commands
+│   ├── DesktopStageShortcutMonitor            scoped KeyboardShortcuts subscriptions
 │   └── DesktopStageControlWindow              explicit start / stop / quit
 ├── TerminalSurfaceAdapter
 │   └── pinned libghostty                      VT state + Metal + IME + selection
@@ -283,8 +285,53 @@ Panel; macOS may still choose a new key window if the current provider closes or
 hides its own window.
 
 Control-Option-Z invokes layout Undo while Arrange is active. Command-Z is never
-observed as a layout command because a passive global monitor cannot consume it
-without also delivering Undo to the provider.
+registered as a Teaser command. KeyboardShortcuts 3.1.0 owns hotkey registration,
+delivery, repeat timing, and unregistration through cancellable event streams.
+The stage adapter owns binding scope and generation checks: nothing is registered
+at app launch, Stop cancels every stream, and Escape/layout Undo are additionally
+limited to Arrange. Unlike the previous passive monitors, registered combinations
+belong to Teaser while enabled. Ordinary provider input remains native. The
+upstream stream interface does not report Carbon registration conflicts to the
+caller; menu and control-window Stop/Quit remain independent escape paths.
+
+### 4.3 Existing-library integration
+
+Use upstream packages with small adapters first. Internal library interfaces and
+macOS private APIs are not categorically excluded, but belong in an isolated
+window backend with a pinned revision, explicit failure behavior, and safe
+same-window release. This is permission to evaluate that implementation route,
+not a claim that private APIs can safely reparent arbitrary macOS windows.
+
+SplitView 3.5.3 implements nested divider gestures in an explicitly opened,
+ordinary layout-editor window. Its tree is a projection of
+`WorkspacePresentation`, not a second persistence model. A completed drag calls
+`DesktopStageOrchestrator.setDividerRatio`; the existing solver, transaction,
+readback, rollback, Undo, and save path remain authoritative. The editor rebuilds
+gesture state from committed effective ratios after each commit or rejection.
+Vertical children and fractions are reversed because SplitView is top-first,
+whereas Teaser's AppKit geometry is bottom-first. Stale callbacks are ignored;
+offline edits are disabled while failed release leaves assigned provider windows.
+The desktop overlay remains click-through with bounded hit windows. SplitView
+does not embed external applications and does not replace the constraint solver.
+
+Swindler at `bf2c42f1db8bb1aa6c0b634d9fca3ab4bd37931d` compiles with the current
+toolchain but is **not a shipping dependency**. The compile-only probe in
+`probes/swindler-compatibility` type-checks a small internal bridge from
+`Window.delegate` through `OSXWindowDelegate.axElement` to `AXUIElement`.
+Its `@testable` import is probe-only; shipping requires a narrow upstream patch.
+The larger remaining integration work is lifecycle: `State.on` returns no
+subscription token, `ApplicationObserver` discards NotificationCenter observer
+tokens, and the state installs method callbacks retaining its owner. There is no
+public stop/unsubscribe contract. A replacement must first establish bounded
+initialize/cancel, subscription removal, and ordered completion of asynchronous
+frame writes before release. Do not match windows by title to avoid this work.
+
+Both shipping Swift dependencies are version-pinned in `Package.swift` and
+`Package.resolved`. App packaging uses SwiftPM's Xcode backend to generate
+`Bundle.main.resourceURL` lookup and puts resources and MIT notices in
+`Contents/Resources`. The native CLI backend's root-level bundle lookup does not
+satisfy a signed macOS app's resource layout. No upstream source patch is needed
+for either shipping dependency.
 
 ## 5. Capability model
 

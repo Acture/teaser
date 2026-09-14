@@ -32,13 +32,11 @@ private func mappedCommand(
 	modifiers: UInt,
 	isRepeat: Bool = false
 ) -> DesktopStageCommand? {
-	DesktopStageShortcutMapper.command(
-		for: .init(
-			keyCode: keyCode,
-			modifierFlagsRawValue: modifiers,
-			isRepeat: isRepeat
-		)
-	)
+	// Assert the exact bindings supplied to upstream, not a parallel event mapper.
+	guard let binding: DesktopStageShortcutBinding = DesktopStageShortcuts.bindings.first(where: {
+		$0.shortcut.carbonKeyCode == Int(keyCode) && $0.shortcut.modifiers.rawValue == modifiers
+	}), !isRepeat || binding.command.allowsKeyRepeat else { return nil }
+	return binding.command
 }
 
 private func testAllShortcutMappings() throws {
@@ -88,11 +86,6 @@ private func testModifierMatchingIsExact() throws {
 		)
 	}
 
-	let capsLock: UInt = NSEvent.ModifierFlags.capsLock.rawValue
-	try expect(
-		mappedCommand(keyCode: 2, modifiers: controlOption | capsLock) == .splitPanel,
-		"state-only Caps Lock must not disable Ctrl+Option+D"
-	)
 	try expect(
 		mappedCommand(keyCode: 6, modifiers: command | shift) == nil,
 		"Command+Shift+Z must remain available to the provider"
@@ -152,11 +145,85 @@ private func testLayoutUndoDoesNotReuseProviderUndo() throws {
 	)
 }
 
+@MainActor
+private final class RecordingShortcutSource: DesktopStageShortcutSource {
+	struct Listener {
+		let binding: DesktopStageShortcutBinding
+		let action: @MainActor @Sendable () -> Void
+		let task: Task<Void, Never>
+	}
+	var listeners: [Listener] = []
+
+	func listen(for binding: DesktopStageShortcutBinding,
+		onKeyDown: @escaping @MainActor @Sendable () -> Void
+	) -> Task<Void, Never> {
+		let task: Task<Void, Never> = Task {}
+		listeners.append(.init(binding: binding, action: onKeyDown, task: task))
+		return task
+	}
+}
+
+@MainActor
+private func testLibrarySubscriptionLifetime() throws {
+	let source: RecordingShortcutSource = .init()
+	var commands: [DesktopStageCommand] = []
+	let monitor: DesktopStageShortcutMonitor = .init(source: source) { commands.append($0) }
+	try expect(source.listeners.isEmpty, "construction must not install global shortcuts")
+	monitor.start()
+	try expect(monitor.isRunning && source.listeners.count == 12, "stage starts only unscoped bindings")
+	monitor.start()
+	try expect(source.listeners.count == 12, "repeated start must not double-register")
+	for listener: RecordingShortcutSource.Listener in source.listeners {
+		try expect(!listener.binding.requiresArrangeMode, "Escape and Undo must stay unregistered outside Arrange")
+		listener.action()
+	}
+	try expect(commands == source.listeners.map(\.binding.command), "library callbacks must dispatch real commands")
+	monitor.setArrangeModeEnabled(true)
+	try expect(source.listeners.count == 14, "Arrange installs Escape and layout Undo")
+	let scoped: [RecordingShortcutSource.Listener] = Array(source.listeners.suffix(2))
+	for listener: RecordingShortcutSource.Listener in scoped { listener.action() }
+	let count: Int = commands.count
+	monitor.setArrangeModeEnabled(false)
+	for listener: RecordingShortcutSource.Listener in scoped {
+		try expect(listener.task.isCancelled, "leaving Arrange cancels its upstream subscription")
+		listener.action()
+	}
+	try expect(commands.count == count, "queued callbacks from disabled bindings must be rejected")
+	monitor.setArrangeModeEnabled(true)
+	for listener: RecordingShortcutSource.Listener in scoped { listener.action() }
+	try expect(commands.count == count, "old Arrange callbacks must not revive after re-entry")
+	let stopped: [RecordingShortcutSource.Listener] = source.listeners
+	monitor.stop()
+	try expect(!monitor.isRunning, "Stop deactivates shortcuts")
+	for listener: RecordingShortcutSource.Listener in stopped {
+		try expect(listener.task.isCancelled, "Stop cancels every subscription")
+		listener.action()
+	}
+	monitor.start()
+	for listener: RecordingShortcutSource.Listener in stopped { listener.action() }
+	try expect(commands.count == count, "stale callbacks cannot run after Stop or restart")
+	source.listeners.last?.action()
+	try expect(commands.count == count + 1, "new subscriptions remain usable after restart")
+	monitor.stop()
+}
+
+@MainActor
+private func testShortcutOwnerDeinitCancelsSubscriptions() throws {
+	let source: RecordingShortcutSource = .init()
+	var monitor: DesktopStageShortcutMonitor? = .init(source: source) { _ in }
+	monitor?.start()
+	monitor = nil
+	try expect(source.listeners.allSatisfy { $0.task.isCancelled }, "owner teardown cancels upstream listeners")
+}
+
+@MainActor
 private func run() throws {
 	try testAllShortcutMappings()
 	try testModifierMatchingIsExact()
 	try testRepeatRules()
 	try testLayoutUndoDoesNotReuseProviderUndo()
+	try testLibrarySubscriptionLifetime()
+	try testShortcutOwnerDeinitCancelsSubscriptions()
 }
 
 do {

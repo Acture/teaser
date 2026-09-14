@@ -1,9 +1,15 @@
 import AppKit
+import KeyboardShortcuts
 
-@main
 @MainActor
-enum TeaserMain {
-	static func main() {
+public enum TeaserMain {
+	public static func main() {
+		if Array(CommandLine.arguments.dropFirst()) == ["--check-bundle-resources"] {
+			// Exercises the upstream localization accessor without NSApplication,
+			// global shortcuts, Accessibility, or desktop-window observation.
+			print("KeyboardShortcuts resources: \(KeyboardShortcuts.Shortcut(.space).description)")
+			return
+		}
 		if let exitCode: Int32 = ExternalWindowInspection.run(arguments: Array(CommandLine.arguments.dropFirst())) {
 			Darwin.exit(exitCode)
 		}

@@ -41,8 +41,18 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private lazy var controlWindow: DesktopStageControlWindow = .init(
 		onToggleStage: { [weak self] in self?.toggleStage() },
 		onArrange: { [weak self] in self?.perform(.toggleArrange) },
-		onRequestPermission: { [weak self] in self?.requestAccessibility() }
+		onRequestPermission: { [weak self] in self?.requestAccessibility() },
+		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
 	)
+
+	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
+		presentation: orchestrator.presentation,
+		onResize: { [weak self] reference, ratio in
+			self?.orchestrator.setDividerRatio(ratio, scope: reference.scope, splitID: reference.splitID)
+		},
+		onUndo: { [weak self] in self?.orchestrator.undoLastLayoutChange() }
+	)
+	private lazy var layoutEditorWindow: DesktopStageLayoutEditorWindow = .init(model: layoutEditorModel)
 
 	private lazy var overlayController: DesktopOverlayController = .init(
 		callbacks: .init(
@@ -116,11 +126,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		installSystemObservers()
 		orchestrator.setDisplays(connectedDisplaysWithFallback())
 		controlWindow.show()
-		do {
-			try shortcutMonitor.start()
-		} catch {
-			orchestrator.setStatus(error.localizedDescription)
-		}
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
 			while !Task.isCancelled {
@@ -163,6 +168,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		overlayController.close()
 		statusController.close()
 		controlWindow.close()
+		layoutEditorWindow.close()
 		closeNotesWindows()
 	}
 
@@ -231,6 +237,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	}
 
 	func orchestratorWillStopStage(_ orchestrator: DesktopStageOrchestrator) {
+		shortcutMonitor.stop()
 		shortcutMonitor.setArrangeModeEnabled(false)
 		managedWindowFocusObserver.stop()
 		panelTypeChooser.close()
@@ -250,6 +257,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		do {
 			try orchestrator.startStage()
 			try managedWindowFocusObserver.start()
+			shortcutMonitor.start()
 			controlWindow.close()
 			orchestrator.setStatus("Drag a window by its title bar into a Panel")
 		} catch {
@@ -354,6 +362,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard isRunning else { return }
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
+		layoutEditorModel.update(presentation: presentation, active: orchestrator.isStageActive,
+			assignedPanels: Set(orchestrator.panelAssignments.keys))
 		let overlaySnapshots: [DesktopOverlaySnapshot]
 		if !orchestrator.isStageActive {
 			overlaySnapshots = []
