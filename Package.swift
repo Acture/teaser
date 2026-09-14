@@ -28,17 +28,29 @@ let package: Package = Package(
 	// Matches `LSMinimumSystemVersion` in the application's Info.plist. Without
 	// it the availability annotations across AppKit and SwiftUI do not resolve.
 	platforms: [.macOS(.v14)],
+	dependencies: [
+		.package(url: "https://github.com/stevengharris/SplitView.git", exact: "3.5.3"),
+		.package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", exact: "3.1.0"),
+	],
 	targets: [
 		.target(
 			name: "TeaserKit",
+			dependencies: [
+				.product(name: "SplitView", package: "SplitView"),
+				.product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+			],
 			path: "app/macos/Teaser",
 			exclude: [
 				"Info.plist",
-				// `@main`; it belongs to the bundle `scripts/app.fish` assembles.
-				"TeaserApp.swift",
 				// Imports `GhosttyKit`, which arrives with a built libghostty.
 				"Terminal/TerminalSurfaceAdapter.swift",
 			],
+			swiftSettings: strict
+		),
+		.executableTarget(
+			name: "Teaser",
+			dependencies: ["TeaserKit"],
+			path: "app/macos/TeaserLauncher",
 			swiftSettings: strict
 		),
 		testExecutable("TeaserProbeTests"),

@@ -12,20 +12,23 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	private let onToggleStage: @MainActor () -> Void
 	private let onArrange: @MainActor () -> Void
 	private let onRequestPermission: @MainActor () -> Void
+	private let onEditLayout: @MainActor () -> Void
 	private let onQuit: @MainActor () -> Void
 
 	init(
 		onToggleStage: @escaping @MainActor () -> Void,
 		onArrange: @escaping @MainActor () -> Void,
 		onRequestPermission: @escaping @MainActor () -> Void,
+		onEditLayout: @escaping @MainActor () -> Void = {},
 		onQuit: @escaping @MainActor () -> Void = { NSApplication.shared.terminate(nil) }
 	) {
 		self.onToggleStage = onToggleStage
 		self.onArrange = onArrange
 		self.onRequestPermission = onRequestPermission
+		self.onEditLayout = onEditLayout
 		self.onQuit = onQuit
 		window = .init(
-			contentRect: .init(x: 0, y: 0, width: 520, height: 320),
+			contentRect: .init(x: 0, y: 0, width: 520, height: 400),
 			styleMask: [.titled, .closable, .miniaturizable],
 			backing: .buffered,
 			defer: false
@@ -64,11 +67,13 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 			title: "Quit Teaser", target: self, action: #selector(quit(_:))
 		)
 		quitButton.bezelStyle = .rounded
+		let editButton: NSButton = .init(title: "Layout Editor…", target: self, action: #selector(editLayout(_:)))
+		editButton.bezelStyle = .rounded
 		let actions: NSStackView = .init(views: [startButton, arrangeButton, quitButton])
 		actions.orientation = .horizontal
 		actions.spacing = 8
 		let content: NSStackView = .init(views: [
-			heading, instructions, permissionLabel, permissionButton, actions,
+			heading, instructions, permissionLabel, permissionButton, actions, editButton,
 			statusLabel, shortcuts,
 		])
 		content.orientation = .vertical
@@ -118,5 +123,6 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	@objc private func toggleStage(_ sender: NSButton) { onToggleStage() }
 	@objc private func arrange(_ sender: NSButton) { onArrange() }
 	@objc private func requestPermission(_ sender: NSButton) { onRequestPermission() }
+	@objc private func editLayout(_ sender: NSButton) { onEditLayout() }
 	@objc private func quit(_ sender: NSButton) { onQuit() }
 }

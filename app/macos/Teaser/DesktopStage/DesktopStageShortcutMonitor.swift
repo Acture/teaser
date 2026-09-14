@@ -1,10 +1,8 @@
 import AppKit
+import KeyboardShortcuts
 
 enum DesktopStageFocusDirection: Equatable, Hashable, Sendable {
-	case left
-	case right
-	case up
-	case down
+	case left, right, up, down
 }
 
 enum DesktopStageCommand: Equatable, Hashable, Sendable {
@@ -21,237 +19,128 @@ enum DesktopStageCommand: Equatable, Hashable, Sendable {
 
 	var allowsKeyRepeat: Bool {
 		switch self {
-		case .previousWorkspace, .nextWorkspace, .moveVirtualFocus:
-			true
-		case .stopLayout, .exitArrange, .toggleArrange, .splitPanel, .toggleWorkspaceFocus,
-			.handInputToPanel, .undo:
-			false
+		case .previousWorkspace, .nextWorkspace, .moveVirtualFocus: true
+		default: false
 		}
 	}
 }
 
-enum DesktopStageShortcutOrigin: Equatable, Sendable {
-	case local
-	case global
+/// Shared by library registration and the headless binding-contract tests.
+struct DesktopStageShortcutBinding: Hashable, Sendable {
+	let shortcut: KeyboardShortcuts.Shortcut
+	let command: DesktopStageCommand
+
+	var requiresArrangeMode: Bool { command == .undo || command == .exitArrange }
 }
 
-struct DesktopStageKeystroke: Equatable, Sendable {
-	let keyCode: UInt16
-	let modifierFlagsRawValue: UInt
-	let isRepeat: Bool
-
-	@MainActor
-	init(event: NSEvent) {
-		self.init(
-			keyCode: event.keyCode,
-			modifierFlagsRawValue: event.modifierFlags.rawValue,
-			isRepeat: event.isARepeat
-		)
-	}
-
-	init(
-		keyCode: UInt16,
-		modifierFlagsRawValue: UInt,
-		isRepeat: Bool = false
-	) {
-		self.keyCode = keyCode
-		self.modifierFlagsRawValue = modifierFlagsRawValue
-		self.isRepeat = isRepeat
-	}
+enum DesktopStageShortcuts {
+	static let bindings: [DesktopStageShortcutBinding] = {
+		let keys: [(KeyboardShortcuts.Key, DesktopStageCommand)] = [
+			(.escape, .stopLayout), (.space, .toggleArrange), (.d, .splitPanel),
+			(.f, .toggleWorkspaceFocus), (.leftBracket, .previousWorkspace),
+			(.rightBracket, .nextWorkspace), (.leftArrow, .moveVirtualFocus(.left)),
+			(.rightArrow, .moveVirtualFocus(.right)), (.upArrow, .moveVirtualFocus(.up)),
+			(.downArrow, .moveVirtualFocus(.down)), (.return, .handInputToPanel),
+			(.keypadEnter, .handInputToPanel), (.z, .undo),
+		]
+		return keys.map { key, command in
+			.init(shortcut: .init(key, modifiers: [.control, .option]), command: command)
+		} + [.init(shortcut: .init(.escape), command: .exitArrange)]
+	}()
 }
 
-enum DesktopStageShortcutMapper {
-	private enum KeyCode {
-		static let d: UInt16 = 2
-		static let f: UInt16 = 3
-		static let z: UInt16 = 6
-		static let rightBracket: UInt16 = 30
-		static let leftBracket: UInt16 = 33
-		static let returnKey: UInt16 = 36
-		static let space: UInt16 = 49
-		static let escape: UInt16 = 53
-		static let keypadEnter: UInt16 = 76
-		static let leftArrow: UInt16 = 123
-		static let rightArrow: UInt16 = 124
-		static let downArrow: UInt16 = 125
-		static let upArrow: UInt16 = 126
-	}
-
-	private static let relevantModifierMask: UInt =
-		NSEvent.ModifierFlags.command.rawValue
-		| NSEvent.ModifierFlags.control.rawValue
-		| NSEvent.ModifierFlags.option.rawValue
-		| NSEvent.ModifierFlags.shift.rawValue
-	private static let controlOption: UInt =
-		NSEvent.ModifierFlags.control.rawValue
-		| NSEvent.ModifierFlags.option.rawValue
-
-	static func command(for keystroke: DesktopStageKeystroke) -> DesktopStageCommand? {
-		let modifiers: UInt = keystroke.modifierFlagsRawValue & relevantModifierMask
-		let command: DesktopStageCommand?
-
-		switch (modifiers, keystroke.keyCode) {
-		case (controlOption, KeyCode.escape):
-			command = .stopLayout
-		case (0, KeyCode.escape):
-			command = .exitArrange
-		case (controlOption, KeyCode.space):
-			command = .toggleArrange
-		case (controlOption, KeyCode.d):
-			command = .splitPanel
-		case (controlOption, KeyCode.f):
-			command = .toggleWorkspaceFocus
-		case (controlOption, KeyCode.leftBracket):
-			command = .previousWorkspace
-		case (controlOption, KeyCode.rightBracket):
-			command = .nextWorkspace
-		case (controlOption, KeyCode.leftArrow):
-			command = .moveVirtualFocus(.left)
-		case (controlOption, KeyCode.rightArrow):
-			command = .moveVirtualFocus(.right)
-		case (controlOption, KeyCode.upArrow):
-			command = .moveVirtualFocus(.up)
-		case (controlOption, KeyCode.downArrow):
-			command = .moveVirtualFocus(.down)
-		case (controlOption, KeyCode.returnKey),
-			(controlOption, KeyCode.keypadEnter):
-			command = .handInputToPanel
-		case (controlOption, KeyCode.z):
-			command = .undo
-		default:
-			command = nil
-		}
-
-		guard let command else { return nil }
-		guard !keystroke.isRepeat || command.allowsKeyRepeat else { return nil }
-		return command
-	}
-}
-
-enum DesktopStageShortcutMonitorError: Error, LocalizedError, Sendable {
-	case localMonitorUnavailable
-	case globalMonitorUnavailable
-
-	var errorDescription: String? {
-		switch self {
-		case .localMonitorUnavailable:
-			"macOS did not install Teaser's local shortcut monitor."
-		case .globalMonitorUnavailable:
-			"macOS did not install Teaser's global shortcut monitor."
-		}
-	}
-}
-
-/// Passively observes desktop-stage shortcuts. The local monitor always returns
-/// the original event, and the global monitor cannot consume events, so provider
-/// applications retain their normal input path.
 @MainActor
-final class DesktopStageShortcutMonitor {
-	typealias CommandHandler = @MainActor (DesktopStageCommand) -> Void
+protocol DesktopStageShortcutSource {
+	func listen(
+		for binding: DesktopStageShortcutBinding,
+		onKeyDown: @escaping @MainActor @Sendable () -> Void
+	) -> Task<Void, Never>
+}
 
-	private final class MonitorRelay: @unchecked Sendable {
-		private weak var owner: DesktopStageShortcutMonitor?
-
-		init(owner: DesktopStageShortcutMonitor) {
-			self.owner = owner
-		}
-
-		func receive(_ keystroke: DesktopStageKeystroke, origin: DesktopStageShortcutOrigin) {
-			Task { @MainActor [weak owner, self] in
-				owner?.receive(keystroke, origin: origin, relay: self)
+/// Upstream owns Carbon registration, dispatch, key-repeat timing and teardown.
+/// Hard-coded streams avoid writing a second shortcut configuration to defaults.
+@MainActor
+struct LibraryDesktopStageShortcutSource: DesktopStageShortcutSource {
+	func listen(
+		for binding: DesktopStageShortcutBinding,
+		onKeyDown: @escaping @MainActor @Sendable () -> Void
+	) -> Task<Void, Never> {
+		Task { @MainActor in
+			guard !Task.isCancelled else { return }
+			if binding.command.allowsKeyRepeat {
+				for await _ in KeyboardShortcuts.repeatingKeyDownEvents(for: binding.shortcut) {
+					guard !Task.isCancelled else { return }
+					onKeyDown()
+				}
+			} else {
+				for await _ in KeyboardShortcuts.events(.keyDown, for: binding.shortcut) {
+					guard !Task.isCancelled else { return }
+					onKeyDown()
+				}
 			}
 		}
 	}
+}
 
-	private final class MonitorToken: @unchecked Sendable {
-		let value: Any
-
-		init(value: Any) {
-			self.value = value
-		}
-
-		deinit {
-			NSEvent.removeMonitor(value)
-		}
+/// Only active while the stage is running. Escape and layout undo are scoped
+/// further to Arrange; Command-Z and ordinary provider typing are never bound.
+@MainActor
+final class DesktopStageShortcutMonitor {
+	private struct Registration: Sendable {
+		let id: UUID
+		let task: Task<Void, Never>
 	}
 
-	private let onCommand: CommandHandler
-	private var localMonitor: MonitorToken?
-	private var globalMonitor: MonitorToken?
-	private var relay: MonitorRelay?
+	private let source: any DesktopStageShortcutSource
+	private let onCommand: @MainActor (DesktopStageCommand) -> Void
+	private var registrations: [DesktopStageShortcutBinding: Registration] = [:]
 	private var arrangeModeEnabled: Bool
+	private(set) var isRunning: Bool = false
 
 	init(
 		arrangeModeEnabled: Bool = false,
-		onCommand: @escaping CommandHandler
+		source: any DesktopStageShortcutSource = LibraryDesktopStageShortcutSource(),
+		onCommand: @escaping @MainActor (DesktopStageCommand) -> Void
 	) {
 		self.arrangeModeEnabled = arrangeModeEnabled
+		self.source = source
 		self.onCommand = onCommand
 	}
 
-	var isRunning: Bool {
-		localMonitor != nil && globalMonitor != nil
+	deinit {
+		for registration: Registration in registrations.values { registration.task.cancel() }
 	}
 
-	/// Layout undo uses Control-Option-Z; Command-Z is always provider input.
 	func setArrangeModeEnabled(_ enabled: Bool) {
+		guard arrangeModeEnabled != enabled else { return }
 		arrangeModeEnabled = enabled
+		if isRunning { updateRegistrations() }
 	}
 
-	func start() throws {
+	func start() {
 		guard !isRunning else { return }
-		stop()
-
-		let relay: MonitorRelay = .init(owner: self)
-		guard let globalValue: Any = NSEvent.addGlobalMonitorForEvents(
-			matching: .keyDown,
-			handler: { event in
-				relay.receive(
-					.init(event: event),
-					origin: .global
-				)
-			}
-		) else {
-			throw DesktopStageShortcutMonitorError.globalMonitorUnavailable
-		}
-		let globalMonitor: MonitorToken = .init(value: globalValue)
-
-		guard let localValue: Any = NSEvent.addLocalMonitorForEvents(
-			matching: .keyDown,
-			handler: { event in
-				relay.receive(
-					.init(event: event),
-					origin: .local
-				)
-				return event
-			}
-		) else {
-			withExtendedLifetime(globalMonitor) {}
-			throw DesktopStageShortcutMonitorError.localMonitorUnavailable
-		}
-
-		self.relay = relay
-		self.globalMonitor = globalMonitor
-		self.localMonitor = .init(value: localValue)
+		isRunning = true
+		updateRegistrations()
 	}
 
 	func stop() {
-		localMonitor = nil
-		globalMonitor = nil
-		relay = nil
+		isRunning = false
+		for registration: Registration in registrations.values { registration.task.cancel() }
+		registrations.removeAll()
 	}
 
-	private func receive(
-		_ keystroke: DesktopStageKeystroke,
-		origin: DesktopStageShortcutOrigin,
-		relay: MonitorRelay
-	) {
-		guard self.relay === relay else { return }
-		guard let command: DesktopStageCommand = DesktopStageShortcutMapper.command(
-			for: keystroke
-		) else { return }
-		guard command != .undo || arrangeModeEnabled else { return }
-		guard command != .exitArrange || arrangeModeEnabled else { return }
-		onCommand(command)
+	private func updateRegistrations() {
+		for binding: DesktopStageShortcutBinding in DesktopStageShortcuts.bindings {
+			if binding.requiresArrangeMode && !arrangeModeEnabled {
+				registrations.removeValue(forKey: binding)?.task.cancel()
+			} else if registrations[binding] == nil {
+				let id: UUID = .init()
+				let task: Task<Void, Never> = source.listen(for: binding) { [weak self] in
+					guard let self, self.isRunning, self.registrations[binding]?.id == id else { return }
+					self.onCommand(binding.command)
+				}
+				registrations[binding] = .init(id: id, task: task)
+			}
+		}
 	}
 }

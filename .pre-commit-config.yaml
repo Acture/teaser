@@ -135,7 +135,7 @@ repos:
         entry: fish scripts/app.fish --build-only
         language: system
         pass_filenames: false
-        files: (^app/macos/Teaser/|^scripts/app\.fish$|^Package\.swift$)
+        files: (^app/macos/Teaser(Launcher)?/|^scripts/app\.fish$|^Package\.(swift|resolved)$|^(LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$)
         stages: [pre-push]
 
       - id: fish-syntax

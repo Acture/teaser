@@ -27,7 +27,7 @@ Deliverables:
   bracketed paste, mouse input, resize, flow control, and capture repair;
 - a two-level constrained slicing layout in which each display contains connected
   rectangular Workspaces and each Workspace contains unequal Panels;
-- generic current-Space window adoption through public Accessibility APIs, with
+- generic current-Space window adoption through the macOS window backend, with
   exact identity, drag-driven selection, transactional placement, Undo, and safe
   same-window release.
 
