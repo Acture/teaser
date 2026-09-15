@@ -6,8 +6,14 @@ public enum TeaserMain {
 	public static func main() {
 		if Array(CommandLine.arguments.dropFirst()) == ["--check-bundle-resources"] {
 			// Exercises the upstream localization accessor without NSApplication,
-			// global shortcuts, Accessibility, or desktop-window observation.
-			print("KeyboardShortcuts resources: \(KeyboardShortcuts.Shortcut(.space).description)")
+			// global shortcuts, Accessibility, or desktop-window observation. A
+			// missing strings table silently yields the capitalized key instead.
+			let description: String = KeyboardShortcuts.Shortcut(.space).description
+			print("KeyboardShortcuts resources: \(description)")
+			if description == "space_key".capitalized {
+				fputs("error: the KeyboardShortcuts strings table is missing from the bundle\n", stderr)
+				Darwin.exit(1)
+			}
 			return
 		}
 		if let exitCode: Int32 = ExternalWindowInspection.run(arguments: Array(CommandLine.arguments.dropFirst())) {
