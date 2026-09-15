@@ -185,10 +185,7 @@ final class DesktopStageOrchestrator {
 		guard !isStageActive else { return }
 		isStageActive = true
 		// An offline editor snapshot holds no provider leases; Undo never spans Start.
-		undoCoalescingTask?.cancel()
-		undoCoalescingTask = nil
-		undoCoalescingKey = nil
-		undoSnapshot = nil
+		discardUndoHistory()
 		try solveAndApply(synchronously: true)
 		try dragObserver.start()
 		ExternalWindowDiagnostics.logger.notice("stage-ready panels=\(self.layout?.panelFrames.count ?? 0, privacy: .public)")
@@ -205,10 +202,7 @@ final class DesktopStageOrchestrator {
 		host?.orchestratorWillStopStage(self)
 		dropHighlight = nil
 		draggingIdentity = nil
-		undoCoalescingTask?.cancel()
-		undoCoalescingTask = nil
-		undoCoalescingKey = nil
-		undoSnapshot = nil
+		discardUndoHistory()
 		var failedRestorations: Int = 0
 		for (identity, lease): (ExternalWindowIdentity, any ExternalWindowLease) in leases {
 			if !lease.release(restoringOriginalFrame: !detachedIdentities.contains(identity)) {
@@ -308,6 +302,8 @@ final class DesktopStageOrchestrator {
 	private func adaptPresentationToDisplays() -> Bool {
 		let adapted = DesktopStageDisplayTopology.adapt(presentation, to: displays)
 		guard adapted.changed else { return false }
+		// A snapshot from the previous topology would restore displays that no longer exist.
+		discardUndoHistory()
 		presentation = adapted.presentation
 		host?.orchestratorDidRequestSave(self)
 		return true
@@ -834,11 +830,15 @@ final class DesktopStageOrchestrator {
 		try solveAndApply(synchronously: true)
 	}
 
-	private func prepareForNewUndo(preserving retained: Set<ExternalWindowIdentity> = []) {
+	private func discardUndoHistory() {
 		undoCoalescingTask?.cancel()
 		undoCoalescingTask = nil
 		undoCoalescingKey = nil
 		undoSnapshot = nil
+	}
+
+	private func prepareForNewUndo(preserving retained: Set<ExternalWindowIdentity> = []) {
+		discardUndoHistory()
 		let assigned: Set<ExternalWindowIdentity> = .init(panelAssignments.values)
 		for identity: ExternalWindowIdentity in detachedIdentities
 			where !assigned.contains(identity) && !retained.contains(identity)
