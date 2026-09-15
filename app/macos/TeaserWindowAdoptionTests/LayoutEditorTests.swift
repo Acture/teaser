@@ -152,11 +152,14 @@ private func testStoppedEditorRefreshesAfterDisplayChange() throws {
 	let model: DesktopStageLayoutEditorModel = makeEditor(harness)
 	let stale: FractionHolder = model.fractionHolder(for: .init(scope: .display(testDisplayID),
 		splitID: .init("display-root")), axis: .horizontal, preference: .init(desiredRatio: 0.5))
+	stale.value = 0.6
+	try expect(harness.orchestrator.canUndo, "the offline edit before the display change is undoable")
 	let changesBefore: Int = harness.host.stateChanges
 	harness.orchestrator.screenParametersDidChange(displays: [
 		.init(id: .init("replacement-display"), frame: layoutRect(testDisplayFrame)),
 	])
 	try expect(harness.host.stateChanges > changesBefore, "a stopped display change must refresh Teaser chrome")
+	try expect(!harness.orchestrator.canUndo, "Undo must not restore the previous display topology")
 	let revision: UInt = model.revision
 	model.update(from: harness.orchestrator)
 	try expect(model.revision > revision, "the editor must rebuild from the adapted display trees")
