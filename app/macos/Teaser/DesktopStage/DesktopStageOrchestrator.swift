@@ -248,9 +248,6 @@ final class DesktopStageOrchestrator {
 		switch command {
 		case .stopLayout:
 			stopStage()
-		case .exitArrange:
-			isArrangeModeEnabled = false
-			setStatus("Live mode")
 		case .toggleArrange:
 			isArrangeModeEnabled.toggle()
 			setStatus(isArrangeModeEnabled ? "Arrange mode" : "Live mode")

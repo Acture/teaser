@@ -50,7 +50,7 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		statusLabel.font = .systemFont(ofSize: 12)
 		statusLabel.maximumNumberOfLines = 3
 		let shortcuts: NSTextField = .init(wrappingLabelWithString:
-			"⌃⌥Space  Arrange    ⌃⌥D  Split    ⌃⌥F  Focus\nEsc  Leave Arrange    ⌃⌥Esc  Stop layout    ⌘Q  Quit"
+			"⌃⌥Space  Arrange on/off    ⌃⌥D  Split    ⌃⌥F  Focus\n⌃⌥Z  Undo in Arrange    ⌃⌥Esc  Stop layout    ⌘Q  Quit"
 		)
 		shortcuts.font = .systemFont(ofSize: 11)
 		shortcuts.textColor = .secondaryLabelColor
