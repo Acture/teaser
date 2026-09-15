@@ -22,39 +22,58 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 		let title: String
 	}
 
-	private(set) var presentation: WorkspacePresentation
-	private(set) var active: Bool = false
-	private(set) var assignedPanels: Set<PanelID> = []
+	struct State: Equatable {
+		var presentation: WorkspacePresentation
+		var active: Bool = false
+		var assignedPanels: Set<PanelID> = []
+		var hasRetainedLeases: Bool = false
+		var canUndo: Bool = false
+	}
+
+	private(set) var state: State
 	@Published private(set) var revision: UInt = 0
 	private let onResize: @MainActor (LayoutSplitReference, Double) -> Void
-	let onUndo: @MainActor () -> Void
-	var canEdit: Bool { active || assignedPanels.isEmpty }
+	private let onUndo: @MainActor () -> Void
+
+	/// A failed release keeps provider leases after Stop. Editing or undoing then
+	/// could release those windows from a mode that promises not to move any.
+	var canEdit: Bool { state.active || !state.hasRetainedLeases }
+	var canUndo: Bool { canEdit && state.canUndo }
 
 	init(
 		presentation: WorkspacePresentation,
 		onResize: @escaping @MainActor (LayoutSplitReference, Double) -> Void,
 		onUndo: @escaping @MainActor () -> Void
 	) {
-		self.presentation = presentation
+		state = .init(presentation: presentation)
 		self.onResize = onResize
 		self.onUndo = onUndo
 	}
 
 	var scopes: [ScopeChoice] {
-		presentation.displayLayouts.keys.sorted { $0.rawValue < $1.rawValue }.enumerated().map {
+		state.presentation.displayLayouts.keys.sorted { $0.rawValue < $1.rawValue }.enumerated().map {
 			.init(id: .display($0.element), title: "Display \($0.offset + 1)")
-		} + presentation.workspaces.values.sorted { $0.id.rawValue < $1.id.rawValue }.map {
+		} + state.presentation.workspaces.values.sorted { $0.id.rawValue < $1.id.rawValue }.map {
 			.init(id: .workspace($0.id), title: $0.title)
 		}
 	}
 
-	func update(presentation: WorkspacePresentation, active: Bool, assignedPanels: Set<PanelID>) {
-		guard self.presentation != presentation || self.active != active
-			|| self.assignedPanels != assignedPanels else { return }
-		self.presentation = presentation
-		self.active = active
-		self.assignedPanels = assignedPanels
+	func update(from orchestrator: DesktopStageOrchestrator) {
+		let next: State = .init(
+			presentation: orchestrator.presentation,
+			active: orchestrator.isStageActive,
+			assignedPanels: Set(orchestrator.panelAssignments.keys),
+			hasRetainedLeases: orchestrator.hasRetainedLeases,
+			canUndo: orchestrator.canUndo
+		)
+		guard next != state else { return }
+		state = next
 		revision &+= 1
+	}
+
+	func undo() {
+		guard canUndo else { return }
+		onUndo()
 	}
 
 	func fractionHolder(
@@ -114,6 +133,7 @@ private struct DesktopStageLayoutEditorView: View {
 	@State private var selection: LayoutScope?
 
 	var body: some View {
+		let presentation: WorkspacePresentation = model.state.presentation
 		let selected: LayoutScope? = model.scopes.first { $0.id == selection }?.id ?? model.scopes.first?.id
 		VStack(alignment: .leading, spacing: 12) {
 			HStack {
@@ -122,23 +142,24 @@ private struct DesktopStageLayoutEditorView: View {
 				}
 				.frame(maxWidth: 340)
 				Spacer()
-				Button("Undo Layout Change", action: model.onUndo)
+				Button("Undo Layout Change", action: model.undo)
+					.disabled(!model.canUndo)
 			}
 			Text(!model.canEdit ? "Some windows could not be released. Close Teaser to retry release before editing."
-				: model.active
+				: model.state.active
 				? "Drag a divider; releasing it resizes the connected windows."
 				: "Layout stopped. Edit saved proportions without moving any windows.")
 				.font(.callout).foregroundStyle(.secondary)
 			Group {
 				switch selected {
 				case .display(let id):
-					if case .focused(let workspaceID) = model.presentation.mode,
-						model.presentation.workspaces[workspaceID]?.displayAffinity == id
+					if case .focused(let workspaceID) = presentation.mode,
+						presentation.workspaces[workspaceID]?.displayAffinity == id
 					{
 						workspace(workspaceID)
-					} else if case .focused = model.presentation.mode {
+					} else if case .focused = presentation.mode {
 						Text("No workspace on this display in Focus mode.")
-					} else if let tree: LayoutTree<WorkspaceID> = model.presentation.displayLayouts[id]?.workspaceTree {
+					} else if let tree: LayoutTree<WorkspaceID> = presentation.displayLayouts[id]?.workspaceTree {
 						LayoutEditorTree(tree: tree, scope: .display(id), model: model, content: workspace)
 					}
 				case .workspace(let id): workspace(id)
@@ -155,7 +176,7 @@ private struct DesktopStageLayoutEditorView: View {
 	}
 
 	@ViewBuilder private func workspace(_ id: WorkspaceID) -> some View {
-		if let workspace: WorkspaceDescriptor = model.presentation.workspaces[id] {
+		if let workspace: WorkspaceDescriptor = model.state.presentation.workspaces[id] {
 			VStack(alignment: .leading, spacing: 4) {
 				Text(workspace.title).font(.headline).lineLimit(1)
 				LayoutEditorTree(tree: workspace.panelTree, scope: .workspace(id), model: model) { panelID in
@@ -174,7 +195,7 @@ private struct DesktopStageLayoutEditorView: View {
 	}
 
 	private func panelStatus(_ id: PanelID, workspace: WorkspaceDescriptor) -> String {
-		if model.assignedPanels.contains(id) { return "Connected window" }
+		if model.state.assignedPanels.contains(id) { return "Connected window" }
 		if workspace.panels[id]?.nativeContent == .notes { return "Teaser Notes" }
 		return "Empty panel"
 	}

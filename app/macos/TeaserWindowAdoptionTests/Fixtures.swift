@@ -617,13 +617,17 @@ final class RecordingStageHost: DesktopStageOrchestratorHost {
 	var contentPanels: Set<PanelID> = []
 	private(set) var createdPanels: [PanelID] = []
 	private(set) var inputHandoffs: [PanelID] = []
+	private(set) var stateChanges: Int = 0
+	private(set) var saveRequests: Int = 0
 	private let log: FakeOperationLog
 
 	init(log: FakeOperationLog) {
 		self.log = log
 	}
 
-	func orchestratorDidChangeState(_ orchestrator: DesktopStageOrchestrator) {}
+	func orchestratorDidChangeState(_ orchestrator: DesktopStageOrchestrator) {
+		stateChanges += 1
+	}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
@@ -651,7 +655,9 @@ final class RecordingStageHost: DesktopStageOrchestratorHost {
 		createdPanels.append(panelID)
 	}
 
-	func orchestratorDidRequestSave(_ orchestrator: DesktopStageOrchestrator) {}
+	func orchestratorDidRequestSave(_ orchestrator: DesktopStageOrchestrator) {
+		saveRequests += 1
+	}
 
 	func orchestratorWillStopStage(_ orchestrator: DesktopStageOrchestrator) {
 		log.record(.hostWillStopStage)
