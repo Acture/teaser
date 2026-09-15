@@ -31,8 +31,9 @@ The repository contains an AppKit/SwiftUI desktop-stage prototype plus the Rust
 foundation. Real-window drag acceptance is still pending; do not infer it from
 pure geometry tests. The Rust workspace contains `crates/teaser-core` and
 `crates/teaserd`. Native application and terminal integration live under
-`app/macos/Teaser`; probes live under `app/macos/TeaserProbe` and
-`app/macos/TeaserProbeTests`.
+`app/macos/Teaser`; the native Ghostty probe lives under `app/macos/TeaserProbe`
+and `app/macos/TeaserProbeTests`, and library compatibility probes live under
+`probes/`.
 
 The pinned Ghostty source is the `vendor/ghostty` submodule. Teaser-owned provenance
 and patches live under `vendor/README.md` and `patches/ghostty`. Shell integration,

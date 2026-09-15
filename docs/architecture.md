@@ -2,7 +2,7 @@
 
 Status: design baseline; desktop-stage implementation in progress
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
 
 ## 1. System boundary
 
@@ -301,11 +301,12 @@ observers; they match no keys while nothing is registered.
 
 ### 4.3 Existing-library integration
 
-Use upstream packages with small adapters first. Internal library interfaces and
-macOS private APIs are not categorically excluded, but belong in an isolated
-window backend with a pinned revision, explicit failure behavior, and safe
-same-window release. This is permission to evaluate that implementation route,
-not a claim that private APIs can safely reparent arbitrary macOS windows.
+Use upstream packages with small adapters first. v1 ships window control through
+public Accessibility and Core Graphics APIs. Internal library interfaces and
+macOS private APIs may be evaluated only inside an isolated, pinned window
+backend that keeps the exact (PID, window ID, AX element) identity, explicit
+failure behavior, and same-window release. They are never a basis for
+reparenting, capture, or synthetic input.
 
 SplitView 3.5.3 implements nested divider gestures in an explicitly opened,
 ordinary layout-editor window. Its tree is a projection of
@@ -314,22 +315,35 @@ ordinary layout-editor window. Its tree is a projection of
 readback, rollback, Undo, and save path remain authoritative. The editor rebuilds
 gesture state from committed effective ratios after each commit or rejection.
 Vertical children and fractions are reversed because SplitView is top-first,
-whereas Teaser's AppKit geometry is bottom-first. Stale callbacks are ignored;
-offline edits are disabled while failed release leaves assigned provider windows.
-The desktop overlay remains click-through with bounded hit windows. SplitView
-does not embed external applications and does not replace the constraint solver.
+whereas Teaser's AppKit geometry is bottom-first. Stale callbacks are ignored.
+While a failed release retains provider leases, offline edits and editor Undo
+are disabled, and Undo history never spans Start. The desktop overlay keeps its
+own click-through divider handles with bounded hit windows, because SplitView
+lays both panes out in one SwiftUI hierarchy. SplitView does not embed external
+applications or replace the constraint solver: its fixed handle limits are editor
+affordances, and the solver clamps every commit.
 
-Swindler at `bf2c42f1db8bb1aa6c0b634d9fca3ab4bd37931d` compiles with the current
-toolchain but is **not a shipping dependency**. The compile-only probe in
-`probes/swindler-compatibility` type-checks a small internal bridge from
-`Window.delegate` through `OSXWindowDelegate.axElement` to `AXUIElement`.
-Its `@testable` import is probe-only; shipping requires a narrow upstream patch.
-The larger remaining integration work is lifecycle: `State.on` returns no
-subscription token, `ApplicationObserver` discards NotificationCenter observer
-tokens, and the state installs method callbacks retaining its owner. There is no
-public stop/unsubscribe contract. A replacement must first establish bounded
-initialize/cancel, subscription removal, and ordered completion of asynchronous
-frame writes before release. Do not match windows by title to avoid this work.
+Swindler is **not a shipping dependency**. The compile-only probe in
+`probes/swindler-compatibility` pins revision
+`bf2c42f1db8bb1aa6c0b634d9fca3ab4bd37931d`. Against Teaser's contracts, that
+revision falls short in three ways:
+
+- identity: it exposes a window's PID publicly and its AX element only
+  internally. It has no provider window ID, so Teaser's Core Graphics correlation
+  remains the source of the window ID, and its subrole filter still admits
+  non-standard windows;
+- lifecycle: initialization creates front-ordered tracker windows and subscribes
+  to every running application with retries and no per-element timeout, and there
+  is no subscription token or stop contract;
+- writes: frame writes are unordered and not compared with the request, use a
+  different coordinate origin, and observe only in the default run-loop mode.
+
+A backend built on it must create and show no windows, bound initialization and
+cancellation, remove its subscriptions, order and read back frame writes, convert
+coordinates against the primary display, observe in common run-loop modes, and
+detect a user move before same-window release. Do not match windows by title to
+avoid this work. Dated upstream evidence with file and line references lives in
+the implementation plan.
 
 Both shipping Swift dependencies are version-pinned in `Package.swift` and
 `Package.resolved`. App packaging uses SwiftPM's Xcode backend to generate
@@ -524,7 +538,7 @@ SLO must be recorded with measurements and rationale before later milestones beg
 | Layout | Per-display WorkspaceTree containing one PanelTree per Workspace |
 | Focus | Virtual Focus is independent from explicit macOS Input Focus |
 | Terminal | Full pinned `libghostty`, isolated behind one adapter |
-| External apps | Exact current-Space window leases through public AX APIs |
+| External apps | Exact current-Space window leases through public AX APIs; private APIs only in an evaluated backend (§4.3) |
 | Editor | Neovim in terminal or an adopted provider-owned editor window |
 | Agent | Native CLI for completeness; ACP for structured supported capabilities |
 | Input | Reusable native `NSTextView`-based input surface |

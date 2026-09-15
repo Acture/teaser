@@ -2,7 +2,7 @@
 goal: Build the first supportable macOS Teaser platform from the current architecture baseline
 version: 1.0
 date_created: 2026-07-21
-last_updated: 2026-09-04
+last_updated: 2026-09-15
 owner: Acture
 status: 'In Progress'
 tags: [architecture, terminal, macos, rust, swift, agents]
@@ -28,7 +28,7 @@ second renderer.
 - **REQ-005**: Produce shell blocks from OSC 133/OSC 7 and agent blocks from ACP while storing bounded completed payloads in SQLite.
 - **REQ-006**: Support `teaser agent claude` and `teaser agent codex` without shadowing or modifying the vendor `claude` and `codex` commands.
 - **REQ-007**: Support local tmux control mode, system SSH, SSH-carried tmux control mode, and capability-degraded opaque Mosh sessions.
-- **REQ-008**: Let the user drag any eligible current-Space application window into a Panel and manage its geometry through public Accessibility APIs; never reparent, capture, or synthesize input for it.
+- **REQ-008**: Let the user drag any eligible current-Space application window into a Panel and manage its geometry through public Accessibility APIs; never reparent, capture, or synthesize input for it. Any private-API route is limited to the isolated backend evaluation in `docs/architecture.md` section 4.3.
 - **REQ-009**: Default search to the virtually focused Panel and require a distinct action for current-Workspace search.
 - **REQ-010**: Ship v1 without a dynamic plugin loader, public surface SDK, stable internal ABI, or third-party extension promise.
 - **REQ-011**: Preserve native Claude/Codex CLI mode in TerminalSurface because ACP adapters may expose fewer capabilities than the vendor CLIs.
@@ -312,23 +312,33 @@ came up, so a later unrelated movement reported it over whatever the user had
 done since — including over a completed adoption. Press location and rejection
 are now one value whose lifetime is the press.
 
-Library integration evidence, 2026-09-14 (P-595): the adoption harness passes
-72 cases, including SplitView-driven provider apply/Undo, rejected and invalid
-fractions, vertical orientation, display-level Workspace resize, offline editing,
-and failed-release/stale-gesture safety. The controls harness additionally checks
-scoped subscriptions, cancellation, stale callbacks, restart, and owner teardown
-through a fake shortcut source; it never registers system hotkeys. The full
-pre-push gate passes with the pinned Swift dependencies.
+Library integration evidence, 2026-09-14 (P-595), re-run 2026-09-15 on Xcode
+27.0 (27A266a) with Swift 6.4: the full pre-push gate passes and the adoption
+harness passes 73 cases. They include SplitView-driven provider apply and Undo,
+rejected and invalid fractions, vertical orientation, display-level Workspace
+resize, offline editing with one save request and Undo, the retained-release
+gate fed exactly as the controller feeds it, and refresh after a stopped display
+change. Reverting either the retained-lease gate or the stopped display-change
+notification fails exactly its case. The controls harness checks the binding
+table, that every binding carries Control-Option, the stream each binding
+subscribes to, scoped subscriptions, cancellation, stale callbacks, restart, and
+owner teardown through a fake shortcut source; it never registers system
+hotkeys. The stream switch inside `LibraryDesktopStageShortcutSource` and the
+controller's start and stop wiring have no headless coverage.
 
-The signed app was copied to a fresh temporary directory, passed
-`codesign --verify --strict`, and printed `KeyboardShortcuts resources: Space`
-through `--check-bundle-resources` with resource override environment variables
-unset. That branch exits before creating `NSApplication`. This proves packaged
-resource lookup, not interactive shortcut delivery or visual acceptance.
+The app gate assembles the bundle from scratch, signs it, and runs
+`--check-bundle-resources`, which exits 1 when the bundled strings table is
+missing. A signed copy in a fresh temporary directory passed
+`codesign --verify --strict` and printed `KeyboardShortcuts resources: Space`
+with resource override variables unset. That branch exits before creating
+`NSApplication`; it proves packaged resource lookup, not shortcut delivery.
+SwiftPM 6.4 warns that `--build-system xcode`, which the app script needs for
+bundle-relative resource lookup, is deprecated and will be removed; the script
+must move to the default build system or an Xcode project before that release.
 
-The separate Swindler compile probe passes with its pinned upstream revision,
-including the internal Window-to-AX-element bridge. Reproduce it without
-initializing window services:
+The Swindler compile probe builds with zero warnings on the same toolchain. It
+uses `@testable import`, so it needs the default debug configuration, and it is
+outside the pre-push gate. Reproduce it without initializing window services:
 
 ```fish
 swift build --package-path probes/swindler-compatibility \
@@ -336,10 +346,42 @@ swift build --package-path probes/swindler-compatibility \
     --product SwindlerProbe --force-resolved-versions
 ```
 
-Its test-only import is not a production adapter. Lifecycle and asynchronous
-write/release integration remain open under P-511; see `docs/architecture.md`
-section 4.3. Real Zed dragging, native keyboard delivery/conflicts, and visible
-editor interaction remain unverified by this headless run.
+The probe type-checks only the internal Window-to-AX-element cast, which
+compiles for any generic arguments; it is not a working adapter. These facts at
+Swindler `bf2c42f`, AXSwift 0.3.2, and PromiseKit 6.22.1 bound a backend
+(`docs/architecture.md` section 4.3):
+
+- identity: `Window.delegate` (`Window.swift:9`) and
+  `OSXWindowDelegate.axElement` (`Window.swift:132-141`) are internal, while the
+  PID is public through `Window.application` (`Window.swift:39`,
+  `Application.swift:30`). Window numbers appear only for Swindler's own tracker
+  windows (`Space.swift:103-165`), and only `AXUnknown` subroles are filtered
+  (`Window.swift:229-240`);
+- initialization: `Swindler.initialize()` builds `OSXSpaceObserver`
+  (`State.swift:6-22`), which creates a 1×1 borderless floating window per
+  screen and orders it front (`Space.swift:14-16`, `66-70`, `117-143`). It
+  watches every running application (`State.swift:273-279`) with up to three
+  retries (`State.swift:342-354`) and sets no per-element messaging timeout
+  (`AXPropertyDelegate.swift:31`);
+- threading: event delivery asserts the main thread (`State.swift:111`),
+  property adapters call `DispatchQueue.main.sync` (`State.swift:477-483`,
+  `Application.swift:671-678`), and PromiseKit continuations default to the main
+  queue (PromiseKit `Configuration.swift:12`);
+- lifecycle: `State.on` returns no token (`State.swift:60-62`), observer tokens
+  are discarded (`State.swift:130-177`, `Space.swift:91-95`,
+  `Screen.swift:176-182`), and observers of terminated applications are not
+  cleaned up (`State.swift:400`);
+- writes: `WriteableProperty` writes on a global queue behind a lock with no
+  FIFO guarantee (`Property.swift:143`, `149`, `310-318`) and hard-codes
+  `external = false` after readback (`Property.swift:338`). Frames write position
+  before size (`Window.swift:360-364`) and invert Y against the maximum over all
+  screens (`Window.swift:372-375`, `Screen.swift:54-65`), and AXSwift observers
+  join `RunLoop.current` in default mode only (AXSwift `Observer.swift:73-78`).
+
+The Swindler dependency, identity bridge, and lifecycle patch belong to P-600;
+the asynchronous adapter and lease release to P-601; the production backend
+switch to P-602. Real Zed dragging, native keyboard delivery and conflicts, and
+visible editor interaction remain unverified by these headless runs.
 
 The default P-511 showcase uses actual provider windows and six unequal Workspace
 regions. Missing providers leave empty hinted Panels; they are never replaced by a
