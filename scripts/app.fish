@@ -44,6 +44,8 @@ or exit 1
 set swift_bin_dir (swift build --build-system xcode --show-bin-path)
 or exit 1
 
+# Assemble from scratch so the signature seals only what this build produced.
+rm -rf $app_bundle
 mkdir -p $app_contents/MacOS $app_contents/Resources/ThirdPartyNotices
 or exit 1
 cp $swift_bin_dir/Teaser $app_binary
@@ -60,13 +62,9 @@ cp -f .build/checkouts/KeyboardShortcuts/license $app_contents/Resources/ThirdPa
 or exit 1
 cp -f .build/checkouts/SplitView/LICENSE $app_contents/Resources/ThirdPartyNotices/SplitView.txt
 or exit 1
-cp LICENSE NOTICE THIRD_PARTY_NOTICES.md $app_contents/Resources/
+cp LICENSE NOTICE TRADEMARKS.md THIRD_PARTY_NOTICES.md $app_contents/Resources/
 or exit 1
 
-if test -d $app_contents/_CodeSignature
-    codesign --remove-signature $app_bundle
-    or exit 1
-end
 codesign --force --sign "$codesign_identity" --timestamp=none $app_bundle
 or exit 1
 codesign --verify --strict $app_bundle
