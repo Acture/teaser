@@ -27,22 +27,18 @@ private let controlOption: UInt =
 	| NSEvent.ModifierFlags.option.rawValue
 private let command: UInt = NSEvent.ModifierFlags.command.rawValue
 
-private func mappedCommand(
-	keyCode: UInt16,
-	modifiers: UInt,
-	isRepeat: Bool = false
-) -> DesktopStageCommand? {
-	// Assert the exact bindings supplied to upstream, not a parallel event mapper.
-	guard let binding: DesktopStageShortcutBinding = DesktopStageShortcuts.bindings.first(where: {
+/// Reads the exact table handed to upstream. Carbon, not Teaser, matches the
+/// live keystroke against it, so exact matching and repeat timing still need a
+/// real keyboard.
+private func boundCommand(keyCode: UInt16, modifiers: UInt) -> DesktopStageCommand? {
+	DesktopStageShortcuts.bindings.first(where: {
 		$0.shortcut.carbonKeyCode == Int(keyCode) && $0.shortcut.modifiers.rawValue == modifiers
-	}), !isRepeat || binding.command.allowsKeyRepeat else { return nil }
-	return binding.command
+	})?.command
 }
 
-private func testAllShortcutMappings() throws {
+private func testBindingTableIsExact() throws {
 	let cases: [(keyCode: UInt16, modifiers: UInt, expected: DesktopStageCommand)] = [
 		(53, controlOption, .stopLayout),
-		(53, 0, .exitArrange),
 		(49, controlOption, .toggleArrange),
 		(2, controlOption, .splitPanel),
 		(3, controlOption, .toggleWorkspaceFocus),
@@ -59,88 +55,73 @@ private func testAllShortcutMappings() throws {
 
 	for testCase: (keyCode: UInt16, modifiers: UInt, expected: DesktopStageCommand) in cases {
 		try expect(
-			mappedCommand(
+			boundCommand(
 				keyCode: testCase.keyCode,
 				modifiers: testCase.modifiers
 			) == testCase.expected,
-			"key code \(testCase.keyCode) must map to \(testCase.expected)"
+			"binding table must map key code \(testCase.keyCode) to \(testCase.expected)"
 		)
 	}
-}
-
-private func testModifierMatchingIsExact() throws {
-	let shift: UInt = NSEvent.ModifierFlags.shift.rawValue
-	try expect(mappedCommand(keyCode: 6, modifiers: command) == nil,
-		"Command-Z must remain exclusively provider input")
-	let modifierCases: [(modifiers: UInt, message: String)] = [
-		(0, "an unmodified D must not split"),
-		(NSEvent.ModifierFlags.control.rawValue, "raw Ctrl+D must not split"),
-		(NSEvent.ModifierFlags.option.rawValue, "raw Option+D must not split"),
-		(controlOption | shift, "Ctrl+Option+Shift+D must not split"),
-		(controlOption | command, "Ctrl+Option+Command+D must not split"),
-	]
-	for testCase: (modifiers: UInt, message: String) in modifierCases {
-		try expect(
-			mappedCommand(keyCode: 2, modifiers: testCase.modifiers) == nil,
-			testCase.message
-		)
-	}
-
 	try expect(
-		mappedCommand(keyCode: 6, modifiers: command | shift) == nil,
-		"Command+Shift+Z must remain available to the provider"
+		DesktopStageShortcuts.bindings.count == cases.count,
+		"binding table must contain only the documented shortcuts"
 	)
 }
 
-private func testRepeatRules() throws {
-	let nonRepeating: [(keyCode: UInt16, modifiers: UInt)] = [
-		(53, controlOption),
-		(53, 0),
-		(49, controlOption),
-		(2, controlOption),
-		(3, controlOption),
-		(36, controlOption),
-		(76, controlOption),
-		(6, controlOption),
+private func testBindingTableLeavesProviderKeysAlone() throws {
+	let shift: UInt = NSEvent.ModifierFlags.shift.rawValue
+	try expect(boundCommand(keyCode: 6, modifiers: command) == nil,
+		"Command-Z must remain exclusively provider input")
+	try expect(boundCommand(keyCode: 53, modifiers: 0) == nil,
+		"plain Escape must stay with the application holding Input Focus")
+	let modifierCases: [(modifiers: UInt, message: String)] = [
+		(0, "an unmodified D must not be bound"),
+		(NSEvent.ModifierFlags.control.rawValue, "Ctrl+D must not be bound"),
+		(NSEvent.ModifierFlags.option.rawValue, "Option+D must not be bound"),
+		(controlOption | shift, "Ctrl+Option+Shift+D must not be bound"),
+		(controlOption | command, "Ctrl+Option+Command+D must not be bound"),
 	]
-	for shortcut: (keyCode: UInt16, modifiers: UInt) in nonRepeating {
+	for testCase: (modifiers: UInt, message: String) in modifierCases {
 		try expect(
-			mappedCommand(
-				keyCode: shortcut.keyCode,
-				modifiers: shortcut.modifiers,
-				isRepeat: true
-			) == nil,
-			"one-shot shortcuts must reject key-repeat events"
+			boundCommand(keyCode: 2, modifiers: testCase.modifiers) == nil,
+			testCase.message
 		)
 	}
-
-	let repeating: [(keyCode: UInt16, expected: DesktopStageCommand)] = [
-		(33, .previousWorkspace),
-		(30, .nextWorkspace),
-		(123, .moveVirtualFocus(.left)),
-		(124, .moveVirtualFocus(.right)),
-		(126, .moveVirtualFocus(.up)),
-		(125, .moveVirtualFocus(.down)),
-	]
-	for shortcut: (keyCode: UInt16, expected: DesktopStageCommand) in repeating {
+	try expect(
+		boundCommand(keyCode: 6, modifiers: command | shift) == nil,
+		"Command+Shift+Z must remain available to the provider"
+	)
+	for binding: DesktopStageShortcutBinding in DesktopStageShortcuts.bindings {
 		try expect(
-			mappedCommand(
-				keyCode: shortcut.keyCode,
-				modifiers: controlOption,
-				isRepeat: true
-			) == shortcut.expected,
-			"navigation shortcuts must accept key-repeat events"
+			binding.shortcut.modifiers.contains([.control, .option]),
+			"\(binding.command) must carry Control-Option: a registered hot key consumes its keystroke"
+		)
+	}
+}
+
+private func testStreamSelection() throws {
+	let repeating: Set<DesktopStageCommand> = [
+		.previousWorkspace, .nextWorkspace,
+		.moveVirtualFocus(.left), .moveVirtualFocus(.right),
+		.moveVirtualFocus(.up), .moveVirtualFocus(.down),
+	]
+	for binding: DesktopStageShortcutBinding in DesktopStageShortcuts.bindings {
+		let expected: DesktopStageShortcutStream =
+			repeating.contains(binding.command) ? .repeatingKeyDown : .keyDown
+		try expect(
+			binding.stream == expected,
+			"\(binding.command) must subscribe to the \(expected) stream"
 		)
 	}
 }
 
 private func testLayoutUndoDoesNotReuseProviderUndo() throws {
 	try expect(
-		mappedCommand(keyCode: 6, modifiers: command) == nil,
+		boundCommand(keyCode: 6, modifiers: command) == nil,
 		"Command+Z belongs to the provider"
 	)
 	try expect(
-		mappedCommand(keyCode: 6, modifiers: controlOption) == .undo,
+		boundCommand(keyCode: 6, modifiers: controlOption) == .undo,
 		"Ctrl+Option+Z maps to layout undo"
 	)
 }
@@ -174,13 +155,14 @@ private func testLibrarySubscriptionLifetime() throws {
 	monitor.start()
 	try expect(source.listeners.count == 12, "repeated start must not double-register")
 	for listener: RecordingShortcutSource.Listener in source.listeners {
-		try expect(!listener.binding.requiresArrangeMode, "Escape and Undo must stay unregistered outside Arrange")
+		try expect(!listener.binding.requiresArrangeMode, "layout Undo must stay unregistered outside Arrange")
 		listener.action()
 	}
 	try expect(commands == source.listeners.map(\.binding.command), "library callbacks must dispatch real commands")
 	monitor.setArrangeModeEnabled(true)
-	try expect(source.listeners.count == 14, "Arrange installs Escape and layout Undo")
-	let scoped: [RecordingShortcutSource.Listener] = Array(source.listeners.suffix(2))
+	try expect(source.listeners.count == 13, "Arrange installs layout Undo")
+	let scoped: [RecordingShortcutSource.Listener] = Array(source.listeners.suffix(1))
+	try expect(scoped.map(\.binding.command) == [.undo], "the only Arrange-scoped binding is layout Undo")
 	for listener: RecordingShortcutSource.Listener in scoped { listener.action() }
 	let count: Int = commands.count
 	monitor.setArrangeModeEnabled(false)
@@ -218,9 +200,9 @@ private func testShortcutOwnerDeinitCancelsSubscriptions() throws {
 
 @MainActor
 private func run() throws {
-	try testAllShortcutMappings()
-	try testModifierMatchingIsExact()
-	try testRepeatRules()
+	try testBindingTableIsExact()
+	try testBindingTableLeavesProviderKeysAlone()
+	try testStreamSelection()
 	try testLayoutUndoDoesNotReuseProviderUndo()
 	try testLibrarySubscriptionLifetime()
 	try testShortcutOwnerDeinitCancelsSubscriptions()

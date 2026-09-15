@@ -7,7 +7,6 @@ enum DesktopStageFocusDirection: Equatable, Hashable, Sendable {
 
 enum DesktopStageCommand: Equatable, Hashable, Sendable {
 	case stopLayout
-	case exitArrange
 	case toggleArrange
 	case splitPanel
 	case toggleWorkspaceFocus
@@ -16,13 +15,12 @@ enum DesktopStageCommand: Equatable, Hashable, Sendable {
 	case moveVirtualFocus(DesktopStageFocusDirection)
 	case handInputToPanel
 	case undo
+}
 
-	var allowsKeyRepeat: Bool {
-		switch self {
-		case .previousWorkspace, .nextWorkspace, .moveVirtualFocus: true
-		default: false
-		}
-	}
+/// How upstream delivers a held key: once per press, or at the key-repeat rate.
+enum DesktopStageShortcutStream: Equatable, Sendable {
+	case keyDown
+	case repeatingKeyDown
 }
 
 /// Shared by library registration and the headless binding-contract tests.
@@ -30,10 +28,20 @@ struct DesktopStageShortcutBinding: Hashable, Sendable {
 	let shortcut: KeyboardShortcuts.Shortcut
 	let command: DesktopStageCommand
 
-	var requiresArrangeMode: Bool { command == .undo || command == .exitArrange }
+	var requiresArrangeMode: Bool { command == .undo }
+
+	var stream: DesktopStageShortcutStream {
+		switch command {
+		case .previousWorkspace, .nextWorkspace, .moveVirtualFocus: .repeatingKeyDown
+		default: .keyDown
+		}
+	}
 }
 
 enum DesktopStageShortcuts {
+	/// Every binding carries Control-Option. A registered Carbon hot key consumes
+	/// its keystroke system-wide, so an unmodified key such as Escape would be
+	/// taken from the application holding Input Focus.
 	static let bindings: [DesktopStageShortcutBinding] = {
 		let keys: [(KeyboardShortcuts.Key, DesktopStageCommand)] = [
 			(.escape, .stopLayout), (.space, .toggleArrange), (.d, .splitPanel),
@@ -45,7 +53,7 @@ enum DesktopStageShortcuts {
 		]
 		return keys.map { key, command in
 			.init(shortcut: .init(key, modifiers: [.control, .option]), command: command)
-		} + [.init(shortcut: .init(.escape), command: .exitArrange)]
+		}
 	}()
 }
 
@@ -67,12 +75,13 @@ struct LibraryDesktopStageShortcutSource: DesktopStageShortcutSource {
 	) -> Task<Void, Never> {
 		Task { @MainActor in
 			guard !Task.isCancelled else { return }
-			if binding.command.allowsKeyRepeat {
+			switch binding.stream {
+			case .repeatingKeyDown:
 				for await _ in KeyboardShortcuts.repeatingKeyDownEvents(for: binding.shortcut) {
 					guard !Task.isCancelled else { return }
 					onKeyDown()
 				}
-			} else {
+			case .keyDown:
 				for await _ in KeyboardShortcuts.events(.keyDown, for: binding.shortcut) {
 					guard !Task.isCancelled else { return }
 					onKeyDown()
@@ -82,8 +91,8 @@ struct LibraryDesktopStageShortcutSource: DesktopStageShortcutSource {
 	}
 }
 
-/// Only active while the stage is running. Escape and layout undo are scoped
-/// further to Arrange; Command-Z and ordinary provider typing are never bound.
+/// Only active while the stage is running; layout Undo is scoped further to
+/// Arrange. Command-Z and unmodified provider keys are never bound.
 @MainActor
 final class DesktopStageShortcutMonitor {
 	private struct Registration: Sendable {

@@ -288,11 +288,16 @@ Control-Option-Z invokes layout Undo while Arrange is active. Command-Z is never
 registered as a Teaser command. KeyboardShortcuts 3.1.0 owns hotkey registration,
 delivery, repeat timing, and unregistration through cancellable event streams.
 The stage adapter owns binding scope and generation checks: nothing is registered
-at app launch, Stop cancels every stream, and Escape/layout Undo are additionally
-limited to Arrange. Unlike the previous passive monitors, registered combinations
-belong to Teaser while enabled. Ordinary provider input remains native. The
-upstream stream interface does not report Carbon registration conflicts to the
-caller; menu and control-window Stop/Quit remain independent escape paths.
+at app launch, Stop cancels every stream, and layout Undo is additionally limited
+to Arrange. Unlike the previous passive monitors, a registered Carbon hot key
+consumes its keystroke system-wide while enabled. Every binding therefore carries
+Control-Option, and no unmodified provider key, including Escape, is bound;
+Control-Option-Space leaves Arrange. The upstream stream interface reports
+neither a failed nor a later dropped registration, so such a binding is silently
+inert. Conflicts with other applications' hot keys remain a desktop check, and
+the status menu and control window keep independent Stop and Quit paths. After
+first use the library keeps its process-wide Carbon handler and menu-tracking
+observers; they match no keys while nothing is registered.
 
 ### 4.3 Existing-library integration
 

@@ -118,14 +118,15 @@ closing that window or using `Cmd+Q` quits Teaser. Closed Notes stay closed unti
 explicitly focused or a new stage session begins. Arrange uses only small labels
 and divider handles for input, never a display-sized mouse shield.
 
-`Ctrl+Option+Space` toggles Arrange and `Esc` leaves it. `Ctrl+Option+D` splits,
+`Ctrl+Option+Space` toggles Arrange on and off. `Ctrl+Option+D` splits,
 `Ctrl+Option+F` focuses a Workspace, and `Ctrl+Option+Return` hands input to the
 selected Panel. Layout Undo is `Ctrl+Option+Z` in Arrange or the menu action;
 `Cmd+Z` remains exclusively with the app receiving keyboard input.
-KeyboardShortcuts registers these bindings only while the stage is running;
-plain Escape and layout Undo are registered only in Arrange. Binding conflicts
-with another app still need real-desktop verification; Stop and Quit remain
-available from the control window and menu.
+KeyboardShortcuts registers these Control-Option chords only while the stage is
+running, and layout Undo only in Arrange. A registered chord is consumed
+system-wide, so no unmodified key such as `Esc` is bound. Conflicts with other
+apps' hot keys still need real-desktop verification; Stop and Quit remain
+available from the status menu and the control window.
 
 **Layout Editor…** in the control window opens a normal, closable SplitView
 layout map. Select a display or Workspace and drag its dividers. Releasing the
