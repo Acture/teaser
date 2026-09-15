@@ -87,8 +87,10 @@ swift run TeaserWindowAdoptionTests
 These are executable harnesses, so use `swift run`, not `swift test`. The adoption
 suite runs without desktop interaction, global monitors, or permission prompts.
 Only the Ghostty-backed adapter is excluded until its native library is built.
-The app script uses SwiftPM's Xcode backend for macOS resource lookup, assembles
-the bundle, signs it, and checks library resources without opening any window.
+The app script uses SwiftPM's Xcode build system for macOS resource lookup, so it
+needs an installed, licensed Xcode.app rather than only a Swift toolchain. It
+assembles the bundle from scratch, signs it, and checks library resources
+without opening any window.
 The [native Ghostty probe](vendor/README.md) remains a separate build.
 
 Build the current macOS app prototype with:
@@ -143,7 +145,8 @@ target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
 ```
 
 `--check-bundle-resources` instead checks the upstream shortcut localization
-accessor without creating `NSApplication`, registering hotkeys, or observing windows.
+accessor without creating `NSApplication`, registering hotkeys, or observing
+windows, and exits 1 when the bundled strings table is missing.
 
 Replace `PID` with the selected provider process. No selectable window returns
 exit status 1; invalid arguments return 2. This is not a drag/placement test.
@@ -184,6 +187,7 @@ wire format and current limits.
 - no Warp, Zed, Claude Code, or Codex fork;
 - no browser-based host or custom terminal renderer;
 - no GUI reparenting, pixel-capture proxy, or synthetic application input;
+- no private macOS API outside an isolated, pinned window-backend evaluation;
 - no third-party plugin SDK or compatibility promise;
 - no custom agent protocol when ACP already covers the semantic control plane;
 - no replacement for every CLI application's own interface.
