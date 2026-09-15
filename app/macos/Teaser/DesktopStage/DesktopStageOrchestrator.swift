@@ -184,6 +184,11 @@ final class DesktopStageOrchestrator {
 	func startStage() throws {
 		guard !isStageActive else { return }
 		isStageActive = true
+		// An offline editor snapshot holds no provider leases; Undo never spans Start.
+		undoCoalescingTask?.cancel()
+		undoCoalescingTask = nil
+		undoCoalescingKey = nil
+		undoSnapshot = nil
 		try solveAndApply(synchronously: true)
 		try dragObserver.start()
 		ExternalWindowDiagnostics.logger.notice("stage-ready panels=\(self.layout?.panelFrames.count ?? 0, privacy: .public)")
@@ -299,19 +304,26 @@ final class DesktopStageOrchestrator {
 		setStatus("Showcase reset. Click Start Layout when ready.")
 	}
 
-	private func adaptPresentationToDisplays() {
+	@discardableResult
+	private func adaptPresentationToDisplays() -> Bool {
 		let adapted = DesktopStageDisplayTopology.adapt(presentation, to: displays)
-		guard adapted.changed else { return }
+		guard adapted.changed else { return false }
 		presentation = adapted.presentation
 		host?.orchestratorDidRequestSave(self)
+		return true
 	}
 
 	// MARK: - Drag adoption
 
 	func screenParametersDidChange(displays: [DesktopStageDisplay]) {
 		self.displays = displays
-		adaptPresentationToDisplays()
-		if isStageActive { relayout(synchronously: true) }
+		let changed: Bool = adaptPresentationToDisplays()
+		if isStageActive {
+			relayout(synchronously: true)
+		} else if changed {
+			// Relayout notifies while active; stopped chrome still shows the old trees.
+			host?.orchestratorDidChangeState(self)
+		}
 	}
 
 	private func handleDragEvent(_ event: ExternalWindowDragEvent) {

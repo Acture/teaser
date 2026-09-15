@@ -362,8 +362,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard isRunning else { return }
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
-		layoutEditorModel.update(presentation: presentation, active: orchestrator.isStageActive,
-			assignedPanels: Set(orchestrator.panelAssignments.keys))
+		layoutEditorModel.update(from: orchestrator)
 		let overlaySnapshots: [DesktopOverlaySnapshot]
 		if !orchestrator.isStageActive {
 			overlaySnapshots = []
