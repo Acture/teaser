@@ -50,6 +50,7 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 	case windowAtPointUnavailable
 	case windowIdentifierUnavailable(processIdentifier: pid_t, code: AXError)
 	case windowUnavailable(ExternalWindowIdentity?)
+	case windowElementNotFound(ExternalWindowIdentity)
 	case windowNotOnCurrentSpace(ExternalWindowIdentity)
 	case windowNotStandard
 	case windowIsMinimized
@@ -84,6 +85,12 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 		case .windowUnavailable(let identity):
 			guard let identity else { return "The managed external window is unavailable." }
 			return "External window \(identity.windowID) from process \(identity.processIdentifier) is unavailable."
+		case .windowElementNotFound(let identity):
+			return """
+				Process \(identity.processIdentifier) reports no Accessibility window \
+				with ID \(identity.windowID). Teaser manages a provider's own standard \
+				windows, not system surfaces or windows an application does not publish.
+				"""
 		case .windowNotOnCurrentSpace(let identity):
 			return "External window \(identity.windowID) is not on the current Space."
 		case .windowNotStandard:
@@ -436,7 +443,7 @@ private enum ExternalWindowSystem {
 			ofWindowID: identity.windowID,
 			in: identifiers
 		) else {
-			throw ManagedExternalWindowError.windowUnavailable(identity)
+			throw ManagedExternalWindowError.windowElementNotFound(identity)
 		}
 		guard isOnCurrentSpace(identity) else {
 			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
