@@ -38,7 +38,8 @@ not reparent the window, capture its pixels, or pretend it is an embedded view.
 
 - **AppKit/SwiftUI desktop stage:** connected rectangular Workspace and Panel
   layout, Teaser-owned windows, click-through arrangement overlays, virtual focus,
-  and public Accessibility control of adopted external windows.
+  and Accessibility control of adopted external windows, each identified by its
+  own window-server window ID.
 - **`teaserd` runtime:** owns Teaser sessions, processes, PTYs, block state, and
   lifetime independently of any GUI; each session has zero or one attached
   surface.

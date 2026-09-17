@@ -308,10 +308,12 @@ Use upstream packages with small adapters first. v1 ships window control through
 public Accessibility and Core Graphics APIs with exactly one exception: the
 `TeaserPrivateAccessibility` target declares `_AXUIElementGetWindow`, which
 returns the window server's `CGWindowID` for an Accessibility element. No public
-API maps an AX window to its window ID. The public-only alternative, matching AX
-frames against `CGWindowList` bounds, cannot separate windows that share a frame
-and rejected ordinary adoptions whenever another process published an identically
-placed window. Teaser reads that ID and nothing else from private API: the call
+API maps an AX window to its window ID. The public-only alternative, matching one
+process's AX window frames against its own `CGWindowList` bounds, cannot separate
+two windows of the same application that share a frame, drifts when AX and the
+window server disagree about a frame, and resolves nothing at all for a process
+that publishes no AX windows — which is how a Stage Manager thumbnail under the
+pointer became a rejected adoption. Teaser reads that ID and nothing else from private API: the call
 fails closed, there is no frame-matching fallback, and it is never a basis for
 reparenting, capture, or synthetic input. The approach — this declaration plus
 restricting candidates to `NSApplication.ActivationPolicy.regular` owners —
