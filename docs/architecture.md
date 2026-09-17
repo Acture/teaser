@@ -228,6 +228,12 @@ Stage Manager's `WindowManager` are skipped rather than selected. Teaser recogni
 gesture only after the same window's movement correlates with pointer movement, so
 tab, file, text, and in-application drags do not become window adoptions.
 
+Selection from the adoptable-window list is the second path. It is an ordinary,
+explicitly opened window that registers no global hot key; it binds the chosen
+window into one named unoccupied Panel, never edge-splits, and never moves
+Virtual Focus while the user browses. Listing candidates requires Accessibility
+but not a running stage, because listing moves nothing.
+
 During a qualified drag, a nonactivating click-through overlay exposes Panel targets.
 Dropping on an empty Panel adopts it; dropping at an occupied Panel edge inserts a
 local split; dropping a managed window on another empty Panel moves its binding.

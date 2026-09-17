@@ -52,6 +52,7 @@ struct DesktopStageStatusCallbacks {
 	let onQuit: @MainActor () -> Void
 	let onShowControls: @MainActor () -> Void
 	let onToggleStage: @MainActor () -> Void
+	let onAdoptWindow: @MainActor () -> Void
 
 	init(
 		onCommand: @escaping @MainActor (DesktopStageCommand) -> Void,
@@ -60,7 +61,8 @@ struct DesktopStageStatusCallbacks {
 		onRequestAccessibility: @escaping @MainActor () -> Void,
 		onQuit: @escaping @MainActor () -> Void,
 		onShowControls: @escaping @MainActor () -> Void,
-		onToggleStage: @escaping @MainActor () -> Void
+		onToggleStage: @escaping @MainActor () -> Void,
+		onAdoptWindow: @escaping @MainActor () -> Void = {}
 	) {
 		self.onCommand = onCommand
 		self.onAddPanelKind = onAddPanelKind
@@ -69,6 +71,7 @@ struct DesktopStageStatusCallbacks {
 		self.onQuit = onQuit
 		self.onShowControls = onShowControls
 		self.onToggleStage = onToggleStage
+		self.onAdoptWindow = onAdoptWindow
 	}
 }
 
@@ -90,6 +93,8 @@ final class DesktopStageStatusController: NSObject {
 		case resetShowcase
 		case requestAccessibility
 		case quit
+		// Appended: the raw values are menu-item tags, so existing cases keep theirs.
+		case adoptWindow
 	}
 
 	private let callbacks: DesktopStageStatusCallbacks
@@ -142,6 +147,7 @@ final class DesktopStageStatusController: NSObject {
 		menu.autoenablesItems = false
 		menu.addItem(item(title: "Open Teaser", action: .showControls))
 		menu.addItem(item(title: state.stageActive ? "Stop Layout" : "Start Layout", action: .toggleStage))
+		menu.addItem(item(title: "Adopt Window…", action: .adoptWindow))
 		menu.addItem(item(title: "Quit Teaser", action: .quit))
 		menu.addItem(.separator())
 
@@ -293,6 +299,8 @@ final class DesktopStageStatusController: NSObject {
 			callbacks.onRequestAccessibility()
 		case .quit:
 			callbacks.onQuit()
+		case .adoptWindow:
+			callbacks.onAdoptWindow()
 		}
 	}
 }

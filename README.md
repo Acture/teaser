@@ -119,6 +119,13 @@ Teaser does not request per-application or per-project
 authorization, and it does not guess a replacement window after either application
 restarts.
 
+**Adopt Window…**, in the control window and in the status menu, opens an
+ordinary list of windows Teaser can adopt, including windows Stage Manager or
+another Space hides, which no drag can reach. Choose a window and the unoccupied
+Panel to fill, then adopt it. Windows that cannot be adopted stay listed with
+the reason. The list registers no global shortcut and opens before **Start
+Layout** too, because listing moves nothing.
+
 Use the Teaser menu's **Stop Layout**, or `Ctrl+Option+Esc`, to remove the stage.
 Switching macOS Space also stops it. The Dock icon reopens the control window;
 closing that window or using `Cmd+Q` quits Teaser. Closed Notes stay closed until

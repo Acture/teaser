@@ -42,7 +42,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onToggleStage: { [weak self] in self?.toggleStage() },
 		onArrange: { [weak self] in self?.perform(.toggleArrange) },
 		onRequestPermission: { [weak self] in self?.requestAccessibility() },
-		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
+		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() },
+		onAdoptWindow: { [weak self] in self?.showWindowPicker() }
 	)
 
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
@@ -53,6 +54,16 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onUndo: { [weak self] in self?.orchestrator.undoLastLayoutChange() }
 	)
 	private lazy var layoutEditorWindow: DesktopStageLayoutEditorWindow = .init(model: layoutEditorModel)
+
+	private lazy var windowPickerModel: DesktopStageWindowPickerModel = .init(
+		onList: { [weak self] in self?.orchestrator.adoptableWindows() ?? [] },
+		onAdopt: { [weak self] identity, panelID in
+			self?.orchestrator.adoptWindow(identity: identity, into: panelID) ?? false
+		}
+	)
+	private lazy var windowPickerWindow: DesktopStageWindowPickerWindow = .init(
+		model: windowPickerModel
+	)
 
 	private lazy var overlayController: DesktopOverlayController = .init(
 		callbacks: .init(
@@ -103,7 +114,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				NSApplication.shared.terminate(nil)
 			},
 			onShowControls: { [weak self] in self?.showControls() },
-			onToggleStage: { [weak self] in self?.toggleStage() }
+			onToggleStage: { [weak self] in self?.toggleStage() },
+			onAdoptWindow: { [weak self] in self?.showWindowPicker() }
 		)
 	)
 
@@ -140,6 +152,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	func showControls() { controlWindow.show() }
 
+	/// The Accessibility walk runs here, when a person asks to see the list, and
+	/// never from the chrome refresh path.
+	func showWindowPicker() {
+		windowPickerModel.update(from: orchestrator)
+		windowPickerModel.refresh()
+		windowPickerWindow.show()
+	}
+
 	func applicationDidBecomeActive() {
 		guard isRunning else { return }
 		refreshPermission()
@@ -169,6 +189,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		statusController.close()
 		controlWindow.close()
 		layoutEditorWindow.close()
+		windowPickerWindow.close()
 		closeNotesWindows()
 	}
 
@@ -365,6 +386,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
 		layoutEditorModel.update(from: orchestrator)
+		windowPickerModel.update(from: orchestrator)
 		let overlaySnapshots: [DesktopOverlaySnapshot]
 		if !orchestrator.isStageActive {
 			overlaySnapshots = []
