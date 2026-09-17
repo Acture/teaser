@@ -13,6 +13,7 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	private let onArrange: @MainActor () -> Void
 	private let onRequestPermission: @MainActor () -> Void
 	private let onEditLayout: @MainActor () -> Void
+	private let onAdoptWindow: @MainActor () -> Void
 	private let onQuit: @MainActor () -> Void
 
 	init(
@@ -20,12 +21,14 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		onArrange: @escaping @MainActor () -> Void,
 		onRequestPermission: @escaping @MainActor () -> Void,
 		onEditLayout: @escaping @MainActor () -> Void = {},
+		onAdoptWindow: @escaping @MainActor () -> Void = {},
 		onQuit: @escaping @MainActor () -> Void = { NSApplication.shared.terminate(nil) }
 	) {
 		self.onToggleStage = onToggleStage
 		self.onArrange = onArrange
 		self.onRequestPermission = onRequestPermission
 		self.onEditLayout = onEditLayout
+		self.onAdoptWindow = onAdoptWindow
 		self.onQuit = onQuit
 		window = .init(
 			contentRect: .init(x: 0, y: 0, width: 520, height: 400),
@@ -73,11 +76,20 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		quitButton.bezelStyle = .rounded
 		let editButton: NSButton = .init(title: "Layout Editor…", target: self, action: #selector(editLayout(_:)))
 		editButton.bezelStyle = .rounded
+		// Windows hidden by Stage Manager cannot be dragged into a Panel, so the
+		// list is their entry. It opens before Start too: listing moves nothing.
+		let adoptButton: NSButton = .init(
+			title: "Adopt Window…", target: self, action: #selector(adoptWindow(_:))
+		)
+		adoptButton.bezelStyle = .rounded
+		let tools: NSStackView = .init(views: [editButton, adoptButton])
+		tools.orientation = .horizontal
+		tools.spacing = 8
 		let actions: NSStackView = .init(views: [startButton, arrangeButton, quitButton])
 		actions.orientation = .horizontal
 		actions.spacing = 8
 		let content: NSStackView = .init(views: [
-			heading, instructions, permissionLabel, permissionButton, actions, editButton,
+			heading, instructions, permissionLabel, permissionButton, actions, tools,
 			statusLabel, shortcuts,
 		])
 		content.orientation = .vertical
@@ -128,5 +140,6 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	@objc private func arrange(_ sender: NSButton) { onArrange() }
 	@objc private func requestPermission(_ sender: NSButton) { onRequestPermission() }
 	@objc private func editLayout(_ sender: NSButton) { onEditLayout() }
+	@objc private func adoptWindow(_ sender: NSButton) { onAdoptWindow() }
 	@objc private func quit(_ sender: NSButton) { onQuit() }
 }
