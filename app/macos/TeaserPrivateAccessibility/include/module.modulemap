@@ -1,0 +1,4 @@
+module TeaserPrivateAccessibility {
+  header "private.h"
+  export *
+}

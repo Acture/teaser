@@ -187,7 +187,8 @@ wire format and current limits.
 - no Warp, Zed, Claude Code, or Codex fork;
 - no browser-based host or custom terminal renderer;
 - no GUI reparenting, pixel-capture proxy, or synthetic application input;
-- no private macOS API outside an isolated, pinned window-backend evaluation;
+- no private macOS API beyond one declaration that returns a window's own window
+  ID, which no public API exposes;
 - no third-party plugin SDK or compatibility promise;
 - no custom agent protocol when ACP already covers the semantic control plane;
 - no replacement for every CLI application's own interface.

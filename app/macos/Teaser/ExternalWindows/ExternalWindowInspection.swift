@@ -16,6 +16,10 @@ enum ExternalWindowInspection {
 		let bundlePath: String
 		let accessibilityAuthorized: Bool
 		let processIdentifier: Int32
+		/// False for accessory and prohibited processes — Stage Manager's
+		/// `WindowManager`, the Dock, menu-bar agents. Teaser lists no window for
+		/// them, so this says why the list is empty.
+		let ownerIsRegularApplication: Bool
 		let windows: [WindowResult]
 	}
 
@@ -50,7 +54,9 @@ enum ExternalWindowInspection {
 			}
 		}
 		let report: Report = .init(bundlePath: Bundle.main.bundlePath,
-			accessibilityAuthorized: authorized, processIdentifier: pid, windows: windows)
+			accessibilityAuthorized: authorized, processIdentifier: pid,
+			ownerIsRegularApplication: ManagedExternalWindow.isRegularApplication(processIdentifier: pid),
+			windows: windows)
 		do {
 			let encoder: JSONEncoder = .init()
 			encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
