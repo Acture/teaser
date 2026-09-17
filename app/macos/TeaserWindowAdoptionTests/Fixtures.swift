@@ -260,6 +260,26 @@ final class FakeExternalWindowService: ExternalWindowService {
 		return FakeWindowHandle(window: window)
 	}
 
+	func adoptableWindows(
+		excludingProcessIdentifiers: Set<pid_t>
+	) -> [ExternalWindowCandidate] {
+		guard permission == .authorized else { return [] }
+		return windows.filter {
+			$0.exists
+				&& !excludingProcessIdentifiers.contains($0.identity.processIdentifier)
+		}.map { window in
+			.init(
+				identity: window.identity,
+				applicationName: window.applicationName,
+				bundleIdentifier: "com.example.\(window.applicationName)",
+				windowTitle: window.title.isEmpty ? nil : window.title,
+				appKitScreenFrame: window.appKitScreenFrame,
+				isVisibleOnCurrentSpace: window.isVisibleOnCurrentSpace,
+				rejectionReason: window.manageabilityFailure?.localizedDescription
+			)
+		}
+	}
+
 	func validateIdentity(of handle: any ExternalWindowHandle) throws {
 		_ = try requireElement(handle)
 	}

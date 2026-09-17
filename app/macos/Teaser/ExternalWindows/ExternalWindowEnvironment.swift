@@ -73,6 +73,25 @@ protocol ExternalWindowLease: AnyObject {
 	func release(restoringOriginalFrame: Bool) -> Bool
 }
 
+/// One window a user could bind to a Panel, visible or not. A picker shows the
+/// rejected ones too: an empty list cannot distinguish "nothing to adopt" from
+/// "everything was filtered away".
+struct ExternalWindowCandidate: Equatable, Sendable {
+	let identity: ExternalWindowIdentity
+	let applicationName: String
+	let bundleIdentifier: String?
+	/// Absent when the provider publishes no usable title. macOS reports an empty
+	/// Core Graphics name for most windows, and an Accessibility title only for
+	/// the windows it still resolves.
+	let windowTitle: String?
+	let appKitScreenFrame: CGRect
+	let isVisibleOnCurrentSpace: Bool
+	/// Why this window cannot be adopted right now, or nil when it can.
+	let rejectionReason: String?
+
+	var isAdoptable: Bool { rejectionReason == nil }
+}
+
 /// Permission state, window selection and validation, and lease creation.
 @MainActor
 protocol ExternalWindowService: AnyObject {
@@ -82,6 +101,12 @@ protocol ExternalWindowService: AnyObject {
 		excludingProcessIdentifiers: Set<pid_t>
 	) throws -> any ExternalWindowHandle
 	func selectWindow(identity: ExternalWindowIdentity) throws -> any ExternalWindowHandle
+	/// Every window a user could bind to a Panel, including ones hidden by Stage
+	/// Manager or resident on another Space. Windows that cannot be adopted are
+	/// returned carrying their reason rather than dropped.
+	func adoptableWindows(
+		excludingProcessIdentifiers: Set<pid_t>
+	) -> [ExternalWindowCandidate]
 	func validateIdentity(of handle: any ExternalWindowHandle) throws
 	/// Fails only when the window server no longer lists the window. A window
 	/// hidden by Stage Manager or sitting on another Space is still live, still

@@ -650,6 +650,56 @@ private func testPermissionLostDuringDragStopsAdoption() throws {
 }
 
 @MainActor
+private func testAdoptableWindowListKeepsHiddenAndRejectedCandidates() throws {
+	let harness: Harness = try makeStartedHarness()
+	let visible: FakeWindow = harness.addWindow()
+	let hidden: FakeWindow = harness.addWindow(windowID: 11, name: "Zed", title: "empty project")
+	hidden.isVisibleOnCurrentSpace = false
+	let fullScreen: FakeWindow = harness.addWindow(windowID: 12, name: "Preview", title: "Paper")
+	fullScreen.isFullScreen = true
+	let closed: FakeWindow = harness.addWindow(windowID: 13, name: "Notes", title: "Scratch")
+	closed.exists = false
+
+	let candidates: [ExternalWindowCandidate] = harness.service.adoptableWindows(
+		excludingProcessIdentifiers: []
+	)
+	guard let hiddenCandidate: ExternalWindowCandidate = candidates.first(where: {
+		$0.identity == hidden.identity
+	}) else {
+		throw TestFailure.assertion("a hidden window must still be offered")
+	}
+	try expect(
+		hiddenCandidate.isAdoptable && !hiddenCandidate.isVisibleOnCurrentSpace
+			&& hiddenCandidate.windowTitle == "empty project",
+		"a hidden window is adoptable and says it is hidden: \(hiddenCandidate)"
+	)
+	try expect(
+		candidates.first { $0.identity == fullScreen.identity }?.rejectionReason
+			== ManagedExternalWindowError.windowIsFullScreen.localizedDescription,
+		"an unmanageable window stays listed with its reason"
+	)
+	try expect(
+		!candidates.contains { $0.identity == closed.identity },
+		"a window the window server no longer lists is not offered"
+	)
+	try expect(
+		harness.service.adoptableWindows(
+			excludingProcessIdentifiers: [visible.identity.processIdentifier]
+		).isEmpty,
+		"excluded processes contribute no candidates"
+	)
+	harness.service.permission = .notAuthorized
+	try expect(
+		harness.service.adoptableWindows(excludingProcessIdentifiers: []).isEmpty,
+		"without Accessibility there is nothing to offer"
+	)
+	try expect(
+		harness.service.promptCount == 0,
+		"listing candidates must never prompt for Accessibility"
+	)
+}
+
+@MainActor
 private func testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted() throws {
 	let harness: Harness = try makeStartedHarness()
 	let window: FakeWindow = harness.addWindow()
@@ -1099,6 +1149,7 @@ func adoptionCases() -> [TestCase] {
 		.init("window lost during drag cancels and diagnoses", testWindowLostDuringDragCancelsAndDiagnoses),
 		.init("substitute window at the same point is never adopted", testSubstituteWindowAtTheSamePointIsNeverAdopted),
 		.init("permission lost during drag stops adoption", testPermissionLostDuringDragStopsAdoption),
+		.init("adoptable window list keeps hidden and rejected candidates", testAdoptableWindowListKeepsHiddenAndRejectedCandidates),
 		.init("window hidden from the current Space at release is still adopted", testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted),
 		.init("window that disappears at release is not adopted", testWindowThatDisappearsAtReleaseIsNotAdopted),
 		.init("closed provider window frees its Panel", testClosedProviderWindowFreesItsPanel),
