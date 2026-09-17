@@ -128,7 +128,9 @@ private func testPickerRefusesAdoptionWhileStopped() throws {
 
 @MainActor
 private func testPickerWindowConstructsWithoutShowingAnything() throws {
-	let harness: Harness = try makeStartedHarness()
+	// A stopped harness: starting the stage applies the layout, so window
+	// operations there would say nothing about constructing the picker.
+	let harness: Harness = .init(presentation: try testPresentation())
 	let model: DesktopStageWindowPickerModel = makePicker(harness) { [] }
 	let picker: DesktopStageWindowPickerWindow = .init(model: model)
 	defer { picker.close() }
