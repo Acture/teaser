@@ -120,6 +120,84 @@ private func testWindowIdentitySelectsOneExactWindowID() throws {
 	)
 }
 
+private func pickerCandidate(
+	_ windowID: CGWindowID,
+	application: String,
+	title: String? = nil,
+	pid: pid_t = 42,
+	visible: Bool = true,
+	size: CGSize = .init(width: 800, height: 600),
+	rejection: String? = nil
+) -> ExternalWindowCandidate {
+	.init(
+		identity: .init(processIdentifier: pid, windowID: windowID),
+		applicationName: application,
+		bundleIdentifier: "com.example.\(application)",
+		windowTitle: title,
+		appKitScreenFrame: .init(origin: .zero, size: size),
+		isVisibleOnCurrentSpace: visible,
+		rejectionReason: rejection
+	)
+}
+
+private func testPickerRowsOrderAndDescribeCandidates() throws {
+	let rows = externalWindowPickerRows(candidates: [
+		pickerCandidate(4, application: "Zed", title: "empty project", visible: false),
+		pickerCandidate(1, application: "Warp", rejection: "full-screen"),
+		pickerCandidate(3, application: "TextEdit", visible: false),
+		pickerCandidate(2, application: "TextEdit"),
+	])
+	try expect(
+		rows.map(\.candidate.identity.windowID) == [2, 3, 4, 1],
+		"adoptable windows come first, then application name, then visible before hidden: \(rows.map(\.candidate.identity.windowID))"
+	)
+	try expect(
+		rows[0].primaryText == "TextEdit" && rows[0].secondaryText == "800 × 600 · On screen",
+		"a window without a title reads as its application, size, and state: \(rows[0])"
+	)
+	try expect(
+		rows[2].primaryText == "empty project"
+			&& rows[2].secondaryText == "Zed · 800 × 600 · Hidden",
+		"a titled hidden window names its application and says it is hidden: \(rows[2])"
+	)
+	try expect(
+		!rows[3].isAdoptable && rows[3].candidate.rejectionReason == "full-screen",
+		"a rejected candidate stays in the list carrying its reason"
+	)
+}
+
+private func testPickerFiltersAndDeduplicates() throws {
+	let candidates: [ExternalWindowCandidate] = [
+		pickerCandidate(2, application: "TextEdit", title: "Notes"),
+		pickerCandidate(2, application: "TextEdit", title: "Notes"),
+		pickerCandidate(5, application: "Warp", title: "~/repos"),
+	]
+	try expect(
+		externalWindowPickerRows(candidates: candidates).count == 2,
+		"the same window must appear once"
+	)
+	try expect(
+		externalWindowPickerRows(candidates: candidates, query: "  TEXTedit ")
+			.map(\.candidate.identity.windowID) == [2],
+		"a query matches the application name regardless of case or padding"
+	)
+	try expect(
+		externalWindowPickerRows(candidates: candidates, query: "repos")
+			.map(\.candidate.identity.windowID) == [5],
+		"a query matches the window title"
+	)
+	try expect(
+		externalWindowPickerRows(candidates: candidates, query: "nothing").isEmpty,
+		"a query that matches nothing yields no rows"
+	)
+	try expect(
+		externalWindowPickerDetail(for: pickerCandidate(
+			9, application: "Preview", size: .init(width: CGFloat.infinity, height: 600)
+		)) == "unknown size · On screen",
+		"a non-finite frame must not be rendered as a number"
+	)
+}
+
 private func testPanelTargetSemantics() throws {
 	let empty = ExternalWindowPanelGeometry(
 		panelID: "empty",
@@ -319,6 +397,8 @@ private func testTransactionErrorsRetainInputs() throws {
 do {
 	try testCoordinateConversion()
 	try testWindowIdentitySelectsOneExactWindowID()
+	try testPickerRowsOrderAndDescribeCandidates()
+	try testPickerFiltersAndDeduplicates()
 	try testPanelTargetSemantics()
 	try testPanelOverlapFailsClosed()
 	try testWindowDragQualification()

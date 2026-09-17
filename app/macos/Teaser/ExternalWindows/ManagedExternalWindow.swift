@@ -500,6 +500,74 @@ private enum ExternalWindowSystem {
 		}
 	}
 
+	/// Every window a user could pick, resolved one process at a time: this
+	/// machine lists hundreds of windows but only a couple of dozen ordinary
+	/// applications own them, so the Accessibility round trips follow processes
+	/// rather than windows. A window whose element cannot be resolved or managed
+	/// is kept with its reason instead of being silently dropped.
+	static func candidates(
+		excludingProcessIdentifiers: Set<pid_t>
+	) -> [ExternalWindowCandidate] {
+		guard permissionStatus(prompt: false) == .authorized,
+			let menuBarScreenFrame: CGRect = NSScreen.screens.first?.frame
+		else { return [] }
+		var byProcess: [pid_t: [ExternalWindowCurrentSpaceWindow]] = [:]
+		for window in allWindows() where window.layer == 0
+			&& window.ownerIsRegularApplication
+			&& !excludingProcessIdentifiers.contains(window.identity.processIdentifier)
+		{
+			byProcess[window.identity.processIdentifier, default: []].append(window)
+		}
+		return byProcess.keys.sorted().flatMap { processIdentifier -> [ExternalWindowCandidate] in
+			let application: NSRunningApplication? = .init(
+				processIdentifier: processIdentifier
+			)
+			let applicationElement: AXUIElement = AXUIElementCreateApplication(
+				processIdentifier
+			)
+			AXUIElementSetMessagingTimeout(applicationElement, 0.75)
+			let elements: [AXUIElement] = ((try? windows(of: applicationElement)) ?? [])
+				+ keyWindowElements(of: applicationElement)
+			var elementsByWindowID: [CGWindowID: AXUIElement] = [:]
+			for element in elements {
+				guard let id: CGWindowID = try? windowID(
+					of: element,
+					processIdentifier: processIdentifier
+				) else { continue }
+				elementsByWindowID[id] = element
+			}
+			return (byProcess[processIdentifier] ?? []).map { window in
+				let element: AXUIElement? = elementsByWindowID[window.identity.windowID]
+				var rejectionReason: String?
+				if let element {
+					do {
+						try requireManageable(windowElement: element)
+					} catch {
+						rejectionReason = error.localizedDescription
+					}
+				} else {
+					rejectionReason = ManagedExternalWindowError
+						.windowElementNotFound(window.identity).localizedDescription
+				}
+				let title: String? = element.flatMap {
+					stringAttribute(kAXTitleAttribute as CFString, of: $0)
+				}
+				return .init(
+					identity: window.identity,
+					applicationName: application?.localizedName ?? "Application",
+					bundleIdentifier: application?.bundleIdentifier,
+					windowTitle: (title?.isEmpty ?? true) ? nil : title,
+					appKitScreenFrame: managedExternalWindowAppKitScreenFrame(
+						fromAccessibilityFrame: window.accessibilityFrame,
+						menuBarScreenFrame: menuBarScreenFrame
+					),
+					isVisibleOnCurrentSpace: window.isOnscreen,
+					rejectionReason: rejectionReason
+				)
+			}
+		}
+	}
+
 	/// Stage Manager empties an off-stage application's `AXWindows` list, yet its
 	/// focused and main window elements still resolve, still report the real
 	/// window ID, and still accept position and size writes. Identity is matched
@@ -538,8 +606,7 @@ private enum ExternalWindowSystem {
 		)
 	}
 
-	static func requireManageable(_ selection: ExternalWindowSelection) throws {
-		let element: AXUIElement = selection.windowElement
+	static func requireManageable(windowElement element: AXUIElement) throws {
 		guard stringAttribute(kAXRoleAttribute as CFString, of: element) == kAXWindowRole,
 			stringAttribute(kAXSubroleAttribute as CFString, of: element)
 				== kAXStandardWindowSubrole
@@ -685,7 +752,7 @@ private enum ExternalWindowSystem {
 			originalAccessibilityFrame: frame,
 			originalMinimizedState: minimized
 		)
-		try requireManageable(selection)
+		try requireManageable(windowElement: selection.windowElement)
 		return selection
 	}
 
@@ -719,7 +786,9 @@ private enum ExternalWindowSystem {
 	/// Also returns windows macOS reports off-screen — on another Space,
 	/// minimized, or held off-stage by Stage Manager — so diagnostics can say
 	/// why a window is unusable instead of omitting it.
-	static func allWindows(processIdentifier: pid_t) -> [ExternalWindowCurrentSpaceWindow] {
+	static func allWindows(
+		processIdentifier: pid_t? = nil
+	) -> [ExternalWindowCurrentSpaceWindow] {
 		windowList(
 			options: [.optionAll, .excludeDesktopElements],
 			processIdentifier: processIdentifier
@@ -1025,7 +1094,7 @@ final class ManagedExternalWindow {
 			identity: selection.identity,
 			windowElement: selection.windowElement
 		)
-		try ExternalWindowSystem.requireManageable(selection)
+		try ExternalWindowSystem.requireManageable(windowElement: selection.windowElement)
 		let newObservation: Observation = try makeObservation(selection: selection)
 		binding = .init(
 			selection: selection,
@@ -1480,6 +1549,14 @@ final class SystemExternalWindowService: ExternalWindowService {
 
 	func selectWindow(identity: ExternalWindowIdentity) throws -> any ExternalWindowHandle {
 		try ExternalWindowSystem.selection(identity: identity)
+	}
+
+	func adoptableWindows(
+		excludingProcessIdentifiers: Set<pid_t>
+	) -> [ExternalWindowCandidate] {
+		ExternalWindowSystem.candidates(
+			excludingProcessIdentifiers: excludingProcessIdentifiers
+		)
 	}
 
 	func validateIdentity(of handle: any ExternalWindowHandle) throws {
