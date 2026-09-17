@@ -46,12 +46,27 @@ struct SplitPreference: Codable, Equatable, Hashable, Sendable {
 	}
 }
 
-enum LayoutTreeEditError: Error, Equatable, Sendable {
+enum LayoutTreeEditError: Error, Equatable, LocalizedError, Sendable {
 	case duplicateLeaf
 	case invalidRatio
 	case targetNotFound
 	case splitNotFound
 	case cannotRemoveOnlyLeaf
+
+	var errorDescription: String? {
+		switch self {
+		case .duplicateLeaf:
+			return "That region already exists in this layout tree."
+		case .invalidRatio:
+			return "A split ratio must be greater than 0 and less than 1."
+		case .targetNotFound:
+			return "The region this edit targets is no longer in the layout."
+		case .splitNotFound:
+			return "The divider this edit targets is no longer in the layout."
+		case .cannotRemoveOnlyLeaf:
+			return "The last remaining region cannot be removed."
+		}
+	}
 }
 
 indirect enum LayoutTree<Leaf>: Codable, Equatable, Hashable, Sendable

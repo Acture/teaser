@@ -26,7 +26,7 @@ struct PresentationLayout: Codable, Equatable, Sendable {
 	let quality: LayoutQuality
 }
 
-enum ConstrainedLayoutError: Error, Equatable, Sendable {
+enum ConstrainedLayoutError: Error, Equatable, LocalizedError, Sendable {
 	case invalidDisplayFrame(DisplayID)
 	case missingDisplayFrame(DisplayID)
 	case missingWorkspace(WorkspaceID)
@@ -39,6 +39,56 @@ enum ConstrainedLayoutError: Error, Equatable, Sendable {
 	case unplacedPanel(PanelID)
 	case displayAffinityMismatch(WorkspaceID)
 	case infeasible(LayoutScope, LayoutSplitID?, LayoutSize, LayoutSize)
+
+	var errorDescription: String? {
+		switch self {
+		case .invalidDisplayFrame(let displayID):
+			return "Display \(displayID.rawValue) reported an unusable frame."
+		case .missingDisplayFrame(let displayID):
+			return "Display \(displayID.rawValue) has no frame in this layout."
+		case .missingWorkspace(let workspaceID):
+			return "Workspace \(workspaceID.rawValue) is missing from the presentation."
+		case .missingPanel(let panelID):
+			return "Panel \(panelID.rawValue) is missing from its Workspace."
+		case .missingPanelKind(let panelKindID):
+			return "Panel kind \(panelKindID.rawValue) is not registered."
+		case .duplicateWorkspaceReference(let workspaceID):
+			return "Workspace \(workspaceID.rawValue) appears more than once in the layout."
+		case .duplicatePanelReference(let panelID):
+			return "Panel \(panelID.rawValue) appears more than once in its Workspace."
+		case .duplicateSplitReference(let reference):
+			return "Split \(reference.splitID.rawValue) appears more than once in \(reference.scope.layoutDescription)."
+		case .unplacedWorkspace(let workspaceID):
+			return "Workspace \(workspaceID.rawValue) is not placed on any display."
+		case .unplacedPanel(let panelID):
+			return "Panel \(panelID.rawValue) is not placed in any Workspace."
+		case .displayAffinityMismatch(let workspaceID):
+			return "Workspace \(workspaceID.rawValue) is laid out on a display other than its own."
+		case .infeasible(let scope, let splitID, let required, let available):
+			let place: String = splitID.map { "split \($0.rawValue) of \(scope.layoutDescription)" }
+				?? scope.layoutDescription
+			return """
+				\(place) does not fit: it needs at least \
+				\(required.layoutDescription), and \(available.layoutDescription) is available. \
+				Make the region larger, or close or merge a Panel inside it.
+				"""
+		}
+	}
+}
+
+extension LayoutScope {
+	var layoutDescription: String {
+		switch self {
+		case .display(let displayID): return "display \(displayID.rawValue)"
+		case .workspace(let workspaceID): return "Workspace \(workspaceID.rawValue)"
+		}
+	}
+}
+
+extension LayoutSize {
+	var layoutDescription: String {
+		"\(Int(width.rounded()))×\(Int(height.rounded())) pt"
+	}
 }
 
 struct ConstrainedLayoutSolver: Sendable {

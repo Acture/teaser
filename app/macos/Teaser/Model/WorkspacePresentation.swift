@@ -34,12 +34,27 @@ enum LayoutScope: Codable, Equatable, Hashable, Sendable {
 	case workspace(WorkspaceID)
 }
 
-enum WorkspacePresentationError: Error, Equatable, Sendable {
+enum WorkspacePresentationError: Error, Equatable, LocalizedError, Sendable {
 	case duplicatePanel(PanelID)
 	case panelNotFound(PanelID)
 	case workspaceNotFound(WorkspaceID)
 	case displayNotFound(DisplayID)
 	case focusPanelOutsideWorkspace
+
+	var errorDescription: String? {
+		switch self {
+		case .duplicatePanel(let panelID):
+			return "Panel \(panelID.rawValue) already exists in this Workspace."
+		case .panelNotFound(let panelID):
+			return "Panel \(panelID.rawValue) is not in this Workspace."
+		case .workspaceNotFound(let workspaceID):
+			return "Workspace \(workspaceID.rawValue) is not in this presentation."
+		case .displayNotFound(let displayID):
+			return "Display \(displayID.rawValue) is not in this presentation."
+		case .focusPanelOutsideWorkspace:
+			return "Virtual Focus cannot point at a Panel outside its Workspace."
+		}
+	}
 }
 
 struct WorkspacePresentation: Codable, Equatable, Sendable {

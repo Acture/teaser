@@ -432,8 +432,16 @@ private func testInfeasibleLayoutFailsAtomically() throws {
 			]
 		)
 		throw TestFailure.assertion("undersized displays must fail")
-	} catch is ConstrainedLayoutError {
-		return
+	} catch let error as ConstrainedLayoutError {
+		guard case .infeasible = error else {
+			throw TestFailure.assertion("an undersized display must be infeasible, not \(error)")
+		}
+		let message: String = error.localizedDescription
+		try expect(
+			message.contains("needs at least") && message.contains("available")
+				&& message.contains("pt"),
+			"an infeasible layout must say what it needs and what it has: \(message)"
+		)
 	}
 }
 
