@@ -687,8 +687,28 @@ private enum ExternalWindowSystem {
 	static func currentSpaceWindows(
 		processIdentifier: pid_t? = nil
 	) -> [ExternalWindowCurrentSpaceWindow] {
+		windowList(
+			options: [.optionOnScreenOnly, .excludeDesktopElements],
+			processIdentifier: processIdentifier
+		)
+	}
+
+	/// Also returns windows macOS reports off-screen — on another Space,
+	/// minimized, or held off-stage by Stage Manager — so diagnostics can say
+	/// why a window is unusable instead of omitting it.
+	static func allWindows(processIdentifier: pid_t) -> [ExternalWindowCurrentSpaceWindow] {
+		windowList(
+			options: [.optionAll, .excludeDesktopElements],
+			processIdentifier: processIdentifier
+		)
+	}
+
+	private static func windowList(
+		options: CGWindowListOption,
+		processIdentifier: pid_t?
+	) -> [ExternalWindowCurrentSpaceWindow] {
 		guard let info = CGWindowListCopyWindowInfo(
-			[.optionOnScreenOnly, .excludeDesktopElements],
+			options,
 			kCGNullWindowID
 		) as? [[String: Any]] else { return [] }
 		var regularOwners: [pid_t: Bool] = [:]
@@ -697,10 +717,13 @@ private enum ExternalWindowSystem {
 				(processIdentifier == nil || ownerPID.int32Value == processIdentifier),
 				let windowID = entry[kCGWindowNumber as String] as? NSNumber,
 				let layer = entry[kCGWindowLayer as String] as? NSNumber,
-				let onscreen = entry[kCGWindowIsOnscreen as String] as? NSNumber,
 				let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
 				let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
 			else { return nil }
+			// The window server omits `kCGWindowIsOnscreen` entirely for a window
+			// that is not on screen, so its absence means false, not "unknown".
+			let onscreen: Bool = (entry[kCGWindowIsOnscreen as String] as? NSNumber)?
+				.boolValue ?? false
 			let owner: pid_t = ownerPID.int32Value
 			let isRegular: Bool
 			if let cached: Bool = regularOwners[owner] {
@@ -716,7 +739,7 @@ private enum ExternalWindowSystem {
 					windowID: CGWindowID(windowID.uint32Value)
 				),
 				layer: layer.intValue,
-				isOnscreen: onscreen.boolValue,
+				isOnscreen: onscreen,
 				ownerIsRegularApplication: isRegular,
 				accessibilityFrame: frame
 			)
@@ -958,6 +981,14 @@ final class ManagedExternalWindow {
 		ExternalWindowSystem.currentSpaceWindows(processIdentifier: processIdentifier)
 			.filter { $0.layer == 0 && $0.isOnscreen && $0.ownerIsRegularApplication }
 			.map(\.identity)
+	}
+
+	/// Every window the window server attributes to a process, on-screen or not.
+	/// Diagnostics use it to explain an empty selection list.
+	static func inspectableWindows(
+		processIdentifier: pid_t
+	) -> [ExternalWindowCurrentSpaceWindow] {
+		ExternalWindowSystem.allWindows(processIdentifier: processIdentifier)
 	}
 
 	/// Whether macOS runs this process as an ordinary application. Accessory and

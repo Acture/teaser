@@ -8,6 +8,8 @@ enum ExternalWindowInspection {
 	private struct WindowResult: Encodable {
 		let windowID: UInt32
 		let selectable: Bool
+		let layer: Int
+		let isOnscreen: Bool
 		let frame: CGRect?
 		let reason: String?
 	}
@@ -40,19 +42,43 @@ enum ExternalWindowInspection {
 		}
 		let authorized: Bool = ManagedExternalWindow.permissionStatus(prompt: false) == .authorized
 		ExternalWindowDiagnostics.logger.notice("inspection-authorized=\(authorized, privacy: .public) pid=\(pid, privacy: .public)")
-		let windows: [WindowResult] = ManagedExternalWindow.visibleWindowIdentities(processIdentifier: pid).map { identity in
-			guard authorized else {
-				return .init(windowID: identity.windowID, selectable: false, frame: nil,
-					reason: ManagedExternalWindowError.accessibilityPermissionRequired.localizedDescription)
+		// Unusable windows are listed with their reason rather than omitted: an
+		// empty report cannot distinguish "wrong process" from "every window is
+		// off-stage", which is exactly what a person needs to know here.
+		let windows: [WindowResult] = ManagedExternalWindow.inspectableWindows(processIdentifier: pid)
+			.map { window in
+				let identity: ExternalWindowIdentity = window.identity
+				func rejected(_ reason: String) -> WindowResult {
+					.init(windowID: identity.windowID, selectable: false, layer: window.layer,
+						isOnscreen: window.isOnscreen, frame: nil, reason: reason)
+				}
+				guard authorized else {
+					return rejected(ManagedExternalWindowError.accessibilityPermissionRequired.localizedDescription)
+				}
+				guard window.ownerIsRegularApplication else {
+					return rejected("""
+						Process \(pid) is not an ordinary application: its activation policy is \
+						accessory or prohibited, so Teaser never selects its windows.
+						""")
+				}
+				guard window.layer == 0 else {
+					return rejected("Window layer \(window.layer) is not the normal application window layer.")
+				}
+				guard window.isOnscreen else {
+					return rejected("""
+						macOS reports this window off-screen. It is on another Space, minimized, or \
+						held off-stage by Stage Manager; bring it to the current Space and retry.
+						""")
+				}
+				do {
+					let selection: ExternalWindowSelection = try ManagedExternalWindow.selectWindow(identity: identity)
+					return .init(windowID: identity.windowID, selectable: true, layer: window.layer,
+						isOnscreen: window.isOnscreen,
+						frame: selection.initialSnapshot.appKitScreenFrame, reason: nil)
+				} catch {
+					return rejected(error.localizedDescription)
+				}
 			}
-			do {
-				let selection: ExternalWindowSelection = try ManagedExternalWindow.selectWindow(identity: identity)
-				return .init(windowID: identity.windowID, selectable: true,
-					frame: selection.initialSnapshot.appKitScreenFrame, reason: nil)
-			} catch {
-				return .init(windowID: identity.windowID, selectable: false, frame: nil, reason: error.localizedDescription)
-			}
-		}
 		let report: Report = .init(bundlePath: Bundle.main.bundlePath,
 			accessibilityAuthorized: authorized, processIdentifier: pid,
 			ownerIsRegularApplication: ManagedExternalWindow.isRegularApplication(processIdentifier: pid),
