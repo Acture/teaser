@@ -650,6 +650,30 @@ private func testPermissionLostDuringDragStopsAdoption() throws {
 }
 
 @MainActor
+private func testCandidateListIsAvailableBeforeTheStageStarts() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	let window: FakeWindow = harness.addWindow()
+	try expect(
+		!harness.orchestrator.isStageActive,
+		"this case must exercise a stopped stage"
+	)
+
+	let candidates: [ExternalWindowCandidate] = harness.orchestrator.adoptableWindows()
+	try expect(
+		candidates.contains { $0.identity == window.identity },
+		"listing candidates must not require a running stage"
+	)
+	try expect(
+		harness.service.promptCount == 0,
+		"listing candidates must never prompt for Accessibility"
+	)
+	try expect(
+		harness.log.operations.isEmpty,
+		"listing candidates must not touch any window"
+	)
+}
+
+@MainActor
 private func testPickedWindowIsAdoptedWithoutADrag() throws {
 	let harness: Harness = try makeStartedHarness()
 	let hidden: FakeWindow = harness.addWindow()
@@ -1210,6 +1234,7 @@ func adoptionCases() -> [TestCase] {
 		.init("substitute window at the same point is never adopted", testSubstituteWindowAtTheSamePointIsNeverAdopted),
 		.init("permission lost during drag stops adoption", testPermissionLostDuringDragStopsAdoption),
 		.init("adoptable window list keeps hidden and rejected candidates", testAdoptableWindowListKeepsHiddenAndRejectedCandidates),
+		.init("candidate list is available before the stage starts", testCandidateListIsAvailableBeforeTheStageStarts),
 		.init("picked window is adopted without a drag", testPickedWindowIsAdoptedWithoutADrag),
 		.init("picked window is refused while the stage is stopped", testPickedWindowIsRefusedWhileTheStageIsStopped),
 		.init("window hidden from the current Space at release is still adopted", testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted),

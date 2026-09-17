@@ -102,7 +102,8 @@ _Avoid_: Manual attach command, cwd matching
 
 **Adopted External Window**:
 A standard provider-owned top-level window whose exact runtime identity and frame
-are leased to one Panel after the user physically drags it there. Adoption manages
+are leased to one Panel, either by dragging the window there or by choosing it
+from Teaser's window list when it is hidden and cannot be dragged. Adoption manages
 geometry only: it is not reparenting, pixel capture, input forwarding, a Surface, or
 a Teaser Session. The binding is not guessed or silently recreated after restart.
 _Avoid_: embedded application, companion window, captured Panel
