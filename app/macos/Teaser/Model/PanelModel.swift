@@ -139,9 +139,18 @@ extension PanelKindID {
 	static let generic: PanelKindID = .init("generic")
 }
 
-enum PanelKindRegistryError: Error, Equatable, Sendable {
+enum PanelKindRegistryError: Error, Equatable, LocalizedError, Sendable {
 	case reservedBuiltInID(PanelKindID)
 	case duplicateCustomID(PanelKindID)
+
+	var errorDescription: String? {
+		switch self {
+		case .reservedBuiltInID(let panelKindID):
+			return "Panel kind \(panelKindID.rawValue) is built in and cannot be redefined."
+		case .duplicateCustomID(let panelKindID):
+			return "Panel kind \(panelKindID.rawValue) is defined more than once."
+		}
+	}
 }
 
 struct PanelKindRegistry: Codable, Equatable, Sendable {

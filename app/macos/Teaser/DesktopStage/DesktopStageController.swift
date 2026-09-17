@@ -190,7 +190,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		if let message: String = orchestrator.statusMessage,
 			message != lastLoggedStatusMessage
 		{
-			NSLog("Teaser: %@", message)
+			ExternalWindowDiagnostics.logger.notice("status \(message, privacy: .public)")
 		}
 		lastLoggedStatusMessage = orchestrator.statusMessage
 		shortcutMonitor.setArrangeModeEnabled(orchestrator.isArrangeModeEnabled)
@@ -290,7 +290,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 		guard permission != lastPermissionStatus else { return }
 		lastPermissionStatus = permission
-		NSLog("Teaser: accessibility %@", permission == .authorized ? "authorized" : "not authorized")
+		ExternalWindowDiagnostics.logger.notice(
+			"accessibility \(permission == .authorized ? "authorized" : "not authorized", privacy: .public)"
+		)
 		if permission == .notAuthorized {
 			if orchestrator.isStageActive { orchestrator.stopStage() }
 			orchestrator.setStatus("Allow Accessibility, then click Start Layout")

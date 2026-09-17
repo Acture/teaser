@@ -49,6 +49,10 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		permissionLabel.font = .systemFont(ofSize: 12)
 		statusLabel.font = .systemFont(ofSize: 12)
 		statusLabel.maximumNumberOfLines = 3
+		// Status text carries the failure the user has to act on, so it must be
+		// selectable and copyable; wrapping labels are not selectable by default.
+		statusLabel.isSelectable = true
+		permissionLabel.isSelectable = true
 		let shortcuts: NSTextField = .init(wrappingLabelWithString:
 			"⌃⌥Space  Arrange on/off    ⌃⌥D  Split    ⌃⌥F  Focus\n⌃⌥Z  Undo in Arrange    ⌃⌥Esc  Stop layout    ⌘Q  Quit"
 		)
