@@ -429,6 +429,45 @@ final class DesktopStageOrchestrator {
 		}
 	}
 
+	/// Adoption without a drag. A window hidden by Stage Manager or resident on
+	/// another Space cannot be dragged, so the picker binds the window the user
+	/// chose. The lease, transaction, focus, and Undo path are the drop path's;
+	/// only the gesture differs.
+	@discardableResult
+	func adoptWindow(identity: ExternalWindowIdentity, into panelID: PanelID) -> Bool {
+		guard isStageActive else {
+			setStatus(DesktopStageOrchestratorError.layoutUnavailable.localizedDescription)
+			return false
+		}
+		guard panelDescriptor(panelID) != nil else {
+			setStatus(
+				DesktopStageOrchestratorError.panelUnavailable(panelID).localizedDescription
+			)
+			return false
+		}
+		guard !isPanelOccupied(panelID) else {
+			setStatus(DesktopStageOrchestratorError.occupiedDropTarget.localizedDescription)
+			return false
+		}
+		do {
+			let handle: any ExternalWindowHandle = try service.selectWindow(identity: identity)
+			let sourcePanelID: PanelID? = panelAssignments.first { $0.value == identity }?.key
+			try performTransaction(label: "Window adopted") {
+				try ensureLease(for: handle)
+				if let sourcePanelID, sourcePanelID != panelID {
+					panelAssignments.removeValue(forKey: sourcePanelID)
+				}
+				panelAssignments[panelID] = identity
+				try focusModel(on: panelID)
+			}
+			return true
+		} catch {
+			setStatus(error.localizedDescription)
+			relayout(synchronously: true)
+			return false
+		}
+	}
+
 	private func detachWindow(
 		identity: ExternalWindowIdentity,
 		from panelID: PanelID

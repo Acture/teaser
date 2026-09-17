@@ -650,6 +650,66 @@ private func testPermissionLostDuringDragStopsAdoption() throws {
 }
 
 @MainActor
+private func testPickedWindowIsAdoptedWithoutADrag() throws {
+	let harness: Harness = try makeStartedHarness()
+	let hidden: FakeWindow = harness.addWindow()
+	// The window a picker exists for: hidden, so it could never be dragged.
+	hidden.isVisibleOnCurrentSpace = false
+
+	try expect(
+		harness.orchestrator.adoptWindow(identity: hidden.identity, into: leftPanelID),
+		"a picked window must be adopted without a drag"
+	)
+	try expect(
+		harness.orchestrator.panelAssignments[leftPanelID] == hidden.identity
+			&& harness.log.bindCount(for: hidden.identity) == 1,
+		"the picked window holds exactly one lease in its Panel"
+	)
+	try expect(
+		harness.orchestrator.presentation.virtualFocus.panelID == leftPanelID,
+		"adopting by pick moves Virtual Focus to that Panel"
+	)
+
+	let second: FakeWindow = harness.addWindow(
+		windowID: 21, name: "Zed", title: "empty project"
+	)
+	try expect(
+		!harness.orchestrator.adoptWindow(identity: second.identity, into: leftPanelID),
+		"an occupied Panel refuses a picked window"
+	)
+	try expect(
+		harness.orchestrator.statusMessage
+			== DesktopStageOrchestratorError.occupiedDropTarget.localizedDescription,
+		"the refusal must be readable: \(harness.orchestrator.statusMessage ?? "none")"
+	)
+	try expect(
+		harness.orchestrator.panelAssignments[leftPanelID] == hidden.identity
+			&& harness.log.bindCount(for: second.identity) == 0,
+		"a refused pick changes nothing"
+	)
+}
+
+@MainActor
+private func testPickedWindowIsRefusedWhileTheStageIsStopped() throws {
+	let harness: Harness = try makeStartedHarness()
+	let window: FakeWindow = harness.addWindow()
+	harness.orchestrator.stopStage()
+
+	try expect(
+		!harness.orchestrator.adoptWindow(identity: window.identity, into: leftPanelID),
+		"a stopped stage adopts nothing"
+	)
+	try expect(
+		harness.log.bindCount(for: window.identity) == 0,
+		"no lease is taken while the stage is stopped"
+	)
+	try expect(
+		harness.orchestrator.panelAssignments.isEmpty,
+		"a refused pick assigns no Panel"
+	)
+}
+
+@MainActor
 private func testAdoptableWindowListKeepsHiddenAndRejectedCandidates() throws {
 	let harness: Harness = try makeStartedHarness()
 	let visible: FakeWindow = harness.addWindow()
@@ -1150,6 +1210,8 @@ func adoptionCases() -> [TestCase] {
 		.init("substitute window at the same point is never adopted", testSubstituteWindowAtTheSamePointIsNeverAdopted),
 		.init("permission lost during drag stops adoption", testPermissionLostDuringDragStopsAdoption),
 		.init("adoptable window list keeps hidden and rejected candidates", testAdoptableWindowListKeepsHiddenAndRejectedCandidates),
+		.init("picked window is adopted without a drag", testPickedWindowIsAdoptedWithoutADrag),
+		.init("picked window is refused while the stage is stopped", testPickedWindowIsRefusedWhileTheStageIsStopped),
 		.init("window hidden from the current Space at release is still adopted", testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted),
 		.init("window that disappears at release is not adopted", testWindowThatDisappearsAtReleaseIsNotAdopted),
 		.init("closed provider window frees its Panel", testClosedProviderWindowFreesItsPanel),
