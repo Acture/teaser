@@ -650,23 +650,46 @@ private func testPermissionLostDuringDragStopsAdoption() throws {
 }
 
 @MainActor
-private func testWindowOffTheCurrentSpaceAtReleaseIsNotAdopted() throws {
+private func testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted() throws {
 	let harness: Harness = try makeStartedHarness()
 	let window: FakeWindow = harness.addWindow()
 	let drop: CGPoint = try harness.center(of: leftPanelID)
 	harness.beginDrag(window, to: drop)
 
-	// The window leaves the current Space between qualification and release.
-	window.isOnCurrentSpace = false
+	// Stage Manager or a Space switch hides the window between qualification and
+	// release. It still exists, so its identity still resolves and it is adopted.
+	window.isVisibleOnCurrentSpace = false
+	harness.releasePointer(at: drop)
+	try expect(
+		harness.orchestrator.panelAssignments[leftPanelID] == window.identity
+			&& harness.log.bindCount(for: window.identity) == 1,
+		"a window hidden from the current Space must still be adopted"
+	)
+	try expect(
+		harness.orchestrator.dropHighlight == nil && !harness.orchestrator.isDragging,
+		"a completed release must clear the drag state"
+	)
+}
+
+@MainActor
+private func testWindowThatDisappearsAtReleaseIsNotAdopted() throws {
+	let harness: Harness = try makeStartedHarness()
+	let window: FakeWindow = harness.addWindow()
+	let drop: CGPoint = try harness.center(of: leftPanelID)
+	harness.beginDrag(window, to: drop)
+
+	// The window server stops listing the window between qualification and
+	// release: closed, not merely hidden.
+	window.exists = false
 	harness.releasePointer(at: drop)
 	try expect(
 		harness.orchestrator.panelAssignments.isEmpty
 			&& harness.log.bindCount(for: window.identity) == 0,
-		"a window that left the current Space must not be adopted"
+		"a window that no longer exists must not be adopted"
 	)
 	try expect(
-		harness.orchestrator.statusMessage?.contains("current Space") == true,
-		"the Space mismatch must reach the user: \(harness.orchestrator.statusMessage ?? "none")"
+		harness.orchestrator.statusMessage?.contains("unavailable") == true,
+		"the vanished window must reach the user: \(harness.orchestrator.statusMessage ?? "none")"
 	)
 	try expect(
 		harness.orchestrator.dropHighlight == nil && !harness.orchestrator.isDragging,
@@ -1076,7 +1099,8 @@ func adoptionCases() -> [TestCase] {
 		.init("window lost during drag cancels and diagnoses", testWindowLostDuringDragCancelsAndDiagnoses),
 		.init("substitute window at the same point is never adopted", testSubstituteWindowAtTheSamePointIsNeverAdopted),
 		.init("permission lost during drag stops adoption", testPermissionLostDuringDragStopsAdoption),
-		.init("window off the current Space at release is not adopted", testWindowOffTheCurrentSpaceAtReleaseIsNotAdopted),
+		.init("window hidden from the current Space at release is still adopted", testWindowHiddenFromTheCurrentSpaceAtReleaseIsStillAdopted),
+		.init("window that disappears at release is not adopted", testWindowThatDisappearsAtReleaseIsNotAdopted),
 		.init("closed provider window frees its Panel", testClosedProviderWindowFreesItsPanel),
 		.init("window that refuses to move rolls back and reports", testWindowThatRefusesToMoveRollsBackAndReports),
 		.init("frame readback mismatch refuses the adoption", testFrameReadbackMismatchRefusesTheAdoption),

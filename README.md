@@ -140,10 +140,12 @@ without starting the stage. The map labels are not replicas of provider apps.
 For read-only window-selection diagnostics, run the signed bundle's executable
 with `--inspect-windows PID`. It lists every window the window server attributes
 to that process, each with its layer, on-screen state, and either its selectable
-frame or the reason it is not selectable — another Space, minimized, held
-off-stage by Stage Manager, an accessory owner, or an Accessibility failure. It
-reports AX permission and the owner's activation policy without showing the
-stage, prompting, or moving windows:
+frame or the reason it is not selectable — an accessory owner, a non-standard
+window layer, no published Accessibility window, or an Accessibility failure. A
+window hidden by Stage Manager or sitting on another Space is still selectable,
+because its identity and its geometry remain reachable. The report also names AX
+permission and the owner's activation policy, without showing the stage,
+prompting, or moving windows:
 
 ```fish
 target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
