@@ -87,7 +87,12 @@ extension LayoutScope {
 
 extension LayoutSize {
 	var layoutDescription: String {
-		"\(Int(width.rounded()))×\(Int(height.rounded())) pt"
+		// One `infeasible` case reports a non-finite requirement, and `Int(_:)`
+		// traps on those and on values past its range.
+		guard width.isFinite, height.isFinite,
+			width.magnitude < 1e9, height.magnitude < 1e9
+		else { return "\(width)×\(height) pt" }
+		return "\(Int(width.rounded()))×\(Int(height.rounded())) pt"
 	}
 }
 
