@@ -153,8 +153,13 @@ target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
 accessor without creating `NSApplication`, registering hotkeys, or observing
 windows, and exits 1 when the bundled strings table is missing.
 
-Replace `PID` with the selected provider process. No selectable window returns
-exit status 1; invalid arguments return 2. This is not a drag/placement test.
+Replace `PID` with the selected provider process, or pass `front` to inspect
+whichever application is frontmost. `front` is the usable form from a terminal:
+while Stage Manager is on, macOS hides every off-stage application from both
+Core Graphics and Accessibility, so a command can only ever observe the
+application that is in front — which, when you type the command, is your
+terminal. No selectable window returns exit status 1; invalid arguments return
+2. This is not a drag/placement test.
 `--observe-window-drag PID WINDOW_ID` passively watches one specified window for
 20 seconds without showing or adopting anything. It prints `BEGAN` and `ENDED`
 and returns 0 only after a complete qualified drag; timeout returns 1. A human or
