@@ -216,7 +216,9 @@ window. Teaser never reparents the window, mirrors its pixels, synthesizes its
 application input, or represents it as a Teaser Session or Surface.
 
 After macOS grants the stably signed Teaser application Accessibility access once,
-physically dragging a window into a Panel is the explicit selection action. A global
+physically dragging a window into a Panel is one explicit selection action, and
+choosing a window from Teaser's adoptable-window list is the other, for a window
+that is hidden and therefore impossible to drag. During a drag, a global
 mouse monitor, button-state sampling, and front-to-back Core Graphics hit testing
 over ordinary-application windows lock one exact `(PID, window ID, AX element)`
 identity at drag start. The window server itself supplies that window ID through
@@ -268,8 +270,9 @@ The live AX identity and pre-adoption frame are ephemeral. Graceful release rest
 the original frame only while the exact window still exists and remains at the frame
 last applied by Teaser. Persistence retains layout and a non-authoritative provider
 hint, not PID, window ID, or AX references. After Teaser or the provider restarts,
-the Panel remains empty and requires another physical drag; Teaser never guesses a
-replacement by title, repository path, or application name.
+the Panel remains empty until the user drags that window again or picks it from
+the adoptable-window list; Teaser never guesses a replacement by title,
+repository path, or application name.
 
 ### 4.2 Virtual and input focus
 

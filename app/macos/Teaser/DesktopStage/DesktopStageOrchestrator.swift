@@ -174,6 +174,15 @@ final class DesktopStageOrchestrator {
 		service.permissionStatus(prompt: prompt)
 	}
 
+	/// Windows a user could bind to a Panel. Deliberately not gated on a running
+	/// stage: listing moves nothing, and a person needs to see what is adoptable
+	/// before deciding to start the layout at all.
+	func adoptableWindows() -> [ExternalWindowCandidate] {
+		service.adoptableWindows(
+			excludingProcessIdentifiers: excludedProcessIdentifiers
+		)
+	}
+
 	// MARK: - Lifecycle
 
 	func setDisplays(_ displays: [DesktopStageDisplay]) {

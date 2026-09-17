@@ -31,7 +31,9 @@ built-in adapters add richer semantics progressively.
 
 A Panel may instead bind to a standard window owned by another macOS application.
 Dragging that window into a Panel adopts its position and size into the Workspace
-layout. The provider still owns rendering, input, and window lifetime: Teaser does
+layout, and a window that cannot be dragged, because Stage Manager or another
+Space hides it, can be chosen from Teaser's list of adoptable windows instead.
+The provider still owns rendering, input, and window lifetime: Teaser does
 not reparent the window, capture its pixels, or pretend it is an embedded view.
 
 ## Architecture at a glance
@@ -111,7 +113,9 @@ fish scripts/app.fish
 
 Launch opens a normal control window. Allow Accessibility, then click **Start
 Layout**; launching alone never covers the desktop. Physically dragging a standard
-window into a visible Panel is the explicit adoption action. Teaser does not request per-application or per-project
+window into a visible Panel is one explicit adoption action; choosing a window
+from Teaser's adoptable-window list is the other, for windows no drag can reach.
+Teaser does not request per-application or per-project
 authorization, and it does not guess a replacement window after either application
 restarts.
 
