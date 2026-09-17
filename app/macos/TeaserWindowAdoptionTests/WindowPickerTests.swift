@@ -126,8 +126,34 @@ private func testPickerRefusesAdoptionWhileStopped() throws {
 	)
 }
 
+@MainActor
+private func testPickerWindowConstructsWithoutShowingAnything() throws {
+	let harness: Harness = try makeStartedHarness()
+	let model: DesktopStageWindowPickerModel = makePicker(harness) { [] }
+	let picker: DesktopStageWindowPickerWindow = .init(model: model)
+	defer { picker.close() }
+
+	try expect(
+		picker.window.level == .normal && picker.window.styleMask.contains(.closable),
+		"the picker is an ordinary closable window, never an overlay"
+	)
+	try expect(
+		!picker.window.isVisible,
+		"constructing the picker must never show it"
+	)
+	try expect(
+		!NSApplication.shared.windows.contains(where: \.isVisible),
+		"tests must never show windows"
+	)
+	try expect(
+		harness.log.operations.isEmpty,
+		"constructing the picker must touch no window"
+	)
+}
+
 func windowPickerCases() -> [TestCase] {
 	[
+		.init("picker window constructs without showing anything", testPickerWindowConstructsWithoutShowingAnything),
 		.init("picker offers only unoccupied Panels", testPickerListsOnlyUnoccupiedPanelsAsTargets),
 		.init("picker refresh is separate from projection", testPickerRefreshIsSeparateFromProjection),
 		.init("picker adopts into the chosen Panel only", testPickerAdoptsIntoTheChosenPanelOnly),

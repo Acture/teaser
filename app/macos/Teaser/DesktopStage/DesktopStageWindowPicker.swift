@@ -132,3 +132,146 @@ final class DesktopStageWindowPickerModel: ObservableObject {
 		return adopted
 	}
 }
+
+@MainActor
+struct DesktopStageWindowPickerView: View {
+	@ObservedObject var model: DesktopStageWindowPickerModel
+	@State private var selectedIdentity: ExternalWindowIdentity?
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 12) {
+			header
+			TextField("Search windows", text: $model.query)
+				.textFieldStyle(.roundedBorder)
+			windowList
+			targetRow
+			footer
+		}
+		.padding(16)
+		.frame(minWidth: 520, minHeight: 420)
+	}
+
+	@ViewBuilder private var header: some View {
+		Text("Adopt a window")
+			.font(.headline)
+		Text(
+			"Windows hidden by Stage Manager or sitting on another Space cannot be "
+				+ "dragged. Choose one here, pick the Panel it should fill, then adopt it."
+		)
+		.font(.caption)
+		.foregroundStyle(.secondary)
+		.fixedSize(horizontal: false, vertical: true)
+		if !model.state.authorized {
+			Text("Accessibility access is required before Teaser can adopt a window.")
+				.font(.caption)
+				.foregroundStyle(.orange)
+		}
+	}
+
+	private var windowList: some View {
+		List(model.rows, id: \.candidate.identity, selection: $selectedIdentity) { row in
+			VStack(alignment: .leading, spacing: 2) {
+				HStack(spacing: 6) {
+					Text(row.primaryText).lineLimit(1)
+					if let panel: String = model.panelTitle(holding: row.candidate.identity) {
+						Text("In \(panel)")
+							.font(.caption2)
+							.foregroundStyle(.secondary)
+					}
+				}
+				Text(row.secondaryText)
+					.font(.caption)
+					.foregroundStyle(.secondary)
+					.lineLimit(1)
+				if let reason: String = row.candidate.rejectionReason {
+					Text(reason)
+						.font(.caption2)
+						.foregroundStyle(.secondary)
+						.textSelection(.enabled)
+						.lineLimit(3)
+				}
+			}
+			.opacity(row.isAdoptable ? 1 : 0.55)
+			.tag(row.candidate.identity)
+		}
+		.frame(minHeight: 200)
+	}
+
+	private var targetRow: some View {
+		HStack(spacing: 8) {
+			Picker("Panel", selection: panelSelection) {
+				Text("Choose a Panel").tag(PanelID?.none)
+				ForEach(model.state.targets) { target in
+					Text("\(target.workspaceTitle) · \(target.title)")
+						.tag(PanelID?.some(target.id))
+				}
+			}
+			.disabled(model.state.targets.isEmpty)
+			Button("Refresh") { model.refresh() }
+		}
+	}
+
+	@ViewBuilder private var footer: some View {
+		HStack {
+			if let message: String = model.message {
+				Text(message)
+					.font(.caption)
+					.foregroundStyle(.secondary)
+					.textSelection(.enabled)
+					.lineLimit(3)
+			}
+			Spacer()
+			Button("Adopt Window") {
+				if let selectedIdentity { model.adopt(selectedIdentity) }
+			}
+			.keyboardShortcut(.defaultAction)
+			.disabled(!model.canAdopt || !isSelectionAdoptable)
+		}
+	}
+
+	private var isSelectionAdoptable: Bool {
+		guard let selectedIdentity else { return false }
+		return model.rows.contains {
+			$0.candidate.identity == selectedIdentity && $0.isAdoptable
+		}
+	}
+
+	private var panelSelection: Binding<PanelID?> {
+		.init(
+			get: { model.selectedPanelID },
+			set: { model.select(panelID: $0) }
+		)
+	}
+}
+
+/// Ordinary, opt-in window, exactly like the layout editor: never an overlay and
+/// never an input shield on the desktop.
+@MainActor
+final class DesktopStageWindowPickerWindow {
+	let window: NSWindow
+
+	init(model: DesktopStageWindowPickerModel) {
+		window = .init(
+			contentRect: .init(x: 0, y: 0, width: 560, height: 520),
+			styleMask: [.titled, .closable, .miniaturizable, .resizable],
+			backing: .buffered,
+			defer: false
+		)
+		window.title = "Teaser — Adopt Window"
+		window.isReleasedWhenClosed = false
+		window.isRestorable = false
+		window.tabbingMode = .disallowed
+		window.minSize = .init(width: 520, height: 420)
+		window.contentView = NSHostingView(
+			rootView: DesktopStageWindowPickerView(model: model)
+		)
+		window.center()
+	}
+
+	func show() {
+		window.makeKeyAndOrderFront(nil)
+		NSApplication.shared.activate(ignoringOtherApps: true)
+	}
+
+	func close() { window.orderOut(nil) }
+}
