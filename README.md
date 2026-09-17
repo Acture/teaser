@@ -138,8 +138,12 @@ persistence used by desktop handles. While stopped, it edits saved proportions
 without starting the stage. The map labels are not replicas of provider apps.
 
 For read-only window-selection diagnostics, run the signed bundle's executable
-with `--inspect-windows PID`. It reports current-Space window IDs, AX permission,
-and selection failures without showing the stage, prompting, or moving windows:
+with `--inspect-windows PID`. It lists every window the window server attributes
+to that process, each with its layer, on-screen state, and either its selectable
+frame or the reason it is not selectable — another Space, minimized, held
+off-stage by Stage Manager, an accessory owner, or an Accessibility failure. It
+reports AX permission and the owner's activation policy without showing the
+stage, prompting, or moving windows:
 
 ```fish
 target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
