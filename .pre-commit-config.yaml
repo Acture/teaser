@@ -70,7 +70,7 @@ repos:
         entry: swift run TeaserProbeTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-layout
@@ -78,7 +78,7 @@ repos:
         entry: swift run TeaserLayoutTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-presentation-store
@@ -86,7 +86,7 @@ repos:
         entry: swift run TeaserPresentationStoreTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-topology
@@ -94,7 +94,7 @@ repos:
         entry: swift run TeaserDesktopStageTopologyTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-controls
@@ -102,7 +102,7 @@ repos:
         entry: swift run TeaserDesktopStageControlsTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-safety
@@ -110,7 +110,7 @@ repos:
         entry: swift run TeaserDesktopStageSafetyTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-external-window
@@ -118,7 +118,7 @@ repos:
         entry: swift run TeaserExternalWindowTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-window-adoption
@@ -126,7 +126,7 @@ repos:
         entry: swift run TeaserWindowAdoptionTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       # SwiftPM does not assemble an .app bundle, so this stays a script.
@@ -135,7 +135,7 @@ repos:
         entry: fish scripts/app.fish --build-only
         language: system
         pass_filenames: false
-        files: (^app/macos/Teaser(Launcher)?/|^scripts/app\.fish$|^Package\.(swift|resolved)$|^(LICENSE|NOTICE|TRADEMARKS\.md|THIRD_PARTY_NOTICES\.md)$)
+        files: (^app/macos/Teaser(Launcher|PrivateAccessibility)?/|^scripts/app\.fish$|^Package\.(swift|resolved)$|^(LICENSE|NOTICE|TRADEMARKS\.md|THIRD_PARTY_NOTICES\.md)$)
         stages: [pre-push]
 
       - id: fish-syntax

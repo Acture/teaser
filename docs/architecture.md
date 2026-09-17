@@ -218,8 +218,11 @@ application input, or represents it as a Teaser Session or Surface.
 After macOS grants the stably signed Teaser application Accessibility access once,
 physically dragging a window into a Panel is the explicit selection action. A global
 mouse monitor, button-state sampling, and front-to-back Core Graphics hit testing
-with unique Accessibility correlation lock one
-exact `(PID, window ID, AX element)` identity at drag start. Teaser recognizes the
+over ordinary-application windows lock one exact `(PID, window ID, AX element)`
+identity at drag start. The window server itself supplies that window ID through
+the one linked private declaration described in section 4.3, so identity never
+depends on matching frames, and windows owned by accessory processes such as
+Stage Manager's `WindowManager` are skipped rather than selected. Teaser recognizes the
 gesture only after the same window's movement correlates with pointer movement, so
 tab, file, text, and in-application drags do not become window adoptions.
 
@@ -302,11 +305,19 @@ observers; they match no keys while nothing is registered.
 ### 4.3 Existing-library integration
 
 Use upstream packages with small adapters first. v1 ships window control through
-public Accessibility and Core Graphics APIs. Internal library interfaces and
-macOS private APIs may be evaluated only inside an isolated, pinned window
-backend that keeps the exact (PID, window ID, AX element) identity, explicit
-failure behavior, and same-window release. They are never a basis for
-reparenting, capture, or synthetic input.
+public Accessibility and Core Graphics APIs with exactly one exception: the
+`TeaserPrivateAccessibility` target declares `_AXUIElementGetWindow`, which
+returns the window server's `CGWindowID` for an Accessibility element. No public
+API maps an AX window to its window ID. The public-only alternative, matching AX
+frames against `CGWindowList` bounds, cannot separate windows that share a frame
+and rejected ordinary adoptions whenever another process published an identically
+placed window. Teaser reads that ID and nothing else from private API: the call
+fails closed, there is no frame-matching fallback, and it is never a basis for
+reparenting, capture, or synthetic input. The approach — this declaration plus
+restricting candidates to `NSApplication.ActivationPolicy.regular` owners —
+follows AeroSpace (MIT, revision `39e519044725694635712c739df9ca40ae78c5d1`); no
+AeroSpace code is linked. Internal interfaces of other libraries stay limited to
+isolated, pinned probes.
 
 SplitView 3.5.3 implements nested divider gestures in an explicitly opened,
 ordinary layout-editor window. Its tree is a projection of
@@ -329,8 +340,8 @@ Swindler is **not a shipping dependency**. The compile-only probe in
 revision falls short in three ways:
 
 - identity: it exposes a window's PID publicly and its AX element only
-  internally. It has no provider window ID, so Teaser's Core Graphics correlation
-  remains the source of the window ID, and its subrole filter still admits
+  internally. It has no provider window ID, so it cannot supply the identity
+  Teaser reads from `_AXUIElementGetWindow`, and its subrole filter still admits
   non-standard windows;
 - lifecycle: initialization creates front-ordered tracker windows and subscribes
   to every running application with retries and no per-element timeout, and there
@@ -538,7 +549,7 @@ SLO must be recorded with measurements and rationale before later milestones beg
 | Layout | Per-display WorkspaceTree containing one PanelTree per Workspace |
 | Focus | Virtual Focus is independent from explicit macOS Input Focus |
 | Terminal | Full pinned `libghostty`, isolated behind one adapter |
-| External apps | Exact current-Space window leases through public AX APIs; private APIs only in an evaluated backend (§4.3) |
+| External apps | Exact current-Space window leases through AX and CG APIs; one private declaration supplies the window ID (§4.3) |
 | Editor | Neovim in terminal or an adopted provider-owned editor window |
 | Agent | Native CLI for completeness; ACP for structured supported capabilities |
 | Input | Reusable native `NSTextView`-based input surface |

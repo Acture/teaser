@@ -32,33 +32,19 @@ private func expectFrame(
 	)
 }
 
-private func axCandidate(
-	_ index: Int,
-	pid: pid_t = 42,
-	frame: CGRect?
-) -> ExternalWindowAccessibilityCandidate {
-	.init(
-		index: index,
-		processIdentifier: pid,
-		role: kAXWindowRole,
-		subrole: kAXStandardWindowSubrole,
-		accessibilityFrame: frame,
-		isMinimized: false,
-		isFullScreen: false
-	)
-}
-
 private func cgWindow(
 	_ id: CGWindowID,
 	pid: pid_t = 42,
 	layer: Int = 0,
 	isOnscreen: Bool = true,
+	ownerIsRegularApplication: Bool = true,
 	frame: CGRect
 ) -> ExternalWindowCurrentSpaceWindow {
 	.init(
 		identity: .init(processIdentifier: pid, windowID: id),
 		layer: layer,
 		isOnscreen: isOnscreen,
+		ownerIsRegularApplication: ownerIsRegularApplication,
 		accessibilityFrame: frame
 	)
 }
@@ -111,70 +97,27 @@ private func testCoordinateConversion() throws {
 	)
 }
 
-private func testUniqueGeometryCorrelation() throws {
-	let first = CGRect(x: 100, y: 100, width: 800, height: 600)
-	let second = CGRect(x: 920, y: 100, width: 700, height: 600)
-	let correlations = externalWindowCurrentSpaceCorrelations(
-		accessibilityCandidates: [
-			axCandidate(7, frame: first),
-			axCandidate(9, frame: second),
-		],
-		currentSpaceWindows: [
-			cgWindow(101, frame: first),
-			cgWindow(202, frame: second),
-		]
+private func testWindowIdentitySelectsOneExactWindowID() throws {
+	try expect(
+		externalWindowUniqueIndex(ofWindowID: 202, in: [101, 202, 303]) == 1,
+		"an exact window ID must select its own Accessibility element"
 	)
 	try expect(
-		correlations == [7: 101, 9: 202],
-		"unique geometry must correlate exact AX and CG identities"
-	)
-}
-
-private func testAmbiguousGeometryFailsClosed() throws {
-	let shared = CGRect(x: 100, y: 100, width: 800, height: 600)
-	let duplicateAccessibility = externalWindowCurrentSpaceCorrelations(
-		accessibilityCandidates: [
-			axCandidate(0, frame: shared),
-			axCandidate(1, frame: shared),
-		],
-		currentSpaceWindows: [cgWindow(101, frame: shared)]
+		externalWindowUniqueIndex(ofWindowID: 404, in: [101, 202, nil]) == nil,
+		"an identity absent from the element list must not select a neighbor"
 	)
 	try expect(
-		duplicateAccessibility.isEmpty,
-		"duplicate AX geometry must not use title or ordering as a tiebreaker"
-	)
-	let duplicateCoreGraphics = externalWindowCurrentSpaceCorrelations(
-		accessibilityCandidates: [axCandidate(0, frame: shared)],
-		currentSpaceWindows: [
-			cgWindow(101, frame: shared),
-			cgWindow(202, frame: shared),
-		]
+		externalWindowUniqueIndex(ofWindowID: 101, in: [101, 101]) == nil,
+		"duplicate window IDs must fail closed instead of picking the first"
 	)
 	try expect(
-		duplicateCoreGraphics.isEmpty,
-		"duplicate CG geometry must fail closed"
-	)
-}
-
-private func testCorrelationRejectsWrongProcessAndNonstandardLayers() throws {
-	let frame = CGRect(x: 20, y: 30, width: 900, height: 700)
-	let rejected = externalWindowCurrentSpaceCorrelations(
-		accessibilityCandidates: [axCandidate(3, pid: 42, frame: frame)],
-		currentSpaceWindows: [
-			cgWindow(11, pid: 7, frame: frame),
-			cgWindow(12, layer: 1, frame: frame),
-			cgWindow(13, isOnscreen: false, frame: frame),
-		]
+		externalWindowUniqueIndex(ofWindowID: 101, in: [nil, nil]) == nil,
+		"elements whose window ID macOS refuses are never selectable"
 	)
 	try expect(
-		rejected.isEmpty,
-		"correlation must require same PID, layer zero, and current-Space visibility"
+		externalWindowUniqueIndex(ofWindowID: kCGNullWindowID, in: [nil]) == nil,
+		"the null window ID never matches an element without one"
 	)
-	let missingFrame = externalWindowCurrentSpaceCorrelations(
-		accessibilityCandidates: [axCandidate(3, frame: nil)],
-		currentSpaceWindows: [cgWindow(11, frame: frame)]
-	)
-	try expect(missingFrame.isEmpty, "an AX window without a frame is not identifiable")
 }
 
 private func testPanelTargetSemantics() throws {
@@ -322,14 +265,27 @@ private func testHitSelectionPassesThroughChromeButNotOwnWindows() throws {
 	let own: ExternalWindowIdentity = .init(processIdentifier: 99, windowID: 11)
 	let frame: CGRect = .init(x: 0, y: 0, width: 600, height: 400)
 	let providerWindow: ExternalWindowCurrentSpaceWindow = .init(
-		identity: provider, layer: 0, isOnscreen: true, accessibilityFrame: frame
+		identity: provider, layer: 0, isOnscreen: true,
+		ownerIsRegularApplication: true, accessibilityFrame: frame
 	)
 	let chrome: ExternalWindowCurrentSpaceWindow = .init(
-		identity: own, layer: 3, isOnscreen: true, accessibilityFrame: frame
+		identity: own, layer: 3, isOnscreen: true,
+		ownerIsRegularApplication: true, accessibilityFrame: frame
 	)
 	let control: ExternalWindowCurrentSpaceWindow = .init(
-		identity: own, layer: 0, isOnscreen: true, accessibilityFrame: frame
+		identity: own, layer: 0, isOnscreen: true,
+		ownerIsRegularApplication: true, accessibilityFrame: frame
 	)
+	// Stage Manager's WindowManager owns layer-zero windows as an accessory app.
+	let systemChrome: ExternalWindowCurrentSpaceWindow = .init(
+		identity: .init(processIdentifier: 7, windowID: 12), layer: 0, isOnscreen: true,
+		ownerIsRegularApplication: false, accessibilityFrame: frame
+	)
+	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [systemChrome, providerWindow],
+		excludingProcessIdentifiers: [99]) == provider,
+		"system windows such as Stage Manager's must never be selected or block a provider")
+	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [systemChrome],
+		excludingProcessIdentifiers: [99]) == nil, "an accessory owner alone yields no selection")
 	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [chrome, providerWindow],
 		excludingProcessIdentifiers: [99]) == provider, "transparent chrome must not hide provider candidates")
 	try expect(externalWindowAtPoint(.init(x: 50, y: 50), windows: [control, providerWindow],
@@ -362,9 +318,7 @@ private func testTransactionErrorsRetainInputs() throws {
 
 do {
 	try testCoordinateConversion()
-	try testUniqueGeometryCorrelation()
-	try testAmbiguousGeometryFailsClosed()
-	try testCorrelationRejectsWrongProcessAndNonstandardLayers()
+	try testWindowIdentitySelectsOneExactWindowID()
 	try testPanelTargetSemantics()
 	try testPanelOverlapFailsClosed()
 	try testWindowDragQualification()

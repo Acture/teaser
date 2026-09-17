@@ -27,9 +27,9 @@ Deliverables:
   bracketed paste, mouse input, resize, flow control, and capture repair;
 - a two-level constrained slicing layout in which each display contains connected
   rectangular Workspaces and each Workspace contains unequal Panels;
-- generic current-Space window adoption through public Accessibility APIs, with
-  exact identity, drag-driven selection, transactional placement, Undo, and safe
-  same-window release.
+- generic current-Space window adoption through Accessibility and Core Graphics,
+  with window-server identity, drag-driven selection, transactional placement,
+  Undo, and safe same-window release.
 
 Exit gates:
 
@@ -178,5 +178,6 @@ Release criteria:
 - custom roaming daemon or replacement for Mosh/tmux;
 - Linux/Windows host;
 - external-GUI reparenting, pixel mirroring, synthetic application input, or private
-  macOS APIs outside an isolated, pinned window-backend evaluation;
+  macOS APIs beyond the window-identity declaration in `docs/architecture.md`
+  section 4.3;
 - automatic replacement-window guessing and cross-Space window movement.

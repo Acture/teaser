@@ -33,11 +33,20 @@ let package: Package = Package(
 		.package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", exact: "3.1.0"),
 	],
 	targets: [
+		// Declares `_AXUIElementGetWindow` so window identity is the window
+		// server's own `CGWindowID` instead of a geometry guess. Teaser links no
+		// other private declaration.
+		.target(
+			name: "TeaserPrivateAccessibility",
+			path: "app/macos/TeaserPrivateAccessibility",
+			publicHeadersPath: "include"
+		),
 		.target(
 			name: "TeaserKit",
 			dependencies: [
 				.product(name: "SplitView", package: "SplitView"),
 				.product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+				.target(name: "TeaserPrivateAccessibility"),
 			],
 			path: "app/macos/Teaser",
 			exclude: [

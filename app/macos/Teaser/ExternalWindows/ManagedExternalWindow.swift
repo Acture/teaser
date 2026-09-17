@@ -3,6 +3,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 import OSLog
+import TeaserPrivateAccessibility
 
 enum ExternalWindowDiagnostics {
 	static let logger: Logger = .init(subsystem: "com.acture.teaser", category: "window-adoption")
@@ -47,7 +48,7 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 	case invalidFrame(CGRect)
 	case noScreens
 	case windowAtPointUnavailable
-	case ambiguousWindowIdentity(processIdentifier: pid_t)
+	case windowIdentifierUnavailable(processIdentifier: pid_t, code: AXError)
 	case windowUnavailable(ExternalWindowIdentity?)
 	case windowNotOnCurrentSpace(ExternalWindowIdentity)
 	case windowNotStandard
@@ -78,13 +79,13 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 			return "macOS did not report a menu-bar screen."
 		case .windowAtPointUnavailable:
 			return "No eligible external window exists at that screen location."
-		case .ambiguousWindowIdentity(let processIdentifier):
-			return "Accessibility and Core Graphics windows for process \(processIdentifier) cannot be correlated uniquely."
+		case .windowIdentifierUnavailable(let processIdentifier, let code):
+			return "macOS did not report a window ID for a window of process \(processIdentifier) (\(code))."
 		case .windowUnavailable(let identity):
 			guard let identity else { return "The managed external window is unavailable." }
 			return "External window \(identity.windowID) from process \(identity.processIdentifier) is unavailable."
 		case .windowNotOnCurrentSpace(let identity):
-			return "External window \(identity.windowID) is not uniquely visible on the current Space."
+			return "External window \(identity.windowID) is not on the current Space."
 		case .windowNotStandard:
 			return "Teaser only manages standard application windows."
 		case .windowIsMinimized:
@@ -109,20 +110,14 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 	}
 }
 
-struct ExternalWindowAccessibilityCandidate: Equatable, Sendable {
-	let index: Int
-	let processIdentifier: pid_t
-	let role: String
-	let subrole: String?
-	let accessibilityFrame: CGRect?
-	let isMinimized: Bool
-	let isFullScreen: Bool
-}
-
 struct ExternalWindowCurrentSpaceWindow: Equatable, Sendable {
 	let identity: ExternalWindowIdentity
 	let layer: Int
 	let isOnscreen: Bool
+	/// Only `NSApplication.ActivationPolicy.regular` owners are user applications.
+	/// Accessory and prohibited owners — Stage Manager's `WindowManager`, the
+	/// Dock, menu-bar agents — publish layer-zero windows the user never drags.
+	let ownerIsRegularApplication: Bool
 	let accessibilityFrame: CGRect
 }
 
@@ -133,47 +128,27 @@ func externalWindowAtPoint(
 	windows: [ExternalWindowCurrentSpaceWindow],
 	excludingProcessIdentifiers: Set<pid_t>
 ) -> ExternalWindowIdentity? {
+	// Accessory owners are skipped rather than treated as blockers: their windows
+	// are system chrome such as Stage Manager's strip, never drag candidates.
 	guard let candidate: ExternalWindowCurrentSpaceWindow = windows.first(where: {
-		$0.isOnscreen && $0.layer == 0
+		$0.isOnscreen && $0.layer == 0 && $0.ownerIsRegularApplication
 			&& $0.accessibilityFrame.contains(point)
-	}), !excludingProcessIdentifiers.contains(candidate.identity.processIdentifier) else { return nil }
+	}), !excludingProcessIdentifiers.contains(candidate.identity.processIdentifier)
+	else { return nil }
 	return candidate.identity
 }
 
-func externalWindowCurrentSpaceCorrelations(
-	accessibilityCandidates: [ExternalWindowAccessibilityCandidate],
-	currentSpaceWindows: [ExternalWindowCurrentSpaceWindow],
-	tolerance: CGFloat = 2
-) -> [Int: CGWindowID] {
-	guard tolerance.isFinite, tolerance >= 0 else { return [:] }
-	var byCandidate: [Int: [Int]] = [:]
-	var byWindow: [Int: [Int]] = [:]
-	for (candidateOffset, candidate) in accessibilityCandidates.enumerated() {
-		guard let candidateFrame: CGRect = candidate.accessibilityFrame else { continue }
-		for (windowOffset, window) in currentSpaceWindows.enumerated() {
-			guard candidate.processIdentifier == window.identity.processIdentifier,
-				window.layer == 0,
-				window.isOnscreen,
-				managedExternalWindowFramesAreApproximatelyEqual(
-					candidateFrame,
-					window.accessibilityFrame,
-					tolerance: tolerance
-				)
-			else { continue }
-			byCandidate[candidateOffset, default: []].append(windowOffset)
-			byWindow[windowOffset, default: []].append(candidateOffset)
-		}
-	}
-	var result: [Int: CGWindowID] = [:]
-	for (candidateOffset, windowOffsets) in byCandidate {
-		guard windowOffsets.count == 1,
-			let windowOffset: Int = windowOffsets.first,
-			byWindow[windowOffset]?.count == 1
-		else { continue }
-		result[accessibilityCandidates[candidateOffset].index] =
-			currentSpaceWindows[windowOffset].identity.windowID
-	}
-	return result
+/// The window server's own window ID is exact, so an Accessibility element is
+/// selected by matching it. A duplicate or missing ID means the element list
+/// cannot be trusted for this identity, and selection fails closed.
+func externalWindowUniqueIndex(
+	ofWindowID windowID: CGWindowID,
+	in identifiers: [CGWindowID?]
+) -> Int? {
+	guard windowID != kCGNullWindowID else { return nil }
+	let matches: [Int] = identifiers.indices.filter { identifiers[$0] == windowID }
+	guard matches.count == 1 else { return nil }
+	return matches.first
 }
 
 func managedExternalWindowAccessibilityFrame(
@@ -454,20 +429,16 @@ private enum ExternalWindowSystem {
 		let applicationElement = AXUIElementCreateApplication(identity.processIdentifier)
 		AXUIElementSetMessagingTimeout(applicationElement, 0.75)
 		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
-		let correlations: [Int: CGWindowID] = correlate(
-			windows: applicationWindows,
-			processIdentifier: identity.processIdentifier,
-			currentSpaceWindows: currentSpaceWindows(
-				processIdentifier: identity.processIdentifier
-			)
-		)
-		let matches: [Int] = correlations.compactMap { index, windowID in
-			windowID == identity.windowID ? index : nil
+		let identifiers: [CGWindowID?] = applicationWindows.map {
+			try? windowID(of: $0, processIdentifier: identity.processIdentifier)
 		}
-		guard matches.count == 1,
-			let index = matches.first,
-			applicationWindows.indices.contains(index)
-		else {
+		guard let index: Int = externalWindowUniqueIndex(
+			ofWindowID: identity.windowID,
+			in: identifiers
+		) else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
+		}
+		guard isOnCurrentSpace(identity) else {
 			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
 		}
 		return try makeSelection(
@@ -479,34 +450,21 @@ private enum ExternalWindowSystem {
 
 	static func validateCurrentSpace(
 		identity: ExternalWindowIdentity,
-		windowElement: AXUIElement,
-		applicationElement: AXUIElement
+		windowElement: AXUIElement
 	) throws {
 		try validateElement(identity: identity, windowElement: windowElement)
-		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
-		guard let index = applicationWindows.firstIndex(where: {
-			CFEqual($0, windowElement)
-		}) else {
-			throw ManagedExternalWindowError.windowUnavailable(identity)
-		}
-		let correlations: [Int: CGWindowID] = correlate(
-			windows: applicationWindows,
-			processIdentifier: identity.processIdentifier,
-			currentSpaceWindows: currentSpaceWindows(
-				processIdentifier: identity.processIdentifier
-			)
-		)
-		guard correlations[index] == identity.windowID else {
+		guard isOnCurrentSpace(identity) else {
 			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
 		}
 	}
 
 	static func validateRegardlessOfSpace(
 		identity: ExternalWindowIdentity,
-		windowElement: AXUIElement,
-		applicationElement: AXUIElement
+		windowElement: AXUIElement
 	) throws {
 		try validateElement(identity: identity, windowElement: windowElement)
+		// A window on another Space keeps both its ID and its owning process in
+		// the window server's list, so identity stays verifiable off-Space.
 		let ids: [NSNumber] = [NSNumber(value: identity.windowID)]
 		guard let descriptions = CGWindowListCreateDescriptionFromArray(ids as CFArray)
 			as? [[String: Any]],
@@ -515,26 +473,16 @@ private enum ExternalWindowSystem {
 			let ownerPID = description[kCGWindowOwnerPID as String] as? NSNumber,
 			ownerPID.int32Value == identity.processIdentifier,
 			let layer = description[kCGWindowLayer as String] as? NSNumber,
-			layer.intValue == 0,
-			let bounds = description[kCGWindowBounds as String] as? NSDictionary,
-			let cgFrame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+			layer.intValue == 0
 		else {
 			throw ManagedExternalWindowError.windowUnavailable(identity)
 		}
-		let applicationWindows: [AXUIElement] = try windows(of: applicationElement)
-		let matches: [AXUIElement] = applicationWindows.filter { element in
-			guard let frame = try? accessibilityFrame(of: element) else { return false }
-			return managedExternalWindowFramesAreApproximatelyEqual(
-				frame,
-				cgFrame,
-				tolerance: 2
-			)
-		}
-		guard matches.count == 1,
-			let match = matches.first,
-			CFEqual(match, windowElement)
-		else {
-			throw ManagedExternalWindowError.windowUnavailable(identity)
+	}
+
+	static func isOnCurrentSpace(_ identity: ExternalWindowIdentity) -> Bool {
+		currentSpaceWindows(processIdentifier: identity.processIdentifier).contains {
+			$0.identity == identity && $0.layer == 0 && $0.isOnscreen
+				&& $0.ownerIsRegularApplication
 		}
 	}
 
@@ -711,32 +659,22 @@ private enum ExternalWindowSystem {
 		return selection
 	}
 
-	private static func correlate(
-		windows: [AXUIElement],
-		processIdentifier: pid_t,
-		currentSpaceWindows: [ExternalWindowCurrentSpaceWindow]
-	) -> [Int: CGWindowID] {
-		let candidates = windows.enumerated().map { index, window in
-			ExternalWindowAccessibilityCandidate(
-				index: index,
+	/// The exact identity of an Accessibility window, straight from the window
+	/// server. Teaser fails closed when macOS refuses it; it never falls back to
+	/// guessing a window from its frame.
+	static func windowID(
+		of element: AXUIElement,
+		processIdentifier: pid_t
+	) throws -> CGWindowID {
+		var windowID: CGWindowID = kCGNullWindowID
+		let error: AXError = _AXUIElementGetWindow(element, &windowID)
+		guard error == .success, windowID != kCGNullWindowID else {
+			throw ManagedExternalWindowError.windowIdentifierUnavailable(
 				processIdentifier: processIdentifier,
-				role: stringAttribute(kAXRoleAttribute as CFString, of: window) ?? "",
-				subrole: stringAttribute(kAXSubroleAttribute as CFString, of: window),
-				accessibilityFrame: try? accessibilityFrame(of: window),
-				isMinimized: (try? boolAttribute(
-					kAXMinimizedAttribute as CFString,
-					of: window
-				)) ?? false,
-				isFullScreen: (try? boolAttribute(
-					"AXFullScreen" as CFString,
-					of: window
-				)) ?? false
+				code: error
 			)
 		}
-		return externalWindowCurrentSpaceCorrelations(
-			accessibilityCandidates: candidates,
-			currentSpaceWindows: currentSpaceWindows
-		)
+		return windowID
 	}
 
 	static func currentSpaceWindows(
@@ -746,6 +684,7 @@ private enum ExternalWindowSystem {
 			[.optionOnScreenOnly, .excludeDesktopElements],
 			kCGNullWindowID
 		) as? [[String: Any]] else { return [] }
+		var regularOwners: [pid_t: Bool] = [:]
 		return info.compactMap { entry in
 			guard let ownerPID = entry[kCGWindowOwnerPID as String] as? NSNumber,
 				(processIdentifier == nil || ownerPID.int32Value == processIdentifier),
@@ -755,13 +694,23 @@ private enum ExternalWindowSystem {
 				let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
 				let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
 			else { return nil }
+			let owner: pid_t = ownerPID.int32Value
+			let isRegular: Bool
+			if let cached: Bool = regularOwners[owner] {
+				isRegular = cached
+			} else {
+				isRegular = NSRunningApplication(processIdentifier: owner)?
+					.activationPolicy == .regular
+				regularOwners[owner] = isRegular
+			}
 			return .init(
 				identity: .init(
-					processIdentifier: ownerPID.int32Value,
+					processIdentifier: owner,
 					windowID: CGWindowID(windowID.uint32Value)
 				),
 				layer: layer.intValue,
 				isOnscreen: onscreen.boolValue,
+				ownerIsRegularApplication: isRegular,
 				accessibilityFrame: frame
 			)
 		}
@@ -775,7 +724,11 @@ private enum ExternalWindowSystem {
 		guard AXUIElementGetPid(windowElement, &processIdentifier) == .success,
 			processIdentifier == identity.processIdentifier,
 			stringAttribute(kAXRoleAttribute as CFString, of: windowElement)
-				== kAXWindowRole
+				== kAXWindowRole,
+			(try? windowID(
+				of: windowElement,
+				processIdentifier: identity.processIdentifier
+			)) == identity.windowID
 		else { throw ManagedExternalWindowError.windowUnavailable(identity) }
 	}
 
@@ -996,7 +949,15 @@ final class ManagedExternalWindow {
 
 	static func visibleWindowIdentities(processIdentifier: pid_t) -> [ExternalWindowIdentity] {
 		ExternalWindowSystem.currentSpaceWindows(processIdentifier: processIdentifier)
-			.filter { $0.layer == 0 && $0.isOnscreen }.map(\.identity)
+			.filter { $0.layer == 0 && $0.isOnscreen && $0.ownerIsRegularApplication }
+			.map(\.identity)
+	}
+
+	/// Whether macOS runs this process as an ordinary application. Accessory and
+	/// prohibited processes own no window a user can drag into a Panel.
+	static func isRegularApplication(processIdentifier: pid_t) -> Bool {
+		NSRunningApplication(processIdentifier: processIdentifier)?
+			.activationPolicy == .regular
 	}
 
 	@discardableResult
@@ -1007,8 +968,7 @@ final class ManagedExternalWindow {
 		guard binding == nil else { throw ManagedExternalWindowError.alreadyBound }
 		try ExternalWindowSystem.validateCurrentSpace(
 			identity: selection.identity,
-			windowElement: selection.windowElement,
-			applicationElement: selection.applicationElement
+			windowElement: selection.windowElement
 		)
 		try ExternalWindowSystem.requireManageable(selection)
 		let newObservation: Observation = try makeObservation(selection: selection)
@@ -1180,8 +1140,7 @@ final class ManagedExternalWindow {
 		} else {
 			try ExternalWindowSystem.validateRegardlessOfSpace(
 				identity: binding.selection.identity,
-				windowElement: binding.selection.windowElement,
-				applicationElement: binding.selection.applicationElement
+				windowElement: binding.selection.windowElement
 			)
 		}
 		let current: Bool = try ExternalWindowSystem.boolAttribute(
@@ -1232,8 +1191,7 @@ final class ManagedExternalWindow {
 		do {
 			try ExternalWindowSystem.validateRegardlessOfSpace(
 				identity: binding.selection.identity,
-				windowElement: binding.selection.windowElement,
-				applicationElement: binding.selection.applicationElement
+				windowElement: binding.selection.windowElement
 			)
 			if let appliedFrame = binding.lastAppliedAccessibilityFrame {
 				let currentFrame = try ExternalWindowSystem.accessibilityFrame(
@@ -1319,8 +1277,7 @@ final class ManagedExternalWindow {
 	private func requireCurrentSpace(_ binding: Binding) throws {
 		try ExternalWindowSystem.validateCurrentSpace(
 			identity: binding.selection.identity,
-			windowElement: binding.selection.windowElement,
-			applicationElement: binding.selection.applicationElement
+			windowElement: binding.selection.windowElement
 		)
 	}
 
@@ -1482,8 +1439,7 @@ final class SystemExternalWindowService: ExternalWindowService {
 		let selection: ExternalWindowSelection = try Self.selection(handle)
 		try ExternalWindowSystem.validateCurrentSpace(
 			identity: selection.identity,
-			windowElement: selection.windowElement,
-			applicationElement: selection.applicationElement
+			windowElement: selection.windowElement
 		)
 	}
 
