@@ -236,9 +236,12 @@ compensation for every affected window, reports incomplete rollback, and retains
 failed restoration leases. This is best-effort orchestration, not an OS-atomic
 multi-window transaction.
 
-Only standard, unminimized, movable, resizable windows on the current Space are
-eligible. Public macOS APIs cannot send an arbitrary provider window to a selected
-Space, so Teaser fails closed across that boundary. Multiple visible displays are
+Only standard, unminimized, movable, resizable windows are eligible, whether or
+not they are visible at that moment. Stage Manager and other Spaces hide a window
+without destroying it: its window-server identity, its Accessibility element, and
+its geometry all remain reachable, so hiding is a reported state rather than a
+rejection. Teaser still never sends a provider window to a Space of its choosing,
+because no public macOS API does that, and it fails closed across that boundary. Multiple visible displays are
 supported. Display topology changes automatically redistribute whole Workspaces
 and rebuild display trees deterministically; they do not preserve old display
 split IDs or ratios. A Workspace never straddles displays.
@@ -551,7 +554,7 @@ SLO must be recorded with measurements and rationale before later milestones beg
 | Layout | Per-display WorkspaceTree containing one PanelTree per Workspace |
 | Focus | Virtual Focus is independent from explicit macOS Input Focus |
 | Terminal | Full pinned `libghostty`, isolated behind one adapter |
-| External apps | Exact current-Space window leases through AX and CG APIs; one private declaration supplies the window ID (§4.3) |
+| External apps | Exact window leases through AX and CG APIs, whether or not the window is visible; one private declaration supplies the window ID (§4.3) |
 | Editor | Neovim in terminal or an adopted provider-owned editor window |
 | Agent | Native CLI for completeness; ACP for structured supported capabilities |
 | Input | Reusable native `NSTextView`-based input surface |

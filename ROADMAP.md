@@ -27,9 +27,10 @@ Deliverables:
   bracketed paste, mouse input, resize, flow control, and capture repair;
 - a two-level constrained slicing layout in which each display contains connected
   rectangular Workspaces and each Workspace contains unequal Panels;
-- generic current-Space window adoption through Accessibility and Core Graphics,
-  with window-server identity, drag-driven selection, transactional placement,
-  Undo, and safe same-window release.
+- generic window adoption through Accessibility and Core Graphics, with
+  window-server identity, drag-driven selection, transactional placement, Undo,
+  and safe same-window release; a window hidden by Stage Manager or sitting on
+  another Space stays adoptable, because its identity survives being hidden.
 
 Exit gates:
 

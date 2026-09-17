@@ -126,7 +126,10 @@ final class FakeWindow {
 	let title: String
 	var appKitScreenFrame: CGRect
 	var exists: Bool = true
-	var isOnCurrentSpace: Bool = true
+	/// Whether the window is visible on the current Space right now. It gates the
+	/// drag hit test only: a window hidden by Stage Manager cannot be dragged,
+	/// but it remains adoptable and movable once Teaser holds its identity.
+	var isVisibleOnCurrentSpace: Bool = true
 	/// The window refuses every geometry write; a read back after the write
 	/// still reports the old frame.
 	var rejectsFrames: Bool = false
@@ -238,7 +241,7 @@ final class FakeExternalWindowService: ExternalWindowService {
 	) throws -> any ExternalWindowHandle {
 		try requirePermission()
 		guard let window: FakeWindow = windows.first(where: {
-			$0.exists && $0.isOnCurrentSpace && $0.appKitScreenFrame.contains(point)
+			$0.exists && $0.isVisibleOnCurrentSpace && $0.appKitScreenFrame.contains(point)
 		}), !excludingProcessIdentifiers.contains(window.identity.processIdentifier) else {
 			throw ManagedExternalWindowError.windowAtPointUnavailable
 		}
@@ -261,11 +264,10 @@ final class FakeExternalWindowService: ExternalWindowService {
 		_ = try requireElement(handle)
 	}
 
-	func validateCurrentSpace(of handle: any ExternalWindowHandle) throws {
-		let window: FakeWindow = try requireElement(handle)
-		guard window.isOnCurrentSpace else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace(handle.identity)
-		}
+	func validateWindowIsLive(of handle: any ExternalWindowHandle) throws {
+		// Mirrors the real check: the window server must still list the window.
+		// Being hidden by Stage Manager or on another Space is not a failure.
+		_ = try requireElement(handle)
 	}
 
 	func snapshot(
@@ -373,15 +375,13 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 	@discardableResult
 	func bind(identity: ExternalWindowIdentity) throws -> ManagedExternalWindowSnapshot {
 		guard self.identity == nil else { throw ManagedExternalWindowError.alreadyBound }
-		// The real bind re-checks permission, current Space, and manageability
-		// before it takes the window, so a lease is never established blind.
+		// The real bind re-checks permission, that the window server still lists
+		// the window, and manageability before it takes the window, so a lease is
+		// never established blind.
 		guard service.permissionStatus(prompt: false) == .authorized else {
 			throw ManagedExternalWindowError.accessibilityPermissionRequired
 		}
 		let window: FakeWindow = try service.window(identity)
-		guard window.isOnCurrentSpace else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
-		}
 		if let failure: ManagedExternalWindowError = window.manageabilityFailure {
 			throw failure
 		}
@@ -399,7 +399,7 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 	@discardableResult
 	func apply(appKitScreenFrame frame: CGRect) throws -> ManagedExternalWindowSnapshot {
 		let window: FakeWindow = try boundWindow()
-		try requireCurrentSpace(window)
+		try requireLiveWindow(window)
 		guard window.appKitScreenFrame != frame else {
 			lastAppliedFrame = frame
 			return window.snapshot
@@ -427,7 +427,7 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 	func applyCoalesced(appKitScreenFrame frame: CGRect) {
 		do {
 			let window: FakeWindow = try boundWindow()
-			try requireCurrentSpace(window)
+			try requireLiveWindow(window)
 			guard window.appKitScreenFrame != frame else { return }
 			guard window.accepting(frame) == frame else {
 				throw ManagedExternalWindowError.windowCannotFit(
@@ -475,13 +475,13 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 
 	func raise() throws {
 		let window: FakeWindow = try boundWindow()
-		try requireCurrentSpace(window)
+		try requireLiveWindow(window)
 		service.log.record(.raise(window.identity))
 	}
 
 	func focusAndRaise() throws {
 		let window: FakeWindow = try boundWindow()
-		try requireCurrentSpace(window)
+		try requireLiveWindow(window)
 		service.log.record(.focusAndRaise(window.identity))
 	}
 
@@ -534,9 +534,9 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 		lastAppliedFrame = nil
 	}
 
-	private func requireCurrentSpace(_ window: FakeWindow) throws {
-		guard window.isOnCurrentSpace else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace(window.identity)
+	private func requireLiveWindow(_ window: FakeWindow) throws {
+		guard window.exists else {
+			throw ManagedExternalWindowError.windowUnavailable(window.identity)
 		}
 	}
 

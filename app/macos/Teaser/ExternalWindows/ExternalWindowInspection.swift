@@ -78,12 +78,10 @@ enum ExternalWindowInspection {
 				guard window.layer == 0 else {
 					return rejected("Window layer \(window.layer) is not the normal application window layer.")
 				}
-				guard window.isOnscreen else {
-					return rejected("""
-						macOS reports this window off-screen. It is on another Space, minimized, or \
-						held off-stage by Stage Manager; bring it to the current Space and retry.
-						""")
-				}
+				// An off-screen window is still attached, not rejected: Stage Manager
+				// and other Spaces hide windows without destroying them, and such a
+				// window still resolves through the application's focused or main
+				// window element and still accepts geometry writes.
 				do {
 					let selection: ExternalWindowSelection = try ManagedExternalWindow.selectWindow(identity: identity)
 					return .init(windowID: identity.windowID, selectable: true, layer: window.layer,

@@ -83,7 +83,10 @@ protocol ExternalWindowService: AnyObject {
 	) throws -> any ExternalWindowHandle
 	func selectWindow(identity: ExternalWindowIdentity) throws -> any ExternalWindowHandle
 	func validateIdentity(of handle: any ExternalWindowHandle) throws
-	func validateCurrentSpace(of handle: any ExternalWindowHandle) throws
+	/// Fails only when the window server no longer lists the window. A window
+	/// hidden by Stage Manager or sitting on another Space is still live, still
+	/// identifiable, and still movable.
+	func validateWindowIsLive(of handle: any ExternalWindowHandle) throws
 	func snapshot(of handle: any ExternalWindowHandle) throws -> ManagedExternalWindowSnapshot
 	func bundleIdentifier(forProcessIdentifier processIdentifier: pid_t) -> String?
 	func makeLease(

@@ -28,7 +28,7 @@ second renderer.
 - **REQ-005**: Produce shell blocks from OSC 133/OSC 7 and agent blocks from ACP while storing bounded completed payloads in SQLite.
 - **REQ-006**: Support `teaser agent claude` and `teaser agent codex` without shadowing or modifying the vendor `claude` and `codex` commands.
 - **REQ-007**: Support local tmux control mode, system SSH, SSH-carried tmux control mode, and capability-degraded opaque Mosh sessions.
-- **REQ-008**: Let the user drag any eligible current-Space application window into a Panel and manage its geometry through Accessibility and Core Graphics APIs; never reparent, capture, or synthesize input for it. The only private API is the window-identity declaration `_AXUIElementGetWindow` in `docs/architecture.md` section 4.3, which is read-only and fails closed.
+- **REQ-008**: Let the user drag any eligible application window into a Panel and manage its geometry through Accessibility and Core Graphics APIs, including a window hidden by Stage Manager or resident on another Space, whose identity survives being hidden; never reparent, capture, or synthesize input for it. The only private API is the window-identity declaration `_AXUIElementGetWindow` in `docs/architecture.md` section 4.3, which is read-only and fails closed.
 - **REQ-009**: Default search to the virtually focused Panel and require a distinct action for current-Workspace search.
 - **REQ-010**: Ship v1 without a dynamic plugin loader, public surface SDK, stable internal ABI, or third-party extension promise.
 - **REQ-011**: Preserve native Claude/Codex CLI mode in TerminalSurface because ACP adapters may expose fewer capabilities than the vendor CLIs.
@@ -73,7 +73,7 @@ second renderer.
 | TASK-006 | Implement the UniFFI boundary in `crates/teaser-core/src/ffi.rs` and `app/macos/Teaser/Core/TeaserCoreBridge.swift` with `TeaserCore`, `WorkspaceSnapshot`, `CoreAction`, and `CoreEvent`; add a guard test that no terminal byte-buffer type is exported. | | |
 | TASK-007 | In `crates/teaser-acp/tests/smoke.rs`, start pinned Claude and Codex ACP adapters, negotiate `protocolVersion` and capabilities, initialize one session, submit one prompt, collect updates, and terminate cleanly; compare advertised features with native CLI mode and record exact adapter revisions/notices. | | |
 | TASK-008 | In `crates/teaser-tmux`, parse one local tmux control session and connect one pane through `crates/teaser-bridge` to the same `teaserd` Session data plane used by a TerminalSurface; test arbitrary bytes, Unicode, IME-produced input, bracketed paste, mouse protocol, resize, `%pause/%continue`, `capture-pane` repair, malformed messages, and flow control; record the initial 20% bridge target. | | |
-| TASK-009 | Implement the `ManagedExternalWindow` foundation in `app/macos/Teaser/ExternalWindows`; prove exact AX/Core Graphics identity, current-Space validation, move/resize observation, transactional frame application, and best-effort same-window restoration. Zed may be the fixture, but title, path, and application-specific lookup are not the product interaction. | | |
+| TASK-009 | Implement the `ManagedExternalWindow` foundation in `app/macos/Teaser/ExternalWindows`; prove exact AX/Core Graphics identity, window-liveness validation, move/resize observation, transactional frame application, and best-effort same-window restoration. Zed may be the fixture, but title, path, and application-specific lookup are not the product interaction. | | |
 
 CP-M0.6 now proves a real daemon-owned PTY, exclusive attachment leases, bounded
 binary frames, monotonic replay offsets, replay-gap reporting, detach/reattach with
@@ -136,7 +136,7 @@ clipboard, selection, 120 Hz, signed bundle, and production Session creation.
 | TASK-012 | Implement schema-versioned Workspace persistence with user-only permissions. Store display affinity, Workspace/Panel trees, requested ratios, Virtual Focus, kinds and overrides, Notes, Project/Checkout bindings, Teaser content descriptors, and backend restoration state. During the Swift-only desktop-stage slice, one atomic typed snapshot under `~/Library/Application Support/Teaser` owns this state; cut directly to the Rust Workspace store when TASK-006 lands, with no dual write. Persist only hints for external providers and require re-drag after restart. Reattach a direct PTY only while its exact owning `teaserd` Session remains live. | | |
 | TASK-013 | Implement `HistoryPolicy` with maximum database bytes, retention duration, persistence enabled/disabled, clear-on-exit, and explicit clear-now action; enforce bounds transactionally and expose the controls in native settings. | | |
 | TASK-014 | Implement `ImageViewController` as optional Teaser-owned Panel content under `app/macos/Teaser/Images` using `QLPreviewView` with Image I/O metadata fallback; route `teaser open <PATH>` to image preview for supported media and to a terminal editor command for text. The showcase may instead adopt a real Preview window as a File Panel. | | |
-| TASK-015 | Promote the AX spike into generic drag-to-adopt window orchestration. Correlate global mouse movement with one exact standard, movable, resizable current-Space window owned by an ordinary application and identified by its window-server window ID; expose targets only during a qualified drag; adopt an empty target, edge-split an occupied target, move an existing lease, or detach outside the layout. Apply every layout atomically with frame readback, compensation rollback, single-step Undo, close/move observation, explicit focus handoff, and safe same-window release. Fail closed on ambiguity or permission denial and never locate by title, path, or provider-specific polling. | | |
+| TASK-015 | Promote the AX spike into generic drag-to-adopt window orchestration. Correlate global mouse movement with one exact standard, movable, resizable window owned by an ordinary application and identified by its window-server window ID; expose targets only during a qualified drag; adopt an empty target, edge-split an occupied target, move an existing lease, or detach outside the layout. Apply every layout atomically with frame readback, compensation rollback, single-step Undo, close/move observation, explicit focus handoff, and safe same-window release. Fail closed on ambiguity or permission denial and never locate by title, path, or provider-specific polling. | | |
 | TASK-016 | Implement the versioned CLI protocol in `crates/teaser-core/src/ipc` and `crates/teaser-cli`; support `teaser`, `teaser shell [--cwd PATH]`, and `teaser open <PATH>`; validate paths, socket ownership, stale sockets, bounded app-launch retry, and structured errors. | | |
 
 The adoption chain has one replaceable boundary and one business entry point.
@@ -166,9 +166,9 @@ assertions about a sequence rather than about counters that happen to agree.
 The substituted boundary mirrors the Accessibility implementation rather than
 being merely convenient: post-selection reads fail as an unavailable window
 rather than as a permission error, a handle holds the fixture object the way
-production holds an `AXUIElement`, binding re-checks permission, current Space,
-and manageability, writes require the current Space, and a release that cannot
-validate its window returns failure and keeps the lease. A test that passes
+production holds an `AXUIElement`, binding re-checks permission, window liveness,
+and manageability, writes require a window the window server still lists, and a
+release that cannot validate its window returns failure and keeps the lease. A test that passes
 because the substitute was lenient is not evidence about the product.
 
 Covered contracts, each naming the regressions that defend it:
@@ -202,10 +202,11 @@ Covered contracts, each naming the regressions that defend it:
   Workspaces follows its focus; drops move Virtual Focus to where the window
   landed; drop outside every Panel detaches without restoring; detached window
   is readopted without rebinding; undo releases the adopted window.
-- **Window closed, identity lost, permission lost, wrong Space,
+- **Window closed, identity lost, permission lost, hidden,
   unmanageable.** Window lost during drag cancels and diagnoses; substitute
   window at the same point is never adopted; permission lost during drag stops
-  adoption; window off the current Space at release is not adopted; closed
+  adoption; a window hidden from the current Space at release is still adopted;
+  a window that disappears at release is not adopted; closed
   provider window frees its Panel; unmanageable windows are never adopted;
   cancelled drag ignores its late release; rejected candidate is diagnosed once
   the drag is real; rejection is not reported after its press ended; denied
@@ -519,7 +520,7 @@ diagnostic and growth weights are stored for later optimization.
 - **TEST-004**: ACP tests cover protocol negotiation, capability gaps, Claude/Codex initialization, updates, tools, permissions, plans, resources, cancellation, auth failure, malformed messages, adapter crash, and restart limits.
 - **TEST-005**: tmux tests cover parser fuzzing, arbitrary bytes, Unicode, bracketed paste, mouse protocol, pane mapping, escaped output, pause/continue, backpressure, resize, capture repair, reconnect, and degraded semantics.
 - **TEST-006**: Mosh tests confirm network roaming while the direct PTY lives, termination on `teaserd` exit, ordinary terminal use, and absence of structured tmux/block capabilities.
-- **TEST-007**: Accessibility tests cover permission denied, exact AX/Core Graphics identity, window-versus-content drag qualification, four edge targets, empty/occupied targets, move/swap/detach, frame readback and rollback, Undo, Virtual/Input Focus separation, same-application multiple windows, close, multiple displays, current-Space behavior, identity loss, and safe frame restoration.
+- **TEST-007**: Accessibility tests cover permission denied, exact AX/Core Graphics identity, window-versus-content drag qualification, four edge targets, empty/occupied targets, move/swap/detach, frame readback and rollback, Undo, Virtual/Input Focus separation, same-application multiple windows, close, multiple displays, hidden and vanished windows, identity loss, and safe frame restoration.
 - **TEST-012**: Adoption-chain tests run headless in the default gate: they substitute pointer events, window snapshots, and time at `ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`, `ExternalWindowPointerSource`, and `ExternalWindowClock`, drive the same `DesktopStageOrchestrator` and `WindowDragObserver` the application drives, and assert drop highlights, Panel bindings, operation ordering, frame readback, diagnostics, and restoration records without a global event monitor, a visible window, a permission request, or any movement of a user's window. The covered contracts and the mutations that prove the assertions bite are recorded in the adoption regression matrix in Phase 1.
 - **TEST-008**: IPC/security tests cover ownership, mode `0600`, stale sockets, oversized frames, invalid paths, malformed versions, process impersonation, and redacted logs.
 - **TEST-009**: Persistence tests cover schema migration, atomic-write or WAL recovery, interrupted writes, permissions, display affinity, requested ratios, kinds, Notes, external provider hints without live identity, safe re-drag after restart, direct-PTY placeholders, tmux identity, block consistency, and corrupted-state quarantine.
@@ -531,7 +532,7 @@ diagnostic and growth weights are stored for later optimization.
 - **RISK-001**: The full Ghostty embedding API is explicitly unstable. Mitigation: exact pin, one adapter, narrow patch, compile gate, comparative tests, and no automatic updates.
 - **RISK-002**: The proposed semantic-range export may not remain narrow. Mitigation: M0 stops if it touches terminal model, reflow, or renderer rather than hiding the cost.
 - **RISK-003**: every attached Session adds a local binary socket hop, while tmux adds another bridge and cannot reconstruct missed command lifecycles. Mitigation: benchmark both paths, apply bounded backpressure, and mark repaired intervals semantic-degraded.
-- **RISK-004**: AX external-window control depends on permission, transient identity, provider frame constraints, and current-Space visibility. Mitigation: one-time permission education, drag-driven exact selection, identity revalidation, transactional frame readback and rollback, provider-hint-only persistence, explicit re-drag, and best-effort same-window restoration.
+- **RISK-004**: AX external-window control depends on permission, transient identity, provider frame constraints, and windows hidden by Stage Manager or another Space. Mitigation: one-time permission education, drag-driven exact selection, identity revalidation, transactional frame readback and rollback, provider-hint-only persistence, explicit re-drag, and best-effort same-window restoration.
 - **RISK-005**: ACP adapters may expose fewer or different capabilities than native vendor CLIs. Mitigation: negotiate capabilities, pin revisions, retain native CLI mode, and never claim equivalence.
 - **RISK-006**: SQLite history may capture secrets. Mitigation: mode `0600`, bounded payloads, configurable retention/capacity, disable/clear controls, and redacted logs.
 - **RISK-007**: AGPL does not force derivative products to display the Teaser product name. Mitigation: preserve source/legal-notice obligations, ship NOTICE, and use a separate non-confusing trademark policy.

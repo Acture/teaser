@@ -51,7 +51,6 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 	case windowIdentifierUnavailable(processIdentifier: pid_t, code: AXError)
 	case windowUnavailable(ExternalWindowIdentity?)
 	case windowElementNotFound(ExternalWindowIdentity)
-	case windowNotOnCurrentSpace(ExternalWindowIdentity)
 	case windowNotStandard
 	case windowIsMinimized
 	case windowIsFullScreen
@@ -91,8 +90,6 @@ enum ManagedExternalWindowError: Error, Equatable, LocalizedError, Sendable {
 				with ID \(identity.windowID). Teaser manages a provider's own standard \
 				windows, not system surfaces or windows an application does not publish.
 				"""
-		case .windowNotOnCurrentSpace(let identity):
-			return "External window \(identity.windowID) is not on the current Space."
 		case .windowNotStandard:
 			return "Teaser only manages standard application windows."
 		case .windowIsMinimized:
@@ -439,29 +436,36 @@ private enum ExternalWindowSystem {
 		let identifiers: [CGWindowID?] = applicationWindows.map {
 			try? windowID(of: $0, processIdentifier: identity.processIdentifier)
 		}
-		guard let index: Int = externalWindowUniqueIndex(
+		let windowElement: AXUIElement
+		if let index: Int = externalWindowUniqueIndex(
 			ofWindowID: identity.windowID,
 			in: identifiers
-		) else {
+		) {
+			windowElement = applicationWindows[index]
+		} else if let fallback: AXUIElement = keyWindowElements(of: applicationElement).first(where: {
+			(try? windowID(of: $0, processIdentifier: identity.processIdentifier)) == identity.windowID
+		}) {
+			windowElement = fallback
+		} else {
 			throw ManagedExternalWindowError.windowElementNotFound(identity)
 		}
-		guard isOnCurrentSpace(identity) else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
+		guard isKnownToWindowServer(identity) else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
 		}
 		return try makeSelection(
 			applicationElement: applicationElement,
-			windowElement: applicationWindows[index],
+			windowElement: windowElement,
 			identity: identity
 		)
 	}
 
-	static func validateCurrentSpace(
+	static func validateWindowIsLive(
 		identity: ExternalWindowIdentity,
 		windowElement: AXUIElement
 	) throws {
 		try validateElement(identity: identity, windowElement: windowElement)
-		guard isOnCurrentSpace(identity) else {
-			throw ManagedExternalWindowError.windowNotOnCurrentSpace(identity)
+		guard isKnownToWindowServer(identity) else {
+			throw ManagedExternalWindowError.windowUnavailable(identity)
 		}
 	}
 
@@ -486,10 +490,29 @@ private enum ExternalWindowSystem {
 		}
 	}
 
-	static func isOnCurrentSpace(_ identity: ExternalWindowIdentity) -> Bool {
-		currentSpaceWindows(processIdentifier: identity.processIdentifier).contains {
-			$0.identity == identity && $0.layer == 0 && $0.isOnscreen
-				&& $0.ownerIsRegularApplication
+	/// Adoption requires a window the window server still attributes to this
+	/// process at the ordinary window layer — not one that happens to be visible
+	/// right now. Stage Manager and other Spaces hide windows without destroying
+	/// them, and such a window remains movable through Accessibility.
+	static func isKnownToWindowServer(_ identity: ExternalWindowIdentity) -> Bool {
+		allWindows(processIdentifier: identity.processIdentifier).contains {
+			$0.identity == identity && $0.layer == 0 && $0.ownerIsRegularApplication
+		}
+	}
+
+	/// Stage Manager empties an off-stage application's `AXWindows` list, yet its
+	/// focused and main window elements still resolve, still report the real
+	/// window ID, and still accept position and size writes. Identity is matched
+	/// exactly against that ID, so nothing here guesses a window.
+	private static func keyWindowElements(of application: AXUIElement) -> [AXUIElement] {
+		[kAXFocusedWindowAttribute as CFString, "AXMainWindow" as CFString].compactMap {
+			attribute in
+			var raw: CFTypeRef?
+			guard AXUIElementCopyAttributeValue(application, attribute, &raw) == .success,
+				let value = raw,
+				CFGetTypeID(value) == AXUIElementGetTypeID()
+			else { return nil }
+			return (value as! AXUIElement)
 		}
 	}
 
@@ -977,12 +1000,6 @@ final class ManagedExternalWindow {
 		try ExternalWindowSystem.selection(identity: identity)
 	}
 
-	static func visibleWindowIdentities(processIdentifier: pid_t) -> [ExternalWindowIdentity] {
-		ExternalWindowSystem.currentSpaceWindows(processIdentifier: processIdentifier)
-			.filter { $0.layer == 0 && $0.isOnscreen && $0.ownerIsRegularApplication }
-			.map(\.identity)
-	}
-
 	/// Every window the window server attributes to a process, on-screen or not.
 	/// Diagnostics use it to explain an empty selection list.
 	static func inspectableWindows(
@@ -1004,7 +1021,7 @@ final class ManagedExternalWindow {
 			throw ManagedExternalWindowError.accessibilityPermissionRequired
 		}
 		guard binding == nil else { throw ManagedExternalWindowError.alreadyBound }
-		try ExternalWindowSystem.validateCurrentSpace(
+		try ExternalWindowSystem.validateWindowIsLive(
 			identity: selection.identity,
 			windowElement: selection.windowElement
 		)
@@ -1049,7 +1066,7 @@ final class ManagedExternalWindow {
 		guard var binding else {
 			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
-		try requireCurrentSpace(binding)
+		try requireLiveWindow(binding)
 		let targetFrame: CGRect = try ExternalWindowSystem.accessibilityFrame(
 			fromAppKit: requestedFrame
 		)
@@ -1134,7 +1151,7 @@ final class ManagedExternalWindow {
 		guard let binding else {
 			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
-		try requireCurrentSpace(binding)
+		try requireLiveWindow(binding)
 		let error: AXError = AXUIElementPerformAction(
 			binding.selection.windowElement,
 			kAXRaiseAction as CFString
@@ -1156,7 +1173,7 @@ final class ManagedExternalWindow {
 			of: binding.selection.windowElement
 		)
 		if isMinimized { try setMinimized(false) }
-		try requireCurrentSpace(binding)
+		try requireLiveWindow(binding)
 		_ = NSRunningApplication(
 			processIdentifier: binding.selection.identity.processIdentifier
 		)?.activate(options: [])
@@ -1174,7 +1191,7 @@ final class ManagedExternalWindow {
 			throw ManagedExternalWindowError.windowUnavailable(nil)
 		}
 		if minimized {
-			try requireCurrentSpace(binding)
+			try requireLiveWindow(binding)
 		} else {
 			try ExternalWindowSystem.validateRegardlessOfSpace(
 				identity: binding.selection.identity,
@@ -1312,8 +1329,8 @@ final class ManagedExternalWindow {
 		}
 	}
 
-	private func requireCurrentSpace(_ binding: Binding) throws {
-		try ExternalWindowSystem.validateCurrentSpace(
+	private func requireLiveWindow(_ binding: Binding) throws {
+		try ExternalWindowSystem.validateWindowIsLive(
 			identity: binding.selection.identity,
 			windowElement: binding.selection.windowElement
 		)
@@ -1473,9 +1490,9 @@ final class SystemExternalWindowService: ExternalWindowService {
 		)
 	}
 
-	func validateCurrentSpace(of handle: any ExternalWindowHandle) throws {
+	func validateWindowIsLive(of handle: any ExternalWindowHandle) throws {
 		let selection: ExternalWindowSelection = try Self.selection(handle)
-		try ExternalWindowSystem.validateCurrentSpace(
+		try ExternalWindowSystem.validateWindowIsLive(
 			identity: selection.identity,
 			windowElement: selection.windowElement
 		)
@@ -1724,7 +1741,7 @@ final class WindowDragObserver {
 		defer { self.pendingDrag = nil }
 		guard pendingDrag.isQualified else { return }
 		do {
-			try service.validateCurrentSpace(of: pendingDrag.handle)
+			try service.validateWindowIsLive(of: pendingDrag.handle)
 			let current = try service.snapshot(of: pendingDrag.handle)
 			ExternalWindowDiagnostics.logger.notice("drag-ended pid=\(pendingDrag.handle.identity.processIdentifier, privacy: .public) window=\(pendingDrag.handle.identity.windowID, privacy: .public)")
 			onEvent?(
