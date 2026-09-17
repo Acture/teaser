@@ -18,6 +18,7 @@ enum ExternalWindowInspection {
 		let bundlePath: String
 		let accessibilityAuthorized: Bool
 		let processIdentifier: Int32
+		let ownerBundleIdentifier: String?
 		/// False for accessory and prohibited processes — Stage Manager's
 		/// `WindowManager`, the Dock, menu-bar agents. Teaser lists no window for
 		/// them, so this says why the list is empty.
@@ -36,8 +37,21 @@ enum ExternalWindowInspection {
 			return observeDrag(identity: .init(processIdentifier: pid, windowID: windowID))
 		}
 		guard arguments.first == "--inspect-windows" else { return nil }
-		guard arguments.count == 2, let pid: Int32 = Int32(arguments[1]), pid > 0 else {
-			fputs("usage: Teaser --inspect-windows PID\n", stderr)
+		// `front` exists because a terminal-run check cannot keep another
+		// application in front: while Stage Manager is on, macOS hides every
+		// off-stage application from both Core Graphics and Accessibility, so the
+		// frontmost application is the only one a command can ever observe.
+		let pid: Int32
+		if arguments.count == 2, arguments[1] == "front" {
+			guard let frontmost: NSRunningApplication = NSWorkspace.shared.frontmostApplication else {
+				fputs("error: macOS reported no frontmost application\n", stderr)
+				return 2
+			}
+			pid = frontmost.processIdentifier
+		} else if arguments.count == 2, let parsed: Int32 = Int32(arguments[1]), parsed > 0 {
+			pid = parsed
+		} else {
+			fputs("usage: Teaser --inspect-windows PID|front\n", stderr)
 			return 2
 		}
 		let authorized: Bool = ManagedExternalWindow.permissionStatus(prompt: false) == .authorized
@@ -81,6 +95,7 @@ enum ExternalWindowInspection {
 			}
 		let report: Report = .init(bundlePath: Bundle.main.bundlePath,
 			accessibilityAuthorized: authorized, processIdentifier: pid,
+			ownerBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
 			ownerIsRegularApplication: ManagedExternalWindow.isRegularApplication(processIdentifier: pid),
 			windows: windows)
 		do {
