@@ -26,11 +26,14 @@ for argument in $argv
     end
 end
 
-if not $build_only; and test "$codesign_identity" = -
+# Teaser is never signed ad-hoc, not even for --build-only: macOS binds
+# Accessibility approval to the signature, so an ad-hoc rebuild silently revokes
+# the approval of the bundle in use.
+if test "$codesign_identity" = -
     printf '%s\n' \
-        'error: launching Teaser requires a stable code-signing identity.' \
-        'Set TEASER_CODESIGN_IDENTITY to an Apple Development or Developer ID identity.' \
-        'Ad-hoc signatures change across builds and cannot retain Accessibility approval.' >&2
+        'error: building Teaser requires a stable code-signing identity.' \
+        'Set TEASER_CODESIGN_IDENTITY to an Apple Development or Developer ID identity,' \
+        'once for every shell: set -Ux TEASER_CODESIGN_IDENTITY "Apple Development: …"' >&2
     exit 2
 end
 

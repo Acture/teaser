@@ -6,7 +6,8 @@ hiding each project behind a mutually exclusive tab.
 
 > Status: desktop-stage implementation in progress. The native app and Rust
 > foundation include constrained layout, generic window-control code, local
-> presentation persistence, and a six-Workspace preset. Automated checks cover
+> presentation persistence, and a canvas that starts from one empty Panel.
+> Automated checks cover
 > geometry and desktop safety; signed real-window drag acceptance is still pending.
 > Production Ghostty and Session wiring also remain incomplete.
 
@@ -102,12 +103,13 @@ Build the current macOS app prototype with:
 fish scripts/app.fish --build-only
 ```
 
-This produces `target/macos/Teaser.app`. Moving adopted external windows requires a
-stable Apple Development or Developer ID signing identity so macOS can retain the
-one-time Accessibility approval across rebuilds:
+This produces `target/macos/Teaser.app`. Every build, `--build-only` included,
+requires a stable Apple Development or Developer ID signing identity: macOS binds
+the one-time Accessibility approval to the signature, so Teaser is never signed
+ad-hoc. Set it once for every shell:
 
 ```fish
-set -lx TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
+set -Ux TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
 fish scripts/app.fish
 ```
 
@@ -122,16 +124,15 @@ Teaser does not request per-application or per-project
 authorization, and it does not guess a replacement window after either application
 restarts.
 
-**Adopt Window…**, in the control window and in the status menu, opens an
-ordinary list of windows Teaser can adopt, including windows Stage Manager or
-another Space hides, which no drag can reach. Choose a window and the unoccupied
-Panel to fill, then adopt it. Windows that cannot be adopted stay listed with
-the reason. The list registers no global shortcut and opens before **Start
-Layout** too, because listing moves nothing.
+**Adopt Window…** in the status menu opens an ordinary list of windows Teaser
+can adopt, including windows Stage Manager or another Space hides, which no drag
+can reach. Choose a window and the unoccupied Panel to fill, then adopt it.
+Windows that cannot be adopted stay listed with the reason. The list registers
+no global shortcut.
 
 Use the Teaser menu's **Stop Layout**, or `Ctrl+Option+Esc`, to remove the stage.
-Switching macOS Space also stops it. The Dock icon reopens the control window;
-closing that window or using `Cmd+Q` quits Teaser. Closed Notes stay closed until
+Switching macOS Space also stops it. The Dock icon reopens the canvas; closing
+the canvas or using `Cmd+Q` quits Teaser. Closed Notes stay closed until
 explicitly focused or a new stage session begins. Arrange uses only small labels
 and divider handles for input, never a display-sized mouse shield.
 
@@ -143,9 +144,9 @@ KeyboardShortcuts registers these Control-Option chords only while the stage is
 running, and layout Undo only in Arrange. A registered chord is consumed
 system-wide, so no unmodified key such as `Esc` is bound. Conflicts with other
 apps' hot keys still need real-desktop verification; Stop and Quit remain
-available from the status menu and the control window.
+available from the status menu and the canvas.
 
-**Layout Editor…** in the control window opens a normal, closable SplitView
+**Layout Editor…** in the status menu opens a normal, closable SplitView
 layout map. Select a display or Workspace and drag its dividers. Releasing the
 divider commits to the same constrained layout, provider placement, Undo, and
 persistence used by desktop handles. While stopped, it edits saved proportions

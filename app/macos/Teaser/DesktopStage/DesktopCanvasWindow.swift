@@ -14,14 +14,20 @@ import AppKit
 final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	let window: NSWindow
 	private let canvasView: DesktopOverlayView
+	/// Status and errors, as a label rather than drawn text, so a failure can be
+	/// selected and copied.
+	private let statusLabel: NSTextField = .init(wrappingLabelWithString: "")
 	private let onGeometryChange: @MainActor (LayoutRect) -> Void
+	private let onClose: @MainActor () -> Void
 
 	init(
 		snapshot: DesktopOverlaySnapshot,
 		callbacks: DesktopOverlayCallbacks,
-		onGeometryChange: @escaping @MainActor (LayoutRect) -> Void
+		onGeometryChange: @escaping @MainActor (LayoutRect) -> Void,
+		onClose: @escaping @MainActor () -> Void = {}
 	) {
 		self.onGeometryChange = onGeometryChange
+		self.onClose = onClose
 		let contentRect: NSRect = .init(x: 0, y: 0, width: 1_200, height: 800)
 		canvasView = .init(
 			frame: .init(origin: .zero, size: contentRect.size),
@@ -44,9 +50,38 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		// The big dark canvas: an ordinary window's background, not a desktop-wide
 		// surface, so what it covers is exactly what the person sized it to cover.
 		window.backgroundColor = .black
-		window.contentView = canvasView
+		// The label is a sibling above the canvas view, so clicks on it reach the
+		// label however the canvas view hit-tests its own drawing.
+		let container: NSView = .init(frame: .init(origin: .zero, size: contentRect.size))
+		container.addSubview(canvasView)
+		statusLabel.isSelectable = true
+		statusLabel.font = .systemFont(ofSize: 12)
+		statusLabel.textColor = .init(white: 0.8, alpha: 1)
+		statusLabel.maximumNumberOfLines = 4
+		statusLabel.translatesAutoresizingMaskIntoConstraints = false
+		container.addSubview(statusLabel)
+		NSLayoutConstraint.activate([
+			statusLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+			statusLabel.trailingAnchor.constraint(
+				lessThanOrEqualTo: container.trailingAnchor, constant: -16
+			),
+			statusLabel.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+		])
+		window.contentView = container
 		window.delegate = self
 		window.center()
+	}
+
+	var statusIsSelectable: Bool { statusLabel.isSelectable }
+
+	func setStatus(_ message: String?) {
+		statusLabel.stringValue = message ?? ""
+		statusLabel.isHidden = message == nil
+	}
+
+	func windowShouldClose(_ sender: NSWindow) -> Bool {
+		onClose()
+		return true
 	}
 
 	/// The content rectangle in AppKit screen coordinates, which is what the

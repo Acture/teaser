@@ -83,9 +83,9 @@ fish scripts/app.fish --build-only
 ```
 
 It produces `target/macos/Teaser.app`. There is no Xcode project or production
-packaging command yet. Live launch through `scripts/app.fish` requires
-`TEASER_CODESIGN_IDENTITY` so Accessibility approval uses a stable application
-identity.
+packaging command yet. Every build, `--build-only` included, requires
+`TEASER_CODESIGN_IDENTITY`: Teaser is never signed ad-hoc, because macOS binds
+Accessibility approval to the signature and an ad-hoc rebuild revokes it.
 
 Launch opens Teaser's canvas, an ordinary window whose content rectangle is the
 layout surface. Panels live inside that window. Do not create a display-sized

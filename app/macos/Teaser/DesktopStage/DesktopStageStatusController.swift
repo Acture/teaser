@@ -53,6 +53,7 @@ struct DesktopStageStatusCallbacks {
 	let onShowControls: @MainActor () -> Void
 	let onToggleStage: @MainActor () -> Void
 	let onAdoptWindow: @MainActor () -> Void
+	let onEditLayout: @MainActor () -> Void
 
 	init(
 		onCommand: @escaping @MainActor (DesktopStageCommand) -> Void,
@@ -62,7 +63,8 @@ struct DesktopStageStatusCallbacks {
 		onQuit: @escaping @MainActor () -> Void,
 		onShowControls: @escaping @MainActor () -> Void,
 		onToggleStage: @escaping @MainActor () -> Void,
-		onAdoptWindow: @escaping @MainActor () -> Void = {}
+		onAdoptWindow: @escaping @MainActor () -> Void = {},
+		onEditLayout: @escaping @MainActor () -> Void = {}
 	) {
 		self.onCommand = onCommand
 		self.onAddPanelKind = onAddPanelKind
@@ -72,6 +74,7 @@ struct DesktopStageStatusCallbacks {
 		self.onShowControls = onShowControls
 		self.onToggleStage = onToggleStage
 		self.onAdoptWindow = onAdoptWindow
+		self.onEditLayout = onEditLayout
 	}
 }
 
@@ -95,6 +98,7 @@ final class DesktopStageStatusController: NSObject {
 		case quit
 		// Appended: the raw values are menu-item tags, so existing cases keep theirs.
 		case adoptWindow
+		case editLayout
 	}
 
 	private let callbacks: DesktopStageStatusCallbacks
@@ -145,9 +149,10 @@ final class DesktopStageStatusController: NSObject {
 	private func rebuildMenu() {
 		let menu: NSMenu = .init(title: "Teaser")
 		menu.autoenablesItems = false
-		menu.addItem(item(title: "Open Teaser", action: .showControls))
+		menu.addItem(item(title: "Show Canvas", action: .showControls))
 		menu.addItem(item(title: state.stageActive ? "Stop Layout" : "Start Layout", action: .toggleStage))
 		menu.addItem(item(title: "Adopt Window…", action: .adoptWindow))
+		menu.addItem(item(title: "Layout Editor…", action: .editLayout))
 		menu.addItem(item(title: "Quit Teaser", action: .quit))
 		menu.addItem(.separator())
 
@@ -301,6 +306,8 @@ final class DesktopStageStatusController: NSObject {
 			callbacks.onQuit()
 		case .adoptWindow:
 			callbacks.onAdoptWindow()
+		case .editLayout:
+			callbacks.onEditLayout()
 		}
 	}
 }
