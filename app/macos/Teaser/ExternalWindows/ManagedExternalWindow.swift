@@ -536,29 +536,37 @@ private enum ExternalWindowSystem {
 				) else { continue }
 				elementsByWindowID[id] = element
 			}
-			return (byProcess[processIdentifier] ?? []).map { window in
-				let element: AXUIElement? = elementsByWindowID[window.identity.windowID]
+			return (byProcess[processIdentifier] ?? []).compactMap { window in
+				// No Accessibility element means this is not a window a person owns.
+				// While Stage Manager holds an application off-stage, the window
+				// server also lists that application's strip thumbnails and its menu
+				// bar at the ordinary window layer, and none of them carry an
+				// element. Offering them would bury the real windows.
+				guard let element: AXUIElement = elementsByWindowID[
+					window.identity.windowID
+				] else { return nil }
 				var rejectionReason: String?
-				if let element {
-					do {
-						try requireManageable(windowElement: element)
-					} catch {
-						rejectionReason = error.localizedDescription
-					}
-				} else {
-					rejectionReason = ManagedExternalWindowError
-						.windowElementNotFound(window.identity).localizedDescription
+				do {
+					try requireManageable(windowElement: element)
+				} catch {
+					rejectionReason = error.localizedDescription
 				}
-				let title: String? = element.flatMap {
-					stringAttribute(kAXTitleAttribute as CFString, of: $0)
-				}
+				let title: String? = stringAttribute(
+					kAXTitleAttribute as CFString,
+					of: element
+				)
+				// Core Graphics reports the thumbnail's geometry for an off-stage
+				// window — a 920x492 Finder window reads as 115x105 — so the
+				// Accessibility frame is the one that tells the truth.
+				let frame: CGRect = (try? accessibilityFrame(of: element))
+					?? window.accessibilityFrame
 				return .init(
 					identity: window.identity,
 					applicationName: application?.localizedName ?? "Application",
 					bundleIdentifier: application?.bundleIdentifier,
 					windowTitle: (title?.isEmpty ?? true) ? nil : title,
 					appKitScreenFrame: managedExternalWindowAppKitScreenFrame(
-						fromAccessibilityFrame: window.accessibilityFrame,
+						fromAccessibilityFrame: frame,
 						menuBarScreenFrame: menuBarScreenFrame
 					),
 					isVisibleOnCurrentSpace: window.isOnscreen,

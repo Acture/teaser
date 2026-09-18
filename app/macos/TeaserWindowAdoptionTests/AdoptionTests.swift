@@ -743,6 +743,10 @@ private func testAdoptableWindowListKeepsHiddenAndRejectedCandidates() throws {
 	fullScreen.isFullScreen = true
 	let closed: FakeWindow = harness.addWindow(windowID: 13, name: "Notes", title: "Scratch")
 	closed.exists = false
+	// What Stage Manager's strip thumbnails and menu-bar windows look like: the
+	// window server lists them at the ordinary layer, but they carry no element.
+	let thumbnail: FakeWindow = harness.addWindow(windowID: 14, name: "Finder", title: "")
+	thumbnail.hasAccessibilityElement = false
 
 	let candidates: [ExternalWindowCandidate] = harness.service.adoptableWindows(
 		excludingProcessIdentifiers: []
@@ -765,6 +769,10 @@ private func testAdoptableWindowListKeepsHiddenAndRejectedCandidates() throws {
 	try expect(
 		!candidates.contains { $0.identity == closed.identity },
 		"a window the window server no longer lists is not offered"
+	)
+	try expect(
+		!candidates.contains { $0.identity == thumbnail.identity },
+		"a window with no Accessibility element is not a candidate at all"
 	)
 	try expect(
 		harness.service.adoptableWindows(

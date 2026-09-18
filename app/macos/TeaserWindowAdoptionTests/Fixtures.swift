@@ -130,6 +130,10 @@ final class FakeWindow {
 	/// drag hit test only: a window hidden by Stage Manager cannot be dragged,
 	/// but it remains adoptable and movable once Teaser holds its identity.
 	var isVisibleOnCurrentSpace: Bool = true
+	/// Whether the provider publishes an Accessibility element for this window.
+	/// Stage Manager's strip thumbnails and menu-bar windows do not, and the real
+	/// service omits them from the candidate list entirely.
+	var hasAccessibilityElement: Bool = true
 	/// The window refuses every geometry write; a read back after the write
 	/// still reports the old frame.
 	var rejectsFrames: Bool = false
@@ -265,7 +269,7 @@ final class FakeExternalWindowService: ExternalWindowService {
 	) -> [ExternalWindowCandidate] {
 		guard permission == .authorized else { return [] }
 		return windows.filter {
-			$0.exists
+			$0.exists && $0.hasAccessibilityElement
 				&& !excludingProcessIdentifiers.contains($0.identity.processIdentifier)
 		}.map { window in
 			.init(

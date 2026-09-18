@@ -73,9 +73,12 @@ protocol ExternalWindowLease: AnyObject {
 	func release(restoringOriginalFrame: Bool) -> Bool
 }
 
-/// One window a user could bind to a Panel, visible or not. A picker shows the
-/// rejected ones too: an empty list cannot distinguish "nothing to adopt" from
-/// "everything was filtered away".
+/// One window a user could bind to a Panel, visible or not. Only real provider
+/// windows appear — the window server also lists Stage Manager's strip
+/// thumbnails and menu bars, which publish no Accessibility element. A window
+/// that exists but cannot be taken keeps its reason instead of vanishing, since
+/// an empty list cannot distinguish "nothing to adopt" from "everything was
+/// filtered away".
 struct ExternalWindowCandidate: Equatable, Sendable {
 	let identity: ExternalWindowIdentity
 	let applicationName: String
