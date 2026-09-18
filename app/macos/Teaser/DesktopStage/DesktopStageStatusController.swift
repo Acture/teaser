@@ -211,7 +211,7 @@ final class DesktopStageStatusController: NSObject {
 			item(title: "Add Panel Type…", action: .addPanelKind)
 		)
 		menu.addItem(
-			item(title: "Reset Showcase", action: .resetShowcase)
+			item(title: "Clear Canvas", action: .resetShowcase)
 		)
 
 		menu.addItem(.separator())

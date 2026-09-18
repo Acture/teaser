@@ -43,8 +43,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onArrange: { [weak self] in self?.perform(.toggleArrange) },
 		onRequestPermission: { [weak self] in self?.requestAccessibility() },
 		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() },
-		onAdoptWindow: { [weak self] in self?.showWindowPicker() },
-		onOpenCanvas: { [weak self] in self?.showCanvas() }
+		onAdoptWindow: { [weak self] in self?.showWindowPicker() }
 	)
 
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
@@ -161,7 +160,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		isRunning = true
 		installSystemObservers()
 		orchestrator.setDisplays(connectedDisplaysWithFallback())
-		controlWindow.show()
+		// Launching opens the canvas itself. The control window is a secondary
+		// surface reachable from the status menu, not the way in.
+		showCanvas()
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
 			while !Task.isCancelled {
@@ -181,7 +182,30 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	func showCanvas() {
 		isCanvasOpen = true
 		canvasWindow.show()
+		startStageForCanvas()
 		updateChrome()
+	}
+
+	/// Opening the canvas is the whole gesture. A window dragged onto it has to be
+	/// adopted, and that needs the drag observer running, so the layout starts
+	/// with the canvas rather than behind a separate button.
+	private func startStageForCanvas() {
+		guard !orchestrator.isStageActive else { return }
+		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
+			orchestrator.setStatus(
+				"Allow Accessibility from the Teaser menu, then drag a window onto the canvas"
+			)
+			return
+		}
+		do {
+			try orchestrator.startStage()
+			try managedWindowFocusObserver.start()
+			shortcutMonitor.start()
+			orchestrator.setStatus("Drag a window onto the canvas to adopt it")
+		} catch {
+			orchestrator.stopStage()
+			orchestrator.setStatus(error.localizedDescription)
+		}
 	}
 
 	private func canvasGeometryDidChange(_ frame: LayoutRect) {
@@ -189,6 +213,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		orchestrator.screenParametersDidChange(displays: [
 			.init(id: ShowcasePreset.mainDisplayID, frame: frame),
 		])
+	}
+
+	/// The canvas rectangle while the canvas is open, the screens otherwise.
+	private func canvasDisplays() -> [DesktopStageDisplay] {
+		guard isCanvasOpen else { return connectedDisplaysWithFallback() }
+		return [.init(id: ShowcasePreset.mainDisplayID, frame: canvasWindow.canvasFrame)]
 	}
 
 	/// The Accessibility walk runs here, when a person asks to see the list, and
@@ -317,13 +347,15 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			requestAccessibility()
 			return
 		}
-		orchestrator.setDisplays(connectedDisplaysWithFallback())
+		// While the canvas is open it owns the layout rectangle; taking the screen
+		// back here would move every Panel out onto the desktop.
+		orchestrator.setDisplays(canvasDisplays())
 		do {
 			try orchestrator.startStage()
 			try managedWindowFocusObserver.start()
 			shortcutMonitor.start()
 			controlWindow.close()
-			orchestrator.setStatus("Drag a window by its title bar into a Panel")
+			orchestrator.setStatus("Drag a window onto the canvas to adopt it")
 		} catch {
 			orchestrator.stopStage()
 			orchestrator.setStatus(error.localizedDescription)
@@ -594,18 +626,18 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func confirmResetShowcase() {
 		let alert: NSAlert = .init()
-		alert.messageText = "Reset the Teaser showcase?"
-		alert.informativeText = "This restores the six-Workspace layout and releases every adopted provider window."
-		alert.addButton(withTitle: "Reset")
+		alert.messageText = "Clear the canvas?"
+		alert.informativeText = "This throws away the saved layout, starts from one empty Panel, and releases every adopted provider window."
+		alert.addButton(withTitle: "Clear")
 		alert.addButton(withTitle: "Cancel")
 		guard alert.runModal() == .alertFirstButtonReturn else { return }
-		resetShowcase()
+		resetToBlankCanvas()
 	}
 
-	private func resetShowcase() {
+	private func resetToBlankCanvas() {
 		orchestrator.stopStage()
 		controlWindow.show()
-		orchestrator.resetShowcase(defaultNotes: Self.defaultNotes)
+		orchestrator.resetToBlankCanvas()
 		closeNotesWindows()
 	}
 

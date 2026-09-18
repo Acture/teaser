@@ -87,8 +87,9 @@ packaging command yet. Live launch through `scripts/app.fish` requires
 `TEASER_CODESIGN_IDENTITY` so Accessibility approval uses a stable application
 identity.
 
-Launch opens a normal control window, not the stage. Layout activation is explicit.
-Do not automatically start an overlay on the user's desktop for smoke testing.
+Launch opens Teaser's canvas, an ordinary window whose content rectangle is the
+layout surface. Panels live inside that window. Do not create a display-sized
+overlay on the user's desktop, and do not move a user's windows for smoke testing.
 
 ## Coding Style and Naming Conventions
 

@@ -262,8 +262,10 @@ supported. Display topology changes automatically redistribute whole Workspaces
 and rebuild display trees deterministically; they do not preserve old display
 split IDs or ratios. A Workspace never straddles displays.
 
-Launching opens a normal closable control window. Only explicit Start Layout
-creates the desktop stage, after Accessibility authorization. Stop Layout and
+Launching opens Teaser's canvas, an ordinary closable window whose content
+rectangle is the layout surface: Panels are solved inside it, never across the
+desktop, so Teaser does not compete with Stage Manager, Mission Control, or
+Spaces. Opening the canvas begins adoption, after Accessibility authorization. Stop Layout and
 Control-Option-Escape immediately remove Teaser chrome and Notes before releasing
 provider leases. Switching Space stops the stage; overlays do not join every Space
 or full-screen application. The display-sized visual window always ignores mouse
