@@ -286,13 +286,14 @@ final class DesktopStageOrchestrator {
 		host?.orchestratorDidRequestSave(self)
 	}
 
-	func resetShowcase(defaultNotes: String) {
+	/// Throws the saved layout away and starts from one empty Panel again.
+	func resetToBlankCanvas() {
 		guard leases.isEmpty else {
 			setStatus("Reset paused: a provider window could not be restored. Restore Accessibility and stop again to retry.")
 			return
 		}
 		let primaryID: DisplayID = displays.first?.id ?? ShowcasePreset.mainDisplayID
-		var resetPresentation: WorkspacePresentation = ShowcasePreset.presentation(
+		var resetPresentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
 			displayID: primaryID
 		)
 		resetPresentation = DesktopStageDisplayTopology.adapt(
@@ -300,11 +301,11 @@ final class DesktopStageOrchestrator {
 			to: displays
 		).presentation
 		presentation = resetPresentation
-		notes = [ShowcasePreset.notesPanelID: defaultNotes]
+		notes = [:]
 		panelAssignments.removeAll()
 		layout = nil
 		host?.orchestratorDidRequestSave(self)
-		setStatus("Showcase reset. Click Start Layout when ready.")
+		setStatus("Canvas cleared. Drag a window onto it to adopt it.")
 	}
 
 	@discardableResult

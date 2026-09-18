@@ -111,10 +111,13 @@ set -lx TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
 fish scripts/app.fish
 ```
 
-Launch opens a normal control window. Allow Accessibility, then click **Start
-Layout**; launching alone never covers the desktop. Physically dragging a standard
-window into a visible Panel is one explicit adoption action; choosing a window
-from Teaser's adoptable-window list is the other, for windows no drag can reach.
+Launch opens Teaser's canvas: an ordinary window you move and resize like any
+other. The layout is solved inside that window's content rectangle, so Teaser
+never covers the desktop and never competes with Stage Manager, Mission Control,
+or Spaces for the screen. Dragging a standard window onto the canvas adopts it
+into the Panel under the pointer; choosing a window from Teaser's
+adoptable-window list is the other way in, for windows no drag can reach.
+Adoption requires Accessibility, which the canvas asks for once.
 Teaser does not request per-application or per-project
 authorization, and it does not guess a replacement window after either application
 restarts.

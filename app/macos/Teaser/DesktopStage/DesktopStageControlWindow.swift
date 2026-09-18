@@ -14,7 +14,6 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	private let onRequestPermission: @MainActor () -> Void
 	private let onEditLayout: @MainActor () -> Void
 	private let onAdoptWindow: @MainActor () -> Void
-	private let onOpenCanvas: @MainActor () -> Void
 	private let onQuit: @MainActor () -> Void
 
 	init(
@@ -23,7 +22,6 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		onRequestPermission: @escaping @MainActor () -> Void,
 		onEditLayout: @escaping @MainActor () -> Void = {},
 		onAdoptWindow: @escaping @MainActor () -> Void = {},
-		onOpenCanvas: @escaping @MainActor () -> Void = {},
 		onQuit: @escaping @MainActor () -> Void = { NSApplication.shared.terminate(nil) }
 	) {
 		self.onToggleStage = onToggleStage
@@ -31,7 +29,6 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 		self.onRequestPermission = onRequestPermission
 		self.onEditLayout = onEditLayout
 		self.onAdoptWindow = onAdoptWindow
-		self.onOpenCanvas = onOpenCanvas
 		self.onQuit = onQuit
 		window = .init(
 			contentRect: .init(x: 0, y: 0, width: 520, height: 400),
@@ -85,11 +82,7 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 			title: "Adopt Window…", target: self, action: #selector(adoptWindow(_:))
 		)
 		adoptButton.bezelStyle = .rounded
-		let canvasButton: NSButton = .init(
-			title: "Open Canvas", target: self, action: #selector(openCanvas(_:))
-		)
-		canvasButton.bezelStyle = .rounded
-		let tools: NSStackView = .init(views: [canvasButton, editButton, adoptButton])
+		let tools: NSStackView = .init(views: [editButton, adoptButton])
 		tools.orientation = .horizontal
 		tools.spacing = 8
 		let actions: NSStackView = .init(views: [startButton, arrangeButton, quitButton])
@@ -148,6 +141,5 @@ final class DesktopStageControlWindow: NSObject, NSWindowDelegate {
 	@objc private func requestPermission(_ sender: NSButton) { onRequestPermission() }
 	@objc private func editLayout(_ sender: NSButton) { onEditLayout() }
 	@objc private func adoptWindow(_ sender: NSButton) { onAdoptWindow() }
-	@objc private func openCanvas(_ sender: NSButton) { onOpenCanvas() }
 	@objc private func quit(_ sender: NSButton) { onQuit() }
 }
