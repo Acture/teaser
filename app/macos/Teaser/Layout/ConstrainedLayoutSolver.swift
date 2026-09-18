@@ -349,22 +349,15 @@ struct ConstrainedLayoutSolver: Sendable {
 		leafMetrics: (Leaf) throws -> LeafLayoutMetrics
 	) throws -> TreeSolution<Leaf>
 	where Leaf: Codable & Hashable & Sendable {
-		let metrics: TreeLayoutMetrics = try treeMetrics(
+		// Minimum sizes are preferences, not a precondition: a region smaller than
+		// its minimums still lays out, shrinking in proportion, instead of refusing.
+		// The walk still runs so malformed trees and unknown Panel kinds fail here.
+		_ = try treeMetrics(
 			tree,
 			gap: gap,
 			scope: scope,
 			leafMetrics: leafMetrics
 		)
-		guard frame.size.width + 0.000_001 >= metrics.minimumSize.width,
-			frame.size.height + 0.000_001 >= metrics.minimumSize.height
-		else {
-			throw ConstrainedLayoutError.infeasible(
-				scope,
-				nil,
-				metrics.minimumSize,
-				frame.size
-			)
-		}
 		return try solveTreeNode(
 			tree,
 			in: frame,
@@ -417,43 +410,32 @@ struct ConstrainedLayoutSolver: Sendable {
 			let secondMinimum: Double = axis == .horizontal
 				? secondMetrics.minimumSize.width
 				: secondMetrics.minimumSize.height
-			guard available > 0 else {
-				throw ConstrainedLayoutError.infeasible(
-					scope,
-					splitID,
-					minimumSize(
-						axis: axis,
-						gap: gap,
-						first: firstMetrics.minimumSize,
-						second: secondMetrics.minimumSize
-					),
-					frame.size
+			// A region too narrow for its gap drops the gap rather than failing.
+			let splitGap: Double = available > 0 ? gap : 0
+			let usable: Double = available > 0
+				? available
+				: (axis == .horizontal ? frame.size.width : frame.size.height)
+			let desired: Double = preference.desiredRatio.isFinite
+				? preference.desiredRatio : 0.5
+			let ratio: Double
+			if usable > 0, firstMinimum + secondMinimum <= usable {
+				// Room for both minimums: honour the requested ratio within them.
+				ratio = desired.clamped(
+					to: (firstMinimum / usable) ... (1 - secondMinimum / usable)
 				)
+			} else if firstMinimum + secondMinimum > 0 {
+				// Not enough room: both sides shrink in proportion to what they need,
+				// so the layout adapts to the space it has instead of refusing it.
+				ratio = (firstMinimum / (firstMinimum + secondMinimum))
+					.clamped(to: 0.01 ... 0.99)
+			} else {
+				ratio = desired
 			}
-			let lowerBound: Double = firstMinimum / available
-			let upperBound: Double = 1 - secondMinimum / available
-			guard lowerBound <= upperBound,
-				preference.desiredRatio.isFinite
-			else {
-				throw ConstrainedLayoutError.infeasible(
-					scope,
-					splitID,
-					minimumSize(
-						axis: axis,
-						gap: gap,
-						first: firstMetrics.minimumSize,
-						second: secondMetrics.minimumSize
-					),
-					frame.size
-				)
-			}
-			let feasibleRange: ClosedRange<Double> = lowerBound ... upperBound
-			let ratio: Double = preference.desiredRatio.clamped(to: feasibleRange)
 			let frames: SplitFrames = split(
 				frame,
 				axis: axis,
 				ratio: ratio,
-				gap: gap
+				gap: splitGap
 			)
 			let firstSolution: TreeSolution<Leaf> = try solveTreeNode(
 				first,

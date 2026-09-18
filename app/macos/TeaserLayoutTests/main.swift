@@ -417,31 +417,32 @@ private func testCodableRoundTripsPresentationAndCustomKinds() throws {
 	)
 }
 
-private func testInfeasibleLayoutFailsAtomically() throws {
+private func testUndersizedRegionAdaptsInsteadOfFailing() throws {
+	// The six-Workspace preset wants about 1968×812 pt. Smaller canvases, down to
+	// a tiny one, must still lay out every Panel rather than refuse.
 	let presentation: WorkspacePresentation = ShowcasePreset.presentation()
-	do {
-		_ = try ConstrainedLayoutSolver.solve(
+	for size: LayoutSize in [
+		.init(width: 1_200, height: 800), .init(width: 1_000, height: 700),
+		.init(width: 300, height: 200),
+	] {
+		let display: LayoutRect = .init(x: 0, y: 0, width: size.width, height: size.height)
+		let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
 			presentation: presentation,
-			displayFrames: [
-				ShowcasePreset.mainDisplayID: .init(
-					x: 0,
-					y: 0,
-					width: 1_000,
-					height: 700
-				),
-			]
+			displayFrames: [ShowcasePreset.mainDisplayID: display]
 		)
-		throw TestFailure.assertion("undersized displays must fail")
-	} catch let error as ConstrainedLayoutError {
-		guard case .infeasible = error else {
-			throw TestFailure.assertion("an undersized display must be infeasible, not \(error)")
-		}
-		let message: String = error.localizedDescription
 		try expect(
-			message.contains("needs at least") && message.contains("available")
-				&& message.contains("pt"),
-			"an infeasible layout must say what it needs and what it has: \(message)"
+			layout.panelFrames.count == 9,
+			"a \(size.width)×\(size.height) region must still place every Panel"
 		)
+		try assertNoOverlap(layout.panelFrames, "adapted Panels must not overlap")
+		for (panelID, frame): (PanelID, LayoutRect) in layout.panelFrames {
+			try expect(
+				frame.origin.x >= -0.001 && frame.origin.y >= -0.001
+					&& frame.origin.x + frame.size.width <= size.width + 0.001
+					&& frame.origin.y + frame.size.height <= size.height + 0.001,
+				"Panel \(panelID.rawValue) must stay inside the \(size.width)×\(size.height) region"
+			)
+		}
 	}
 }
 
@@ -469,7 +470,7 @@ private func run() throws {
 	try testVirtualFocusSurvivesPresentationRoundTrip()
 	try testMultiDisplayAffinity()
 	try testCodableRoundTripsPresentationAndCustomKinds()
-	try testInfeasibleLayoutFailsAtomically()
+	try testUndersizedRegionAdaptsInsteadOfFailing()
 }
 
 do {
