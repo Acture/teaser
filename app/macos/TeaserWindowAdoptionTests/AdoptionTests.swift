@@ -903,10 +903,21 @@ private func testWindowWithAMinimumSizeIsAdoptedAtItsOwnSize() throws {
 		"a window that takes its own size must still be adopted"
 	)
 	let placed: CGRect = try harness.readBackFrame(window.identity)
+	let grown: CGRect = try harness.panelFrame(leftPanelID)
 	try expect(
-		placed.minX == panel.minX && placed.maxY == panel.maxY
+		placed.minX == grown.minX && placed.maxY == grown.maxY
 			&& placed.width == 1_400 && placed.height == 1_400,
 		"the window must sit at the Panel's top-left corner at its own size: \(placed)"
+	)
+	try expect(
+		grown.width > panel.width,
+		"the Panel must learn the window's minimum and take room from its neighbour: \(panel) → \(grown)"
+	)
+	harness.orchestrator.stopStage()
+	try harness.orchestrator.startStage()
+	try expect(
+		try harness.panelFrame(leftPanelID).width == grown.width,
+		"the learned minimum belongs to the Panel, so it survives a fresh solve"
 	)
 	try expect(
 		harness.orchestrator.statusMessage?.contains("cannot fit") != true,
