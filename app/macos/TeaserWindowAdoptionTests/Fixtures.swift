@@ -192,12 +192,11 @@ final class FakeWindow {
 	func accepting(_ frame: CGRect) -> CGRect {
 		if rejectsFrames { return appKitScreenFrame }
 		guard let minimumSize else { return frame }
-		return .init(
-			x: frame.origin.x,
-			y: frame.origin.y,
-			width: max(frame.size.width, minimumSize.width),
-			height: max(frame.size.height, minimumSize.height)
-		)
+		// A real provider keeps its top-left corner and grows right and down, so
+		// in AppKit coordinates the top edge (`maxY`) is what stays put.
+		let width: CGFloat = max(frame.size.width, minimumSize.width)
+		let height: CGFloat = max(frame.size.height, minimumSize.height)
+		return .init(x: frame.minX, y: frame.maxY - height, width: width, height: height)
 	}
 }
 
@@ -430,6 +429,16 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 		}
 		let previousFrame: CGRect = window.appKitScreenFrame
 		let acceptedFrame: CGRect = window.accepting(frame)
+		// Mirrors the real lease: a window that reached the requested top-left
+		// corner is placed even when it took its own size.
+		let landed: Bool = abs(acceptedFrame.minX - frame.minX) <= 2
+			&& abs(acceptedFrame.maxY - frame.maxY) <= 2
+		if landed, acceptedFrame != frame {
+			window.appKitScreenFrame = acceptedFrame
+			lastAppliedFrame = acceptedFrame
+			service.log.record(.apply(window.identity, acceptedFrame))
+			return window.snapshot
+		}
 		guard acceptedFrame == frame else {
 			// The real lease writes the previous frame back before reporting a
 			// readback mismatch, so a refused move leaves the window untouched.

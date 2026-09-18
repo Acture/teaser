@@ -198,6 +198,28 @@ private func testPickerFiltersAndDeduplicates() throws {
 	)
 }
 
+private func testPlacementLandsWhenTheProviderKeepsTheCorner() throws {
+	let requested: CGRect = .init(x: 382, y: 166, width: 370.7, height: 516.2)
+	try expect(
+		managedExternalWindowPlacementLanded(
+			applied: .init(x: 382, y: 166, width: 534, height: 516), requested: requested
+		),
+		"a provider that widens to its own minimum at the requested corner has been placed"
+	)
+	try expect(
+		managedExternalWindowPlacementLanded(
+			applied: .init(x: 383.5, y: 164.5, width: 200, height: 200), requested: requested
+		),
+		"a corner within tolerance has been placed, whatever size the provider took"
+	)
+	try expect(
+		!managedExternalWindowPlacementLanded(
+			applied: .init(x: 900, y: 166, width: 370.7, height: 516.2), requested: requested
+		),
+		"a window that did not move to the requested corner refused the write"
+	)
+}
+
 private func testPanelTargetSemantics() throws {
 	let empty = ExternalWindowPanelGeometry(
 		panelID: "empty",
@@ -399,6 +421,7 @@ do {
 	try testWindowIdentitySelectsOneExactWindowID()
 	try testPickerRowsOrderAndDescribeCandidates()
 	try testPickerFiltersAndDeduplicates()
+	try testPlacementLandsWhenTheProviderKeepsTheCorner()
 	try testPanelTargetSemantics()
 	try testPanelOverlapFailsClosed()
 	try testWindowDragQualification()

@@ -186,6 +186,18 @@ func managedExternalWindowAccessibilityPoint(
 	.init(x: point.x, y: menuBarScreenFrame.maxY - point.y)
 }
 
+/// Whether a geometry write landed. Both frames are Accessibility frames, whose
+/// origin is the window's top-left corner, so a provider that grows or shrinks to
+/// its own size limits keeps that corner and still counts as placed.
+func managedExternalWindowPlacementLanded(
+	applied: CGRect,
+	requested: CGRect,
+	tolerance: CGFloat = 2
+) -> Bool {
+	abs(applied.minX - requested.minX) <= tolerance
+		&& abs(applied.minY - requested.minY) <= tolerance
+}
+
 func managedExternalWindowFramesAreApproximatelyEqual(
 	_ lhs: CGRect,
 	_ rhs: CGRect,
@@ -1163,9 +1175,13 @@ final class ManagedExternalWindow {
 			let appliedFrame: CGRect = try ExternalWindowSystem.accessibilityFrame(
 				of: binding.selection.windowElement
 			)
-			guard managedExternalWindowFramesAreApproximatelyEqual(
-				appliedFrame,
-				targetFrame
+			// The provider owns its size. A window with a minimum or maximum takes
+			// the size it can, and that is a placement, not a failure — Finder will
+			// not go narrower than 534 pt however small the Panel is. Only a window
+			// that did not move to the requested top-left corner refused the write.
+			guard managedExternalWindowPlacementLanded(
+				applied: appliedFrame,
+				requested: targetFrame
 			) else {
 				throw ManagedExternalWindowError.windowCannotFit(
 					requested: requestedFrame,

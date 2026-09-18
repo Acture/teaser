@@ -452,7 +452,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	@objc
 	private func activeSpaceDidChange(_ notification: Notification) {
-		guard orchestrator.isStageActive else { return }
+		// The canvas is an ordinary window: switching Space or Stage Manager stage
+		// leaves it where it is, so the layout keeps running.
+		guard orchestrator.isStageActive, !isCanvasOpen else { return }
 		orchestrator.stopStage()
 		orchestrator.setStatus("Layout stopped after switching Space. Open Teaser to start here.")
 	}
