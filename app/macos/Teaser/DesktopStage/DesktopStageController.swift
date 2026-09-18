@@ -43,7 +43,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onArrange: { [weak self] in self?.perform(.toggleArrange) },
 		onRequestPermission: { [weak self] in self?.requestAccessibility() },
 		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() },
-		onAdoptWindow: { [weak self] in self?.showWindowPicker() }
+		onAdoptWindow: { [weak self] in self?.showWindowPicker() },
+		onOpenCanvas: { [weak self] in self?.showCanvas() }
 	)
 
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
@@ -59,32 +60,55 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onList: { [weak self] in self?.orchestrator.adoptableWindows() ?? [] },
 		onAdopt: { [weak self] identity, panelID in
 			self?.orchestrator.adoptWindow(identity: identity, into: panelID) ?? false
-		}
+		},
+		onStartStage: { [weak self] in self?.toggleStage() }
 	)
 	private lazy var windowPickerWindow: DesktopStageWindowPickerWindow = .init(
 		model: windowPickerModel
 	)
 
-	private lazy var overlayController: DesktopOverlayController = .init(
-		callbacks: .init(
-			onVirtualFocusChange: { [weak self] focus in
-				self?.orchestrator.setVirtualFocus(focus)
-			},
-			onWorkspaceFocusRequest: { [weak self] workspaceID in
-				self?.orchestrator.toggleWorkspaceFocus(workspaceID: workspaceID)
-			},
-			onPanelInputFocusRequest: { [weak self] panelID in
-				self?.orchestrator.setVirtualPanel(panelID)
-				self?.orchestrator.handInputToVirtualPanel()
-			},
-			onUndoRequest: { [weak self] in
-				self?.orchestrator.undoLastLayoutChange()
-			},
-			onDividerRatioChange: { [weak self] scope, splitID, ratio in
-				self?.orchestrator.setDividerRatio(ratio, scope: scope, splitID: splitID)
-			}
-		)
+	private lazy var overlayCallbacks: DesktopOverlayCallbacks = .init(
+		onVirtualFocusChange: { [weak self] focus in
+			self?.orchestrator.setVirtualFocus(focus)
+		},
+		onWorkspaceFocusRequest: { [weak self] workspaceID in
+			self?.orchestrator.toggleWorkspaceFocus(workspaceID: workspaceID)
+		},
+		onPanelInputFocusRequest: { [weak self] panelID in
+			self?.orchestrator.setVirtualPanel(panelID)
+			self?.orchestrator.handInputToVirtualPanel()
+		},
+		onUndoRequest: { [weak self] in
+			self?.orchestrator.undoLastLayoutChange()
+		},
+		onDividerRatioChange: { [weak self] scope, splitID, ratio in
+			self?.orchestrator.setDividerRatio(ratio, scope: scope, splitID: splitID)
+		}
 	)
+
+	private lazy var overlayController: DesktopOverlayController = .init(
+		callbacks: overlayCallbacks
+	)
+
+	/// Teaser's own window, and the surface the layout lives in. Its content
+	/// rectangle is the display the solver works in, so Panels stay inside it
+	/// instead of on the desktop.
+	private lazy var canvasWindow: DesktopCanvasWindow = .init(
+		snapshot: .init(
+			displayID: ShowcasePreset.mainDisplayID,
+			screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
+			workspaces: [],
+			panels: [],
+			dividers: [],
+			virtualFocus: orchestrator.presentation.virtualFocus,
+			arrangeMode: false
+		),
+		callbacks: overlayCallbacks,
+		onGeometryChange: { [weak self] frame in
+			self?.canvasGeometryDidChange(frame)
+		}
+	)
+	private var isCanvasOpen: Bool = false
 
 	private lazy var managedWindowFocusObserver: ManagedWindowFocusObserver = .init {
 		[weak self] identity in
@@ -152,6 +176,21 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	func showControls() { controlWindow.show() }
 
+	/// Opens the canvas. From here on the layout is solved inside this window's
+	/// content rectangle rather than across the desktop.
+	func showCanvas() {
+		isCanvasOpen = true
+		canvasWindow.show()
+		updateChrome()
+	}
+
+	private func canvasGeometryDidChange(_ frame: LayoutRect) {
+		guard isCanvasOpen else { return }
+		orchestrator.screenParametersDidChange(displays: [
+			.init(id: ShowcasePreset.mainDisplayID, frame: frame),
+		])
+	}
+
 	/// The Accessibility walk runs here, when a person asks to see the list, and
 	/// never from the chrome refresh path.
 	func showWindowPicker() {
@@ -190,6 +229,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		controlWindow.close()
 		layoutEditorWindow.close()
 		windowPickerWindow.close()
+		if isCanvasOpen {
+			canvasWindow.close()
+			isCanvasOpen = false
+		}
 		closeNotesWindows()
 	}
 
@@ -388,7 +431,34 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		layoutEditorModel.update(from: orchestrator)
 		windowPickerModel.update(from: orchestrator)
 		let overlaySnapshots: [DesktopOverlaySnapshot]
-		if !orchestrator.isStageActive {
+		if isCanvasOpen {
+			// The canvas owns the layout surface; nothing is drawn on the desktop.
+			overlaySnapshots = []
+			let canvasFrame: LayoutRect = canvasWindow.canvasFrame
+			if let layout {
+				canvasWindow.update(.init(
+					displayID: ShowcasePreset.mainDisplayID,
+					screenFrame: canvasFrame,
+					presentation: presentation,
+					layout: layout,
+					arrangeMode: orchestrator.isArrangeModeEnabled,
+					dragActive: orchestrator.isDragging,
+					dropHighlight: orchestrator.dropHighlight,
+					status: orchestrator.statusMessage
+				))
+			} else {
+				canvasWindow.update(.init(
+					displayID: ShowcasePreset.mainDisplayID,
+					screenFrame: canvasFrame,
+					workspaces: [],
+					panels: [],
+					dividers: [],
+					virtualFocus: presentation.virtualFocus,
+					arrangeMode: orchestrator.isArrangeModeEnabled,
+					status: orchestrator.statusMessage
+				))
+			}
+		} else if !orchestrator.isStageActive {
 			overlaySnapshots = []
 		} else if let layout {
 			overlaySnapshots = orchestrator.displays.enumerated().map { index, display in
@@ -548,7 +618,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		do {
 			liveStore = try PresentationStore.live()
 		} catch {
-			var presentation: WorkspacePresentation = ShowcasePreset.presentation(
+			var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
 				displayID: primaryDisplayID
 			)
 			presentation = DesktopStageDisplayTopology.adapt(
@@ -557,7 +627,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			).presentation
 			return .init(
 				presentation: presentation,
-				notes: [ShowcasePreset.notesPanelID: defaultNotes],
+				notes: [:],
 				store: nil,
 				statusMessage: "Local layout persistence is unavailable: \(error.localizedDescription)"
 			)
@@ -583,7 +653,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				)
 			}
 		} catch {
-			var presentation: WorkspacePresentation = ShowcasePreset.presentation(
+			var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
 				displayID: primaryDisplayID
 			)
 			presentation = DesktopStageDisplayTopology.adapt(
@@ -592,13 +662,15 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			).presentation
 			return .init(
 				presentation: presentation,
-				notes: [ShowcasePreset.notesPanelID: defaultNotes],
+				notes: [:],
 				store: nil,
 				statusMessage: "Saved layout could not be loaded: \(error.localizedDescription)"
 			)
 		}
 
-		var presentation: WorkspacePresentation = ShowcasePreset.presentation(
+		// A first run starts empty. Every region comes from splitting the canvas,
+		// not from a preset that assumes which applications a person uses.
+		var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
 			displayID: primaryDisplayID
 		)
 		presentation = DesktopStageDisplayTopology.adapt(
@@ -607,9 +679,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		).presentation
 		return .init(
 			presentation: presentation,
-			notes: [ShowcasePreset.notesPanelID: defaultNotes],
+			notes: [:],
 			store: liveStore,
-			statusMessage: "Drag any app window into a labeled Panel"
+			statusMessage: "Drag a window onto the canvas to adopt it"
 		)
 	}
 

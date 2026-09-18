@@ -127,6 +127,55 @@ private func testPickerRefusesAdoptionWhileStopped() throws {
 }
 
 @MainActor
+private func testPickerNamesWhyAdoptionIsRefused() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	let window: FakeWindow = harness.addWindow()
+	let fullScreen: FakeWindow = harness.addWindow(windowID: 31, name: "Preview", title: "Paper")
+	fullScreen.isFullScreen = true
+	let model: DesktopStageWindowPickerModel = makePicker(harness) {
+		harness.orchestrator.adoptableWindows()
+	}
+	model.refresh()
+
+	try expect(
+		model.adoptionBlocker(for: nil) != nil,
+		"with nothing chosen the picker must say what is missing"
+	)
+	try expect(
+		model.adoptionBlocker(for: window.identity)?.contains("Start the layout") == true,
+		"a stopped stage must be named as the blocker: "
+			+ (model.adoptionBlocker(for: window.identity) ?? "none")
+	)
+
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	model.update(from: harness.orchestrator)
+	try expect(
+		model.adoptionBlocker(for: window.identity)?.contains("Panel") == true,
+		"a missing Panel must be named: \(model.adoptionBlocker(for: window.identity) ?? "none")"
+	)
+
+	model.select(panelID: leftPanelID)
+	try expect(
+		model.adoptionBlocker(for: window.identity) == nil,
+		"an adoptable window with a chosen Panel has no blocker"
+	)
+	try expect(
+		model.adoptionBlocker(for: fullScreen.identity)
+			== ManagedExternalWindowError.windowIsFullScreen.localizedDescription,
+		"an unmanageable window must carry its own reason forward"
+	)
+	try expect(
+		!model.adopt(fullScreen.identity) && model.message != nil,
+		"pressing adopt on an unmanageable window reports instead of doing nothing"
+	)
+	try expect(
+		harness.log.bindCount(for: fullScreen.identity) == 0,
+		"a refused adoption takes no lease"
+	)
+}
+
+@MainActor
 private func testPickerWindowConstructsWithoutShowingAnything() throws {
 	// A stopped harness: starting the stage applies the layout, so window
 	// operations there would say nothing about constructing the picker.
@@ -155,6 +204,7 @@ private func testPickerWindowConstructsWithoutShowingAnything() throws {
 
 func windowPickerCases() -> [TestCase] {
 	[
+		.init("picker names why adoption is refused", testPickerNamesWhyAdoptionIsRefused),
 		.init("picker window constructs without showing anything", testPickerWindowConstructsWithoutShowingAnything),
 		.init("picker offers only unoccupied Panels", testPickerListsOnlyUnoccupiedPanelsAsTargets),
 		.init("picker refresh is separate from projection", testPickerRefreshIsSeparateFromProjection),

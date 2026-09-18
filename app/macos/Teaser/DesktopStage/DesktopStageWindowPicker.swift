@@ -36,13 +36,37 @@ final class DesktopStageWindowPickerModel: ObservableObject {
 
 	private let onList: @MainActor () -> [ExternalWindowCandidate]
 	private let onAdopt: @MainActor (ExternalWindowIdentity, PanelID) -> Bool
+	private let onStartStage: @MainActor () -> Void
 
 	init(
 		onList: @escaping @MainActor () -> [ExternalWindowCandidate],
-		onAdopt: @escaping @MainActor (ExternalWindowIdentity, PanelID) -> Bool
+		onAdopt: @escaping @MainActor (ExternalWindowIdentity, PanelID) -> Bool,
+		onStartStage: @escaping @MainActor () -> Void = {}
 	) {
 		self.onList = onList
 		self.onAdopt = onAdopt
+		self.onStartStage = onStartStage
+	}
+
+	/// The picker is where a person finds out the layout is not running, so it is
+	/// also where they can start it, instead of being sent back to another window.
+	func startStage() {
+		guard !state.stageActive else { return }
+		onStartStage()
+	}
+
+	/// Why adopting the given window would fail right now, or nil when it would
+	/// succeed. A disabled control that explains nothing is a dead end.
+	func adoptionBlocker(for identity: ExternalWindowIdentity?) -> String? {
+		guard let identity else { return "Choose a window from the list." }
+		if !state.stageActive { return "Start the layout before adopting a window." }
+		if selectedPanelID == nil { return "Choose the Panel to put this window in." }
+		if let reason: String = candidates.first(where: {
+			$0.identity == identity
+		})?.rejectionReason {
+			return reason
+		}
+		return nil
 	}
 
 	var rows: [ExternalWindowPickerRow] {
@@ -121,6 +145,13 @@ final class DesktopStageWindowPickerModel: ObservableObject {
 		}
 		guard let panelID: PanelID = selectedPanelID else {
 			message = "Choose the Panel to put this window in."
+			revision &+= 1
+			return false
+		}
+		if let reason: String = candidates.first(where: {
+			$0.identity == identity
+		})?.rejectionReason {
+			message = reason
 			revision &+= 1
 			return false
 		}
@@ -208,10 +239,22 @@ struct DesktopStageWindowPickerView: View {
 			}
 			.disabled(model.state.targets.isEmpty)
 			Button("Refresh") { model.refresh() }
+			if !model.state.stageActive {
+				Button("Start Layout") { model.startStage() }
+			}
 		}
 	}
 
 	@ViewBuilder private var footer: some View {
+		// The reason is shown before the click, not only after it: a person should
+		// not have to press a control to learn why it would refuse.
+		if let blocker: String = model.adoptionBlocker(for: selectedIdentity) {
+			Text(blocker)
+				.font(.caption)
+				.foregroundStyle(.secondary)
+				.textSelection(.enabled)
+				.fixedSize(horizontal: false, vertical: true)
+		}
 		HStack {
 			if let message: String = model.message {
 				Text(message)
@@ -221,18 +264,13 @@ struct DesktopStageWindowPickerView: View {
 					.lineLimit(3)
 			}
 			Spacer()
+			// Enabled whenever a window is chosen: pressing it reports the reason
+			// rather than doing nothing.
 			Button("Adopt Window") {
 				if let selectedIdentity { model.adopt(selectedIdentity) }
 			}
 			.keyboardShortcut(.defaultAction)
-			.disabled(!model.canAdopt || !isSelectionAdoptable)
-		}
-	}
-
-	private var isSelectionAdoptable: Bool {
-		guard let selectedIdentity else { return false }
-		return model.rows.contains {
-			$0.candidate.identity == selectedIdentity && $0.isAdoptable
+			.disabled(selectedIdentity == nil)
 		}
 	}
 

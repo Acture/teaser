@@ -20,6 +20,49 @@ enum ShowcasePreset {
 	static let previewPanelID: PanelID = .init("paper-preview")
 	static let chromePanelID: PanelID = .init("sort-and-pour-chrome")
 
+	static let canvasWorkspaceID: WorkspaceID = .init("canvas")
+	static let canvasPanelID: PanelID = .init("canvas-panel")
+
+	/// The empty start: one Workspace holding one empty Panel that fills the
+	/// canvas. Every further region comes from splitting this one, never from a
+	/// preset, and nothing is placed until a window is dragged in.
+	static func blankCanvas(
+		displayID: DisplayID = mainDisplayID
+	) -> WorkspacePresentation {
+		let panel: PanelDescriptor = .init(
+			id: canvasPanelID,
+			title: "Empty",
+			kindID: .generic,
+			providerHint: nil,
+			profileOverride: nil,
+			nativeContent: .none
+		)
+		return .init(
+			mode: .tiled,
+			virtualFocus: .init(
+				workspaceID: canvasWorkspaceID,
+				panelID: canvasPanelID
+			),
+			displayLayouts: [
+				displayID: .init(
+					displayID: displayID,
+					workspaceTree: .leaf(canvasWorkspaceID)
+				),
+			],
+			workspaces: [
+				canvasWorkspaceID: .init(
+					id: canvasWorkspaceID,
+					title: "Canvas",
+					detail: "",
+					displayAffinity: displayID,
+					panelTree: .leaf(canvasPanelID),
+					panels: [canvasPanelID: panel]
+				),
+			],
+			panelKinds: try! .init()
+		)
+	}
+
 	static func presentation(
 		displayID: DisplayID = mainDisplayID
 	) -> WorkspacePresentation {

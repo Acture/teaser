@@ -206,7 +206,10 @@ private final class DesktopOverlayHitView: NSView {
 }
 
 @MainActor
-private final class DesktopOverlayView: NSView {
+/// Draws Workspace and Panel geometry for whatever surface hosts it: the desktop
+/// overlay, or Teaser's own canvas window. Every rectangle it draws is placed
+/// relative to `snapshot.screenFrame`, so the host decides what that frame means.
+final class DesktopOverlayView: NSView {
 	private struct DividerDrag {
 		let divider: LayoutDivider
 		let pointerOffset: Double
