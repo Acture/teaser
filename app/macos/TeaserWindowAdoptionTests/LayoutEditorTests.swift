@@ -53,7 +53,10 @@ private func testEditorResizesThroughRealOrchestrator() throws {
 private func testEditorRejectsInvalidAndReflectsRollback() throws {
 	let harness: Harness = try makeStartedHarness()
 	let window: FakeWindow = harness.addWindow()
-	try harness.adopt(window, into: leftPanelID)
+	// The right Panel's top-left corner moves when the root ratio changes, so a
+	// window there that refuses to move is a real refusal. A window that keeps its
+	// corner at its own size would be a placement, not a rejection.
+	try harness.adopt(window, into: rightPanelID)
 	let before: WorkspacePresentation = harness.orchestrator.presentation
 	let originalFrame: CGRect = window.appKitScreenFrame
 	let model: DesktopStageLayoutEditorModel = makeEditor(harness)
@@ -61,7 +64,7 @@ private func testEditorRejectsInvalidAndReflectsRollback() throws {
 		model.fractionHolder(for: rootReference, axis: .horizontal, preference: try rootPreference(harness)).value = invalid
 	}
 	try expect(harness.orchestrator.presentation == before, "invalid fractions must not mutate state")
-	window.minimumSize = .init(width: 1_900, height: 900)
+	window.rejectsFrames = true
 	let revisionBeforeRejection: UInt = model.revision
 	model.fractionHolder(for: rootReference, axis: .horizontal, preference: try rootPreference(harness)).value = 0.3
 	try expect(harness.orchestrator.presentation == before, "provider rejection restores the canonical tree")

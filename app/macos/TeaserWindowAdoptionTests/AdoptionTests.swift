@@ -889,45 +889,28 @@ private func testWindowThatRefusesToMoveRollsBackAndReports() throws {
 }
 
 @MainActor
-private func testFrameReadbackMismatchRefusesTheAdoption() throws {
+private func testWindowWithAMinimumSizeIsAdoptedAtItsOwnSize() throws {
 	let harness: Harness = try makeStartedHarness()
 	let window: FakeWindow = harness.addWindow()
-	// The provider enforces a minimum size larger than the Panel, so the write
-	// succeeds but reads back as a different frame.
+	// Finder will not go narrower than 534 pt however small the Panel is. The
+	// provider owns its size, so taking a larger one is a placement, not a refusal.
 	window.minimumSize = .init(width: 1_400, height: 1_400)
 	let panel: CGRect = try harness.panelFrame(leftPanelID)
 
-	let frameAtDrop: CGRect = try harness.adopt(window, into: leftPanelID)
+	try harness.adopt(window, into: leftPanelID)
 	try expect(
-		harness.orchestrator.panelAssignments.isEmpty,
-		"a frame that does not read back must not be committed to the model"
+		harness.orchestrator.panelAssignments[leftPanelID] == window.identity,
+		"a window that takes its own size must still be adopted"
+	)
+	let placed: CGRect = try harness.readBackFrame(window.identity)
+	try expect(
+		placed.minX == panel.minX && placed.maxY == panel.maxY
+			&& placed.width == 1_400 && placed.height == 1_400,
+		"the window must sit at the Panel's top-left corner at its own size: \(placed)"
 	)
 	try expect(
-		harness.log.contains(
-			.applyRejected(
-				window.identity,
-				requested: panel,
-				actual: .init(
-					x: panel.minX,
-					y: panel.minY,
-					width: 1_400,
-					height: 1_400
-				)
-			)
-		),
-		"the mismatch must be recorded as what was asked and what the window took"
-	)
-	try expect(
-		try harness.readBackFrame(window.identity) == frameAtDrop,
-		"a rejected placement must leave the window where the user dropped it"
-	)
-	try expect(
-		harness.log.applies(for: window.identity).isEmpty,
-		"a frame that failed readback must never be recorded as applied"
-	)
-	try expect(
-		harness.orchestrator.statusMessage?.contains("cannot fit") == true,
-		"the readback mismatch must reach the user: \(harness.orchestrator.statusMessage ?? "none")"
+		harness.orchestrator.statusMessage?.contains("cannot fit") != true,
+		"a provider's own size limit must not be reported as a failure"
 	)
 }
 
@@ -942,8 +925,8 @@ private func testPartialMultiWindowApplyRollsBackInReverseOrder() throws {
 	let leftBefore: CGRect = try harness.readBackFrame(first.identity)
 	let rightBefore: CGRect = try harness.readBackFrame(second.identity)
 	// `applySynchronously` walks Panels in Panel-ID order, so "left" is applied
-	// before "right" and only "right" fails.
-	second.minimumSize = .init(width: 1_400, height: 1_400)
+	// before "right" and only "right" fails: it refuses to move at all.
+	second.rejectsFrames = true
 	let logLength: Int = harness.log.operations.count
 	harness.setDisplayFrame(.init(x: 0, y: 0, width: 1_600, height: 900))
 
@@ -993,7 +976,7 @@ private func testFailedCompensationReportsBothErrorsAndKeepsLeases() throws {
 	let second: FakeWindow = harness.addSecondWindow()
 	try harness.adopt(second, into: rightPanelID)
 
-	second.minimumSize = .init(width: 1_400, height: 1_400)
+	second.rejectsFrames = true
 	first.refusesRestore = true
 	harness.setDisplayFrame(.init(x: 0, y: 0, width: 1_600, height: 900))
 
@@ -1249,7 +1232,7 @@ func adoptionCases() -> [TestCase] {
 		.init("window that disappears at release is not adopted", testWindowThatDisappearsAtReleaseIsNotAdopted),
 		.init("closed provider window frees its Panel", testClosedProviderWindowFreesItsPanel),
 		.init("window that refuses to move rolls back and reports", testWindowThatRefusesToMoveRollsBackAndReports),
-		.init("frame readback mismatch refuses the adoption", testFrameReadbackMismatchRefusesTheAdoption),
+		.init("window with a minimum size is adopted at its own size", testWindowWithAMinimumSizeIsAdoptedAtItsOwnSize),
 		.init("partial multi-window apply rolls back in reverse order", testPartialMultiWindowApplyRollsBackInReverseOrder),
 		.init("failed compensation reports both errors and keeps leases", testFailedCompensationReportsBothErrorsAndKeepsLeases),
 		.init("unrestorable window retains its lease", testUnrestorableWindowRetainsItsLease),
@@ -1380,7 +1363,7 @@ private func testFailedSplitLeavesNoHalfCreatedPanel() throws {
 	let first: FakeWindow = harness.addWindow()
 	try harness.adopt(first, into: leftPanelID)
 	let second: FakeWindow = harness.addSecondWindow()
-	second.minimumSize = .init(width: 1_800, height: 1_800)
+	second.rejectsFrames = true
 
 	let target: CGRect = try harness.panelFrame(leftPanelID)
 	let frameAtDrop: CGRect = harness.dropWindow(
@@ -1389,7 +1372,7 @@ private func testFailedSplitLeavesNoHalfCreatedPanel() throws {
 	)
 	try expect(
 		harness.orchestrator.panelAssignments == [leftPanelID: first.identity],
-		"a split whose window cannot fit must not bind it"
+		"a split whose window refuses to move must not bind it"
 	)
 	try expect(
 		harness.orchestrator.layout?.panelFrames[.init("adopted-1")] == nil
@@ -1610,7 +1593,7 @@ private func testCompensationContinuesPastAWindowThatRefusesRestoration() throws
 	// Panels apply in Panel-ID order: adopted-1, left, right. The last one
 	// fails, and the middle one refuses to be put back.
 	let thirdFrameBefore: CGRect = try harness.readBackFrame(third.identity)
-	second.minimumSize = .init(width: 1_800, height: 1_800)
+	second.rejectsFrames = true
 	first.refusesRestore = true
 	let logLength: Int = harness.log.operations.count
 	harness.setDisplayFrame(.init(x: 0, y: 0, width: 1_600, height: 900))
