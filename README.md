@@ -162,6 +162,18 @@ prompting, or moving windows:
 target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
 ```
 
+`--list-adoptable-windows` prints the same candidate list the **Adopt Window…**
+picker shows, as JSON, without opening it: each window's application, title when
+the provider publishes one, size, whether it is visible, and either that it is
+adoptable or the reason it is not. It also reports how long the Accessibility
+pass took, because that pass runs on the main thread. Exit status is 0 when at
+least one window is adoptable and 1 when none is. It shows no window, prompts
+for nothing, and moves nothing:
+
+```fish
+target/macos/Teaser.app/Contents/MacOS/Teaser --list-adoptable-windows
+```
+
 `--check-bundle-resources` instead checks the upstream shortcut localization
 accessor without creating `NSApplication`, registering hotkeys, or observing
 windows, and exits 1 when the bundled strings table is missing.

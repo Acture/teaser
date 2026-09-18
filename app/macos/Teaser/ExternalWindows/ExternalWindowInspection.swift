@@ -36,6 +36,13 @@ enum ExternalWindowInspection {
 			}
 			return observeDrag(identity: .init(processIdentifier: pid, windowID: windowID))
 		}
+		if arguments.first == "--list-adoptable-windows" {
+			guard arguments.count == 1 else {
+				fputs("usage: Teaser --list-adoptable-windows\n", stderr)
+				return 2
+			}
+			return listAdoptableWindows()
+		}
 		guard arguments.first == "--inspect-windows" else { return nil }
 		// `front` exists because a terminal-run check cannot keep another
 		// application in front: while Stage Manager is on, macOS hides every
@@ -105,6 +112,78 @@ enum ExternalWindowInspection {
 			fputs("Window inspection could not encode its result: \(error)\n", stderr)
 			return 2
 		}
+	}
+
+	private struct CandidateResult: Encodable {
+		let windowID: UInt32
+		let processIdentifier: Int32
+		let application: String
+		let bundleIdentifier: String?
+		let title: String?
+		let width: Int
+		let height: Int
+		let isVisibleOnCurrentSpace: Bool
+		let adoptable: Bool
+		let reason: String?
+	}
+
+	private struct CandidateReport: Encodable {
+		let accessibilityAuthorized: Bool
+		/// The candidate walk is a synchronous main-thread Accessibility pass, so
+		/// its cost is reported rather than assumed.
+		let elapsedMilliseconds: Int
+		let candidateCount: Int
+		let adoptableCount: Int
+		let candidates: [CandidateResult]
+	}
+
+	/// The same candidate walk the picker runs, printed instead of shown. It
+	/// keeps the read-only contract: no stage, no prompt, no window is moved.
+	private static func listAdoptableWindows() -> Int32 {
+		let authorized: Bool = ManagedExternalWindow.permissionStatus(prompt: false) == .authorized
+		let started: TimeInterval = ProcessInfo.processInfo.systemUptime
+		let candidates: [ExternalWindowCandidate] = SystemExternalWindowService.shared
+			.adoptableWindows(excludingProcessIdentifiers: [getpid()])
+		let elapsed: Int = Int(
+			((ProcessInfo.processInfo.systemUptime - started) * 1_000).rounded()
+		)
+		let rows: [CandidateResult] = candidates.map { candidate in
+			.init(
+				windowID: candidate.identity.windowID,
+				processIdentifier: candidate.identity.processIdentifier,
+				application: candidate.applicationName,
+				bundleIdentifier: candidate.bundleIdentifier,
+				title: candidate.windowTitle,
+				width: dimension(candidate.appKitScreenFrame.width),
+				height: dimension(candidate.appKitScreenFrame.height),
+				isVisibleOnCurrentSpace: candidate.isVisibleOnCurrentSpace,
+				adoptable: candidate.isAdoptable,
+				reason: candidate.rejectionReason
+			)
+		}
+		let report: CandidateReport = .init(
+			accessibilityAuthorized: authorized,
+			elapsedMilliseconds: elapsed,
+			candidateCount: rows.count,
+			adoptableCount: rows.count(where: \.adoptable),
+			candidates: rows
+		)
+		do {
+			let encoder: JSONEncoder = .init()
+			encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+			print(String(decoding: try encoder.encode(report), as: UTF8.self))
+			return report.adoptableCount > 0 ? 0 : 1
+		} catch {
+			fputs("Candidate listing could not encode its result: \(error)\n", stderr)
+			return 2
+		}
+	}
+
+	/// `Int(_:)` traps on non-finite and out-of-range values, and a provider can
+	/// report either.
+	private static func dimension(_ value: CGFloat) -> Int {
+		guard value.isFinite, value.magnitude < 1e9 else { return 0 }
+		return Int(value.rounded())
 	}
 
 	private static func observeDrag(identity: ExternalWindowIdentity) -> Int32 {
