@@ -190,6 +190,37 @@ private func testLibrarySubscriptionLifetime() throws {
 }
 
 @MainActor
+private func testMainMenuCarriesCopy() throws {
+	// macOS matches Command-C against a menu item's key equivalent. Without an
+	// Edit menu, selectable text highlights and never copies, which is how every
+	// error Teaser reports became unquotable.
+	let menu: NSMenu = TeaserMainMenu.make()
+	guard let edit: NSMenu = menu.items.compactMap(\.submenu).first(where: {
+		$0.title == "Edit"
+	}) else {
+		throw TestFailure.assertion("the main menu must carry an Edit menu")
+	}
+	guard let copyItem: NSMenuItem = edit.items.first(where: {
+		$0.action == #selector(NSText.copy(_:))
+	}) else {
+		throw TestFailure.assertion("Edit must offer Copy")
+	}
+	try expect(
+		copyItem.keyEquivalent == "c"
+			&& copyItem.keyEquivalentModifierMask == .command,
+		"Copy must answer to Command-C, not to a different chord"
+	)
+	try expect(
+		edit.items.contains { $0.action == #selector(NSText.selectAll(_:)) },
+		"Edit must offer Select All so a long failure can be taken whole"
+	)
+	try expect(
+		menu.items.compactMap(\.submenu).contains { $0.title == "Teaser" },
+		"the application menu must survive alongside Edit"
+	)
+}
+
+@MainActor
 private func testShortcutOwnerDeinitCancelsSubscriptions() throws {
 	let source: RecordingShortcutSource = .init()
 	var monitor: DesktopStageShortcutMonitor? = .init(source: source) { _ in }
@@ -206,6 +237,7 @@ private func run() throws {
 	try testLayoutUndoDoesNotReuseProviderUndo()
 	try testLibrarySubscriptionLifetime()
 	try testShortcutOwnerDeinitCancelsSubscriptions()
+	try testMainMenuCarriesCopy()
 }
 
 do {

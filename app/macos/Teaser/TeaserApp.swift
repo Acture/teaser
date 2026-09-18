@@ -29,6 +29,51 @@ public enum TeaserMain {
 }
 
 @MainActor
+enum TeaserMainMenu {
+	/// macOS delivers Command-C by matching a menu item's key equivalent, so
+	/// without an Edit menu selectable text can be highlighted and never copied.
+	/// Every failure Teaser reports is text a person needs to be able to copy.
+	static func make() -> NSMenu {
+		let mainMenu: NSMenu = .init()
+
+		let applicationMenuItem: NSMenuItem = .init()
+		let applicationMenu: NSMenu = .init(title: "Teaser")
+		applicationMenu.addItem(
+			.init(
+				title: "Quit Teaser",
+				action: #selector(NSApplication.terminate(_:)),
+				keyEquivalent: "q"
+			)
+		)
+		applicationMenuItem.submenu = applicationMenu
+		mainMenu.addItem(applicationMenuItem)
+
+		let editMenuItem: NSMenuItem = .init()
+		let editMenu: NSMenu = .init(title: "Edit")
+		editMenu.addItem(
+			.init(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+		)
+		editMenu.addItem(
+			.init(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+		)
+		editMenu.addItem(
+			.init(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+		)
+		editMenu.addItem(
+			.init(
+				title: "Select All",
+				action: #selector(NSText.selectAll(_:)),
+				keyEquivalent: "a"
+			)
+		)
+		editMenuItem.submenu = editMenu
+		mainMenu.addItem(editMenuItem)
+
+		return mainMenu
+	}
+}
+
+@MainActor
 private final class TeaserApplicationDelegate: NSObject, NSApplicationDelegate {
 	private var desktopStage: DesktopStageController?
 
@@ -60,18 +105,6 @@ private final class TeaserApplicationDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private func installMainMenu() {
-		let mainMenu: NSMenu = .init()
-		let applicationMenuItem: NSMenuItem = .init()
-		let applicationMenu: NSMenu = .init(title: "Teaser")
-		applicationMenu.addItem(
-			.init(
-				title: "Quit Teaser",
-				action: #selector(NSApplication.terminate(_:)),
-				keyEquivalent: "q"
-			)
-		)
-		applicationMenuItem.submenu = applicationMenu
-		mainMenu.addItem(applicationMenuItem)
-		NSApplication.shared.mainMenu = mainMenu
+		NSApplication.shared.mainMenu = TeaserMainMenu.make()
 	}
 }
