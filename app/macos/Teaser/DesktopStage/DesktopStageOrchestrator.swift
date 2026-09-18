@@ -932,12 +932,22 @@ final class DesktopStageOrchestrator {
 		let displayFrames: [DisplayID: LayoutRect] = Dictionary(
 			uniqueKeysWithValues: displays.map { ($0.id, $0.frame) }
 		)
-		let nextLayout: PresentationLayout = try solver.solve(
+		var nextLayout: PresentationLayout = try solver.solve(
 			presentation: presentation,
 			displayFrames: displayFrames
 		)
 		if synchronously {
-			try applySynchronously(nextLayout)
+			let outgrown: [PanelID: LayoutSize] = try applySynchronously(nextLayout)
+			// A window that will not shrink to its Panel teaches the Panel its real
+			// minimum, and one re-solve lets the neighbouring Panels make room. If
+			// the canvas is still too small, the window simply keeps its own size.
+			if learnWindowMinimums(outgrown) {
+				nextLayout = try solver.solve(
+					presentation: presentation,
+					displayFrames: displayFrames
+				)
+				_ = try applySynchronously(nextLayout)
+			}
 		} else {
 			applyCoalesced(nextLayout)
 		}
@@ -949,8 +959,14 @@ final class DesktopStageOrchestrator {
 		}
 	}
 
-	private func applySynchronously(_ nextLayout: PresentationLayout) throws {
+	/// Applies the layout and returns, for each Panel whose window took more room
+	/// than the Panel offered, the size that window actually took.
+	@discardableResult
+	private func applySynchronously(
+		_ nextLayout: PresentationLayout
+	) throws -> [PanelID: LayoutSize] {
 		var applied: [(any ExternalWindowLease, ManagedExternalWindowSnapshot)] = []
+		var outgrown: [PanelID: LayoutSize] = [:]
 		do {
 			for panelID: PanelID in panelAssignments.keys.sorted(
 				by: { $0.rawValue < $1.rawValue }
@@ -961,8 +977,19 @@ final class DesktopStageOrchestrator {
 				else { continue }
 				let previous: ManagedExternalWindowSnapshot = try lease.snapshot()
 				applied.append((lease, previous))
-				_ = try lease.apply(appKitScreenFrame: nsRect(frame))
+				let placed: CGSize = try lease.apply(
+					appKitScreenFrame: nsRect(frame)
+				).appKitScreenFrame.size
+				if Double(placed.width) > frame.size.width + 1
+					|| Double(placed.height) > frame.size.height + 1
+				{
+					outgrown[panelID] = .init(
+						width: max(frame.size.width, Double(placed.width)),
+						height: max(frame.size.height, Double(placed.height))
+					)
+				}
 			}
+			return outgrown
 		} catch {
 			var rollbackErrors: [String] = []
 			for (lease, previous): (any ExternalWindowLease, ManagedExternalWindowSnapshot)
@@ -978,6 +1005,37 @@ final class DesktopStageOrchestrator {
 			}
 			throw error
 		}
+	}
+
+	/// Records each outgrown window's real size as its Panel's minimum. The
+	/// minimum lives on the Panel, so it is saved with the layout and the next
+	/// solve already gives that Panel the room its window needs.
+	/// Returns whether any Panel's minimum grew.
+	private func learnWindowMinimums(_ outgrown: [PanelID: LayoutSize]) -> Bool {
+		var learned: Bool = false
+		for (panelID, size): (PanelID, LayoutSize) in outgrown {
+			guard let workspaceID: WorkspaceID = workspaceID(containing: panelID),
+				var descriptor: PanelDescriptor = presentation.workspaces[workspaceID]?
+					.panels[panelID],
+				let profile: LayoutProfile = descriptor.profileOverride
+					?? presentation.panelKinds.definition(for: descriptor.kindID)?
+					.defaultProfile
+			else { continue }
+			let minimum: LayoutSize = .init(
+				width: max(profile.minimumSize.width, size.width),
+				height: max(profile.minimumSize.height, size.height)
+			)
+			guard minimum != profile.minimumSize else { continue }
+			descriptor.profileOverride = .init(
+				minimumSize: minimum,
+				preferredAspectRatio: profile.preferredAspectRatio,
+				growthWeight: profile.growthWeight
+			)
+			presentation.workspaces[workspaceID]?.panels[panelID] = descriptor
+			learned = true
+		}
+		if learned { host?.orchestratorDidRequestSave(self) }
+		return learned
 	}
 
 	private func applyCoalesced(_ nextLayout: PresentationLayout) {
