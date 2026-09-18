@@ -35,9 +35,10 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 			callbacks: callbacks
 		)
 		canvasView.autoresizingMask = [.width, .height]
+		canvasView.outlinesPanelsAlways = true
 		window = .init(
 			contentRect: contentRect,
-			styleMask: [.titled, .closable, .miniaturizable, .resizable],
+			styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
 			backing: .buffered,
 			defer: false
 		)
@@ -47,16 +48,31 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		window.isRestorable = false
 		window.tabbingMode = .disallowed
 		window.minSize = .init(width: 480, height: 360)
-		// The big dark canvas: an ordinary window's background, not a desktop-wide
-		// surface, so what it covers is exactly what the person sized it to cover.
-		window.backgroundColor = .black
+		// A backdrop, one level below ordinary windows: adopted windows always sit
+		// on top of it, even right after a person clicks the canvas or drags one
+		// of its dividers.
+		window.level = .init(rawValue: NSWindow.Level.normal.rawValue - 1)
+		// macOS full screen moves a window to its own Space, where no other
+		// application's window can appear, so the canvas zooms to fill the screen
+		// instead.
+		window.collectionBehavior = [.fullScreenNone]
+		// The canvas only outlines the Workspace's Panels. It is transparent, so it
+		// never hides a window; the title bar stays for moving and resizing it.
+		window.isOpaque = false
+		window.backgroundColor = .clear
+		window.hasShadow = false
+		window.titlebarAppearsTransparent = true
+		window.titleVisibility = .hidden
 		// The label is a sibling above the canvas view, so clicks on it reach the
 		// label however the canvas view hit-tests its own drawing.
 		let container: NSView = .init(frame: .init(origin: .zero, size: contentRect.size))
 		container.addSubview(canvasView)
 		statusLabel.isSelectable = true
 		statusLabel.font = .systemFont(ofSize: 12)
-		statusLabel.textColor = .init(white: 0.8, alpha: 1)
+		// Readable over whatever sits behind a transparent canvas.
+		statusLabel.textColor = .white
+		statusLabel.drawsBackground = true
+		statusLabel.backgroundColor = NSColor.black.withAlphaComponent(0.6)
 		statusLabel.maximumNumberOfLines = 4
 		statusLabel.translatesAutoresizingMaskIntoConstraints = false
 		container.addSubview(statusLabel)
@@ -69,7 +85,12 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		])
 		window.contentView = container
 		window.delegate = self
-		window.center()
+		// The big dark canvas: open filling the screen's usable area.
+		if let visible: NSRect = NSScreen.main?.visibleFrame {
+			window.setFrame(visible, display: false)
+		} else {
+			window.center()
+		}
 	}
 
 	var statusIsSelectable: Bool { statusLabel.isSelectable }

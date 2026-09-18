@@ -25,8 +25,12 @@ private func testCanvasStartsHiddenAndQuitsOnClose() throws {
 		onClose: { quitRequests += 1 }
 	)
 	try expect(!canvas.isVisible, "constructing the canvas must not show it")
-	try expect(canvas.window.styleMask.contains(.closable) && canvas.window.level == .normal,
-		"the canvas is an ordinary closable window, never an overlay")
+	try expect(canvas.window.styleMask.contains(.closable) && canvas.window.level < .normal,
+		"the canvas is a closable backdrop below ordinary windows, never an overlay above them")
+	try expect(canvas.window.collectionBehavior.contains(.fullScreenNone),
+		"the canvas must never enter macOS full screen, where no adopted window can appear")
+	try expect(!canvas.window.isOpaque && canvas.window.backgroundColor == .clear,
+		"the canvas only outlines Panels; it must not hide what is behind it")
 	canvas.update(snapshot)
 	canvas.setStatus("display does not fit: it needs at least 1968×812 pt")
 	try expect(!canvas.isVisible, "updating the canvas must not show it")

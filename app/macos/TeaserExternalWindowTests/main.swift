@@ -220,6 +220,53 @@ private func testPlacementLandsWhenTheProviderKeepsTheCorner() throws {
 	)
 }
 
+private func testLargeWindowIsAimedByItsBody() throws {
+	let left = ExternalWindowPanelGeometry(
+		panelID: "left", appKitScreenFrame: .init(x: 0, y: 0, width: 600, height: 800),
+		isOccupied: false
+	)
+	let right = ExternalWindowPanelGeometry(
+		panelID: "right", appKitScreenFrame: .init(x: 610, y: 0, width: 600, height: 800),
+		isOccupied: true
+	)
+	let outside: CGPoint = .init(x: 400, y: 950)
+	try expect(
+		externalWindowPanelDropTarget(
+			pointer: outside, windowFrame: .init(x: 100, y: 100, width: 400, height: 600),
+			panels: [left, right]
+		) == .init(panelID: "left", region: .empty),
+		"with the pointer off the canvas, the Panel under the window's centre is the target"
+	)
+	try expect(
+		externalWindowPanelDropTarget(
+			pointer: outside, windowFrame: .init(x: 560, y: 700, width: 900, height: 400),
+			panels: [left, right]
+		) == nil,
+		"a window that only grazes the layout has no target, so it can be dragged out"
+	)
+	try expect(
+		externalWindowPanelDropTarget(
+			pointer: outside, windowFrame: .init(x: 700, y: 100, width: 400, height: 600),
+			panels: [left, right]
+		) == .init(panelID: "right", region: .center),
+		"an occupied Panel under the centre is a whole-Panel target"
+	)
+	try expect(
+		externalWindowPanelDropTarget(
+			pointer: outside, windowFrame: .init(x: 2_000, y: 2_000, width: 400, height: 300),
+			panels: [left, right]
+		) == nil,
+		"a window over no Panel at all has no target"
+	)
+	try expect(
+		externalWindowPanelDropTarget(
+			pointer: .init(x: 1_190, y: 400), windowFrame: .init(x: 100, y: 100, width: 400, height: 600),
+			panels: [left, right]
+		) == .init(panelID: "right", region: .trailing),
+		"when the pointer is over a Panel it still decides, so edge splits stay aimable"
+	)
+}
+
 private func testPanelTargetSemantics() throws {
 	let empty = ExternalWindowPanelGeometry(
 		panelID: "empty",
@@ -422,6 +469,7 @@ do {
 	try testPickerRowsOrderAndDescribeCandidates()
 	try testPickerFiltersAndDeduplicates()
 	try testPlacementLandsWhenTheProviderKeepsTheCorner()
+	try testLargeWindowIsAimedByItsBody()
 	try testPanelTargetSemantics()
 	try testPanelOverlapFailsClosed()
 	try testWindowDragQualification()

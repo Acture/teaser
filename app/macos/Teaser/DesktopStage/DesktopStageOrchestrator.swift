@@ -336,9 +336,7 @@ final class DesktopStageOrchestrator {
 		switch event {
 		case .began(let snapshot), .changed(let snapshot):
 			draggingIdentity = snapshot.selection.identity
-			dropHighlight = dropHighlight(
-				at: snapshot.currentSample.mouseAppKitScreenLocation
-			)
+			dropHighlight = dropHighlight(for: snapshot.currentSample)
 			if case .began = event {
 				ExternalWindowDiagnostics.logger.notice("drag-target highlighted=\(self.dropHighlight != nil, privacy: .public)")
 			}
@@ -361,7 +359,7 @@ final class DesktopStageOrchestrator {
 			$0.value == identity
 		}?.key
 		guard let target: ExternalWindowPanelDropTarget = dropTarget(
-			at: drag.currentSample.mouseAppKitScreenLocation
+			for: drag.currentSample
 		) else {
 			guard let sourcePanelID else {
 				setStatus(DesktopStageOrchestratorError.missingDropTarget.localizedDescription)
@@ -1064,7 +1062,9 @@ final class DesktopStageOrchestrator {
 
 	// MARK: - Drop targets
 
-	private func dropTarget(at point: CGPoint) -> ExternalWindowPanelDropTarget? {
+	private func dropTarget(
+		for sample: ExternalWindowDragSample
+	) -> ExternalWindowPanelDropTarget? {
 		guard let layout else { return nil }
 		let panels: [ExternalWindowPanelGeometry] = layout.panelFrames.map {
 			panelID, frame in
@@ -1074,11 +1074,17 @@ final class DesktopStageOrchestrator {
 				isOccupied: isPanelOccupied(panelID)
 			)
 		}
-		return externalWindowPanelDropTarget(at: point, panels: panels)
+		return externalWindowPanelDropTarget(
+			pointer: sample.mouseAppKitScreenLocation,
+			windowFrame: sample.windowAppKitScreenFrame,
+			panels: panels
+		)
 	}
 
-	private func dropHighlight(at point: CGPoint) -> DesktopOverlayDropHighlight? {
-		guard let target: ExternalWindowPanelDropTarget = dropTarget(at: point),
+	private func dropHighlight(
+		for sample: ExternalWindowDragSample
+	) -> DesktopOverlayDropHighlight? {
+		guard let target: ExternalWindowPanelDropTarget = dropTarget(for: sample),
 			let layout
 		else { return nil }
 		let panelID: PanelID = .init(target.panelID)
