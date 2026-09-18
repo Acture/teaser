@@ -234,6 +234,14 @@ window into one named unoccupied Panel, never edge-splits, and never moves
 Virtual Focus while the user browses. Listing candidates requires Accessibility
 but not a running stage, because listing moves nothing.
 
+A candidate is a window with a resolvable Accessibility element. While Stage
+Manager holds an application off-stage, the window server lists that
+application's strip thumbnails and menu bars at the ordinary window layer with no
+element behind them, and it reports the thumbnail's geometry in place of the
+window's own: a 920×492 Finder window reads as 115×105. The list therefore omits
+element-less windows and takes every frame from Accessibility, not from Core
+Graphics.
+
 During a qualified drag, a nonactivating click-through overlay exposes Panel targets.
 Dropping on an empty Panel adopts it; dropping at an occupied Panel edge inserts a
 local split; dropping a managed window on another empty Panel moves its binding.
