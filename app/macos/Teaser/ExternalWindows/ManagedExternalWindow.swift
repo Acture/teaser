@@ -297,6 +297,38 @@ func externalWindowPanelDropTarget(
 	return .init(panelID: panel.panelID, region: edge?.0 ?? .center)
 }
 
+/// Where a dragged window lands. The pointer decides when it is over a Panel,
+/// because that is how a person aims an edge split. A large window is aimed by
+/// its body, not by the title bar under the pointer, so when the pointer is over
+/// no Panel the Panel under the window's centre wins, as a whole-Panel target.
+/// Mere overlap is deliberately not enough: a window dragged out of the layout
+/// usually still grazes it, and must be able to leave.
+func externalWindowPanelDropTarget(
+	pointer: CGPoint,
+	windowFrame: CGRect,
+	panels: [ExternalWindowPanelGeometry]
+) -> ExternalWindowPanelDropTarget? {
+	if let target: ExternalWindowPanelDropTarget = externalWindowPanelDropTarget(
+		at: pointer,
+		panels: panels
+	) {
+		return target
+	}
+	guard windowFrame.isValidManagedExternalWindowFrame else { return nil }
+	let candidates: [ExternalWindowPanelGeometry] = panels.filter {
+		$0.appKitScreenFrame.isValidManagedExternalWindowFrame
+	}
+	func wholePanel(_ panel: ExternalWindowPanelGeometry) -> ExternalWindowPanelDropTarget {
+		.init(panelID: panel.panelID, region: panel.isOccupied ? .center : .empty)
+	}
+	let center: CGPoint = .init(x: windowFrame.midX, y: windowFrame.midY)
+	let underCenter: [ExternalWindowPanelGeometry] = candidates.filter {
+		$0.appKitScreenFrame.contains(center)
+	}
+	guard underCenter.count == 1, let panel = underCenter.first else { return nil }
+	return wholePanel(panel)
+}
+
 struct ExternalWindowDragQualificationConfiguration: Equatable, Sendable {
 	let minimumMouseMovement: CGFloat
 	let minimumWindowMovement: CGFloat

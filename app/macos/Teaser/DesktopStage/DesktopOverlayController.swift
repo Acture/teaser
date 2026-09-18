@@ -210,6 +210,11 @@ private final class DesktopOverlayHitView: NSView {
 /// overlay, or Teaser's own canvas window. Every rectangle it draws is placed
 /// relative to `snapshot.screenFrame`, so the host decides what that frame means.
 final class DesktopOverlayView: NSView {
+	/// Draw a thin highlight around every Panel even outside Arrange and drags.
+	/// The canvas turns this on; the desktop overlay leaves it off.
+	var outlinesPanelsAlways: Bool = false {
+		didSet { needsDisplay = true }
+	}
 	private struct DividerDrag {
 		let divider: LayoutDivider
 		let pointerOffset: Double
@@ -250,6 +255,8 @@ final class DesktopOverlayView: NSView {
 		drawDividers()
 		if snapshot.arrangeMode || snapshot.dragActive {
 			drawPanelOutlinesAndLabels()
+		} else if outlinesPanelsAlways {
+			drawPanelHighlights()
 		}
 		drawWorkspaceLabels()
 		drawVirtualFocus()
@@ -437,6 +444,20 @@ final class DesktopOverlayView: NSView {
 				)
 			}
 			line.fill()
+		}
+	}
+
+	/// The canvas's resting state: a thin highlight around each Panel and nothing
+	/// else, so the Workspace's structure shows without covering any window.
+	private func drawPanelHighlights() {
+		NSColor.controlAccentColor.withAlphaComponent(0.55).setStroke()
+		let width: CGFloat = max(backingPixel, 1.5)
+		for panel: DesktopOverlayPanel in snapshot.panels {
+			let rect: NSRect = localRect(panel.frame).insetBy(dx: width / 2, dy: width / 2)
+			guard rect.width > width, rect.height > width else { continue }
+			let path: NSBezierPath = .init(rect: rect)
+			path.lineWidth = width
+			path.stroke()
 		}
 	}
 
