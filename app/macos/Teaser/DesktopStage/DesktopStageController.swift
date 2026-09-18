@@ -38,13 +38,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
-	private lazy var controlWindow: DesktopStageControlWindow = .init(
-		onToggleStage: { [weak self] in self?.toggleStage() },
-		onArrange: { [weak self] in self?.perform(.toggleArrange) },
-		onRequestPermission: { [weak self] in self?.requestAccessibility() },
-		onEditLayout: { [weak self] in self?.layoutEditorWindow.show() },
-		onAdoptWindow: { [weak self] in self?.showWindowPicker() }
-	)
 
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
 		presentation: orchestrator.presentation,
@@ -105,7 +98,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		callbacks: overlayCallbacks,
 		onGeometryChange: { [weak self] frame in
 			self?.canvasGeometryDidChange(frame)
-		}
+		},
+		// The canvas is Teaser; closing it quits.
+		onClose: { NSApplication.shared.terminate(nil) }
 	)
 	private var isCanvasOpen: Bool = false
 
@@ -136,9 +131,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			onQuit: {
 				NSApplication.shared.terminate(nil)
 			},
-			onShowControls: { [weak self] in self?.showControls() },
+			onShowControls: { [weak self] in self?.showCanvas() },
 			onToggleStage: { [weak self] in self?.toggleStage() },
-			onAdoptWindow: { [weak self] in self?.showWindowPicker() }
+			onAdoptWindow: { [weak self] in self?.showWindowPicker() },
+			onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
 		)
 	)
 
@@ -175,8 +171,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		updateChrome()
 	}
 
-	func showControls() { controlWindow.show() }
-
 	/// Opens the canvas. From here on the layout is solved inside this window's
 	/// content rectangle rather than across the desktop.
 	func showCanvas() {
@@ -186,15 +180,20 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		updateChrome()
 	}
 
+	private static let accessibilityRequest: String =
+		"Allow Teaser in System Settings › Privacy & Security › Accessibility. "
+		+ "The canvas starts adopting windows as soon as it is allowed."
+
 	/// Opening the canvas is the whole gesture. A window dragged onto it has to be
 	/// adopted, and that needs the drag observer running, so the layout starts
 	/// with the canvas rather than behind a separate button.
 	private func startStageForCanvas() {
 		guard !orchestrator.isStageActive else { return }
 		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
-			orchestrator.setStatus(
-				"Allow Accessibility from the Teaser menu, then drag a window onto the canvas"
-			)
+			// macOS shows its own prompt. Nothing else to click: the permission poll
+			// starts the canvas as soon as the grant arrives.
+			_ = orchestrator.permissionStatus(prompt: true)
+			orchestrator.setStatus(Self.accessibilityRequest)
 			return
 		}
 		do {
@@ -256,7 +255,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		panelTypeChooser.close()
 		overlayController.close()
 		statusController.close()
-		controlWindow.close()
 		layoutEditorWindow.close()
 		windowPickerWindow.close()
 		if isCanvasOpen {
@@ -354,7 +352,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			try orchestrator.startStage()
 			try managedWindowFocusObserver.start()
 			shortcutMonitor.start()
-			controlWindow.close()
 			orchestrator.setStatus("Drag a window onto the canvas to adopt it")
 		} catch {
 			orchestrator.stopStage()
@@ -391,16 +388,22 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 		if permission == .notAuthorized {
 			if orchestrator.isStageActive { orchestrator.stopStage() }
-			orchestrator.setStatus("Allow Accessibility, then click Start Layout")
+			orchestrator.setStatus(Self.accessibilityRequest)
 		} else if orchestrator.isStageActive {
-			orchestrator.setStatus("Accessibility allowed. Ready to start.")
+			orchestrator.setStatus("Accessibility allowed. Drag a window onto the canvas.")
 			startExternalObservation(promptForAccessibility: false)
 		} else {
-			orchestrator.setStatus(
-				orchestrator.releaseRetainedLeases()
-					? "Accessibility allowed. Ready to start."
-					: "Accessibility allowed; some window restorations still need retry."
-			)
+			let released: Bool = orchestrator.releaseRetainedLeases()
+			if released, isCanvasOpen {
+				// Granting permission is the last step: the canvas starts itself.
+				startStageForCanvas()
+			} else {
+				orchestrator.setStatus(
+					released
+						? "Accessibility allowed."
+						: "Accessibility allowed; some window restorations still need retry."
+				)
+			}
 		}
 		updateChrome()
 	}
@@ -467,6 +470,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			// The canvas owns the layout surface; nothing is drawn on the desktop.
 			overlaySnapshots = []
 			let canvasFrame: LayoutRect = canvasWindow.canvasFrame
+			// Status is not drawn into the canvas: drawn text cannot be copied, so
+			// the canvas shows it in a selectable label instead.
 			if let layout {
 				canvasWindow.update(.init(
 					displayID: ShowcasePreset.mainDisplayID,
@@ -476,7 +481,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					arrangeMode: orchestrator.isArrangeModeEnabled,
 					dragActive: orchestrator.isDragging,
 					dropHighlight: orchestrator.dropHighlight,
-					status: orchestrator.statusMessage
+					status: nil
 				))
 			} else {
 				canvasWindow.update(.init(
@@ -487,9 +492,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					dividers: [],
 					virtualFocus: presentation.virtualFocus,
 					arrangeMode: orchestrator.isArrangeModeEnabled,
-					status: orchestrator.statusMessage
+					status: nil
 				))
 			}
+			canvasWindow.setStatus(orchestrator.statusMessage)
 		} else if !orchestrator.isStageActive {
 			overlaySnapshots = []
 		} else if let layout {
@@ -528,12 +534,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			orchestrator.permissionStatus(prompt: false) == .authorized
 				? .authorized
 				: .notAuthorized
-		controlWindow.update(
-			active: orchestrator.isStageActive,
-			arranging: orchestrator.isArrangeModeEnabled,
-			authorized: accessibility == .authorized,
-			message: orchestrator.statusMessage
-		)
 		statusController.update(
 			.init(
 				arrangeModeEnabled: orchestrator.isArrangeModeEnabled,
@@ -636,9 +636,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func resetToBlankCanvas() {
 		orchestrator.stopStage()
-		controlWindow.show()
 		orchestrator.resetToBlankCanvas()
 		closeNotesWindows()
+		startStageForCanvas()
 	}
 
 	// MARK: - Persistence

@@ -320,7 +320,7 @@ Control-Option, and no unmodified provider key, including Escape, is bound;
 Control-Option-Space leaves Arrange. The upstream stream interface reports
 neither a failed nor a later dropped registration, so such a binding is silently
 inert. Conflicts with other applications' hot keys remain a desktop check, and
-the status menu and control window keep independent Stop and Quit paths. After
+the status menu and the canvas keep independent Stop and Quit paths. After
 first use the library keeps its process-wide Carbon handler and menu-tracking
 observers; they match no keys while nothing is registered.
 

@@ -89,7 +89,7 @@ private final class TeaserApplicationDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-		desktopStage?.showControls()
+		desktopStage?.showCanvas()
 		return true
 	}
 

@@ -9,19 +9,31 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
 }
 
 @MainActor
-private func testControlWindowStartsHiddenAndCanQuit() throws {
+private func testCanvasStartsHiddenAndQuitsOnClose() throws {
 	var quitRequests: Int = 0
-	let controls: DesktopStageControlWindow = .init(
-		onToggleStage: {}, onArrange: {}, onRequestPermission: {},
-		onQuit: { quitRequests += 1 }
+	let snapshot: DesktopOverlaySnapshot = .init(
+		displayID: .init("test"),
+		screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
+		workspaces: [], panels: [], dividers: [],
+		virtualFocus: .init(workspaceID: nil, panelID: nil), arrangeMode: false
 	)
-	try expect(!controls.window.isVisible, "constructing controls must not show any desktop window")
-	try expect(controls.window.styleMask.contains(.closable), "controls need a normal close affordance")
-	controls.update(active: true, arranging: true, authorized: true, message: nil)
-	try expect(controls.window.level == .normal, "controls must not float over provider panels")
-	try expect(!controls.window.isVisible, "refreshing controls must not reopen them")
-	_ = controls.windowShouldClose(controls.window)
-	try expect(quitRequests == 1, "the red close button must request complete app shutdown")
+	let canvas: DesktopCanvasWindow = .init(
+		snapshot: snapshot,
+		callbacks: .init(onVirtualFocusChange: { _ in }, onWorkspaceFocusRequest: { _ in },
+			onDividerRatioChange: { _, _, _ in }),
+		onGeometryChange: { _ in },
+		onClose: { quitRequests += 1 }
+	)
+	try expect(!canvas.isVisible, "constructing the canvas must not show it")
+	try expect(canvas.window.styleMask.contains(.closable) && canvas.window.level == .normal,
+		"the canvas is an ordinary closable window, never an overlay")
+	canvas.update(snapshot)
+	canvas.setStatus("display does not fit: it needs at least 1968×812 pt")
+	try expect(!canvas.isVisible, "updating the canvas must not show it")
+	try expect(canvas.statusIsSelectable, "canvas status must be selectable so errors can be copied")
+	_ = canvas.windowShouldClose(canvas.window)
+	try expect(quitRequests == 1, "closing the canvas must quit Teaser")
+	canvas.close()
 }
 
 @MainActor
@@ -62,7 +74,7 @@ private func testClosedNotesStayClosedAcrossRelayout() throws {
 
 do {
 	NSApplication.shared.setActivationPolicy(.prohibited)
-	try testControlWindowStartsHiddenAndCanQuit()
+	try testCanvasStartsHiddenAndQuitsOnClose()
 	try testVisualOverlayNeverCapturesDesktopInput()
 	try testClosedNotesStayClosedAcrossRelayout()
 	print("Teaser desktop-stage safety tests passed (no visible windows)")
