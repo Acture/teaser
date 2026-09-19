@@ -5,7 +5,7 @@ use super::{App, SESSION_SAVE_DEBOUNCE};
 enum SessionSaveJob {
     Clear,
     Save {
-        snapshot: crate::persist::SessionSnapshot,
+        snapshot: Box<crate::persist::SessionSnapshot>,
         history: Option<crate::persist::SessionHistorySnapshot>,
     },
 }
@@ -20,6 +20,7 @@ impl App {
 
     pub(crate) fn sync_session_save_schedule(&mut self) {
         if self.state.session_dirty {
+            self.reconcile_organization_bindings();
             self.state.session_dirty = false;
             self.schedule_session_save();
         }
@@ -38,20 +39,24 @@ impl App {
     }
 
     fn capture_session_save_job(&self) -> SessionSaveJob {
-        if self.state.workspaces.is_empty() {
+        if self.state.workspaces.is_empty() && self.state.teaser_organization.revision == 0 {
             SessionSaveJob::Clear
         } else {
-            let snapshot = crate::persist::capture(
+            let mut snapshot = crate::persist::capture(
                 &self.state.workspaces,
                 &self.state.terminals,
                 &self.terminal_runtimes,
                 self.state.active,
                 self.state.selected,
             );
+            snapshot.teaser_organization = self.state.teaser_organization.clone();
             let history = self.persist_pane_history.then(|| {
                 crate::persist::capture_history(&self.state.workspaces, &self.terminal_runtimes)
             });
-            SessionSaveJob::Save { snapshot, history }
+            SessionSaveJob::Save {
+                snapshot: Box::new(snapshot),
+                history,
+            }
         }
     }
 
@@ -139,5 +144,33 @@ fn run_session_save_job(
     match job {
         SessionSaveJob::Clear => writer.clear(),
         SessionSaveJob::Save { snapshot, history } => writer.save(&snapshot, history.as_ref()),
+    }
+}
+
+#[cfg(test)]
+mod organization_tests {
+    use super::*;
+
+    #[test]
+    fn organization_only_session_is_saved_even_without_terminal_workspaces() {
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut app: App = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            receiver,
+            crate::api::EventHub::default(),
+        );
+        app.state.teaser_organization = serde_json::from_str(include_str!(
+            "../../../../crates/teaser-core/tests/fixtures/organization.json"
+        ))
+        .unwrap();
+        let SessionSaveJob::Save { snapshot, .. } = app.capture_session_save_job() else {
+            panic!("organization must not be cleared")
+        };
+        assert!(snapshot.workspaces.is_empty());
+        let encoded: String = serde_json::to_string(&snapshot).unwrap();
+        let decoded: crate::persist::SessionSnapshot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.teaser_organization, app.state.teaser_organization);
     }
 }

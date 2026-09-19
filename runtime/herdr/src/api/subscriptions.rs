@@ -158,6 +158,9 @@ impl ActiveSubscription {
                 Ok(event_subscription(EventKind::PaneAgentDetected))
             }
             Subscription::LayoutUpdated {} => Ok(event_subscription(EventKind::LayoutUpdated)),
+            Subscription::TeaserOrganizationUpdated {} => {
+                Ok(event_subscription(EventKind::TeaserOrganizationUpdated))
+            }
             Subscription::PaneOutputMatched {
                 pane_id,
                 source,
@@ -685,6 +688,35 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn organization_subscription_delivers_full_authoritative_snapshot() {
+        let event_hub: EventHub = EventHub::default();
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscription: ActiveSubscription = ActiveSubscription::new(
+            Subscription::TeaserOrganizationUpdated {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+            event_hub.current_sequence(),
+        )
+        .unwrap();
+        let snapshot: teaser_core::Snapshot = teaser_core::Snapshot::default();
+        event_hub.push(crate::api::schema::EventEnvelope {
+            event: EventKind::TeaserOrganizationUpdated,
+            data: crate::api::schema::EventData::TeaserOrganizationUpdated {
+                snapshot: snapshot.clone(),
+            },
+        });
+        let event: serde_json::Value = subscription.poll(&api_tx, &event_hub).unwrap();
+        assert_eq!(event["event"], "teaser.organization.updated");
+        assert_eq!(
+            event["data"]["snapshot"],
+            serde_json::to_value(snapshot).unwrap()
+        );
+        assert!(subscription.poll(&api_tx, &event_hub).is_none());
     }
 
     #[test]

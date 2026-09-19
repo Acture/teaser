@@ -372,6 +372,10 @@ impl App {
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
         let snapshot = policy.restore_session.then(crate::persist::load).flatten();
+        let organization = snapshot
+            .as_ref()
+            .map(|value| value.teaser_organization.clone())
+            .unwrap_or_default();
         let session_writer = Arc::new(std::sync::Mutex::new(crate::persist::SessionWriter::new(
             policy.restore_session && snapshot.is_none(),
         )));
@@ -445,6 +449,7 @@ impl App {
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
         let mut state = AppState {
+            teaser_organization: organization,
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -625,6 +630,7 @@ impl App {
             client_shell_keybindings_profile,
             endpoint_commands,
         };
+        app.clear_restored_organization_bindings();
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app
@@ -662,6 +668,8 @@ impl App {
         let pane_id_aliases = crate::persist::handoff_pane_aliases(snapshot, &workspaces);
 
         app.state.pane_id_aliases = pane_id_aliases;
+        app.state.teaser_organization = snapshot.teaser_organization.clone();
+        app.clear_restored_organization_bindings();
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
         app.terminal_runtimes = runtimes.into();

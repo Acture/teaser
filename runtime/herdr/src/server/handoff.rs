@@ -538,6 +538,7 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            teaser_organization: teaser_core::Snapshot::default(),
         }
     }
 

@@ -787,6 +787,7 @@ pub enum TabBarStatusSegment {
 }
 
 pub struct AppState {
+    pub teaser_organization: teaser_core::Snapshot,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Terminal ids whose size is currently owned by a direct attach client.
@@ -1020,6 +1021,7 @@ impl AppState {
     /// Create an AppState for testing — no channels, no PTYs.
     pub fn test_new() -> Self {
         Self {
+            teaser_organization: teaser_core::Snapshot::default(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),

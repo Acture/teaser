@@ -82,6 +82,73 @@ gates for the Herdr fork. Their previous definitions remain in Git history.
 | TASK-030 | Adapt `DesktopStageController` and presentation to multiple native-fullscreen canvases, unequal layouts/contours, exact adoption, local focus/undo, and recovery. Depends on TASK-021. | Existing native issue contracts pass without reverting to display-owned Workspace rectangles. |
 | TASK-031 | Integrate task, terminal/agent, and real-app context across TUI/App. Depends on TASK-020, TASK-022, TASK-030, and namespace isolation before live use. | Demonstrable end-to-end flow; no mock provider UI or unrun acceptance claim. |
 
+### Native integration implementation slice
+
+This slice implements the dependencies of TASK-021 incrementally on the merged
+fork. It does not complete the TUI projection, terminal rendering, distribution
+isolation, task providers, or native fullscreen contracts. No existing endpoint
+codec is changed. Native connection is explicit and never starts a server.
+
+#### Task 1: Server-owned organization and JSON boundary
+
+- Implement the pure organization model in `crates/teaser-core`: stable typed
+  identifiers, project-scoped Workspaces, content-neutral Panels, qualified task
+  references, bindings, and extensible size profiles. Placement and focus remain
+  client-local; regroup and rebind are explicit operations.
+- Add typed, atomic commands and revisioned snapshots. Reject unknown objects,
+  invalid/duplicate IDs, invalid profiles, and stale revisions without changing
+  state. Deleting a logical Panel does not terminate its provider session.
+- Host the state in the existing Herdr server, using its persistence and JSON
+  request/event infrastructure, not another process or native-side database.
+  Expose `teaser.organization.snapshot` and `teaser.organization.apply`, with an
+  expected revision on writes and full authoritative snapshots in responses and
+  `teaser.organization.updated` events. Unknown/unsupported methods are explicit.
+- Keep terminal runtime identity separate from Panel identity. A terminal binding
+  refers to an existing Herdr pane; App and Notes Panels never create fake PTYs.
+  Inherited Herdr tabs/workspaces remain terminal runtime structures during this
+  slice, not a second writer of Teaser logical membership. Do not advertise the
+  deferred TUI organization projection as implemented.
+- Preserve frozen codecs and existing method semantics. Discover the new feature
+  using its snapshot method; do not modify a capability struct reachable from a
+  frozen binary codec just to advertise it. Restore old sessions with an empty
+  organization extension; never infer durable identity from titles or paths.
+- Add pure transition tests and focused server tests for revision conflicts,
+  persistence, snapshot/event agreement, and invalid session bindings. All test
+  data is temporary; no personal Herdr session, terminal, or desktop is touched.
+
+#### Task 2: Native client and existing spatial presentation
+
+- Add typed, bounded Unix-socket JSON transport and a shared-state client under
+  `app/macos/Teaser/Herdr`, with explicit connect/disconnect/reconnect controls.
+  Require an explicitly selected endpoint; no installed-Herdr discovery, launch,
+  old-daemon fallback, or Accessibility request during connection.
+- Subscribe before snapshot and reconcile snapshots/events by organization
+  revision. Ignore stale replies, invalidate prior connection generations, bound
+  event buffers/frame sizes/timeouts, and recover gaps by a fresh snapshot.
+  Do not automatically replay uncertain mutations after a disconnect.
+- Project server Workspaces and Panels into the existing native presentation
+  using stable IDs. Reuse unequal tiling, local focus, Notes and exact-window
+  adoption boundaries. Persist only local presentation preferences for this mode;
+  membership, labels, kinds and bindings are accepted from the server.
+- Route logical create/rename/regroup/rebind/delete actions through typed server
+  commands. Keep pixel layout and live AX/CG leases local. Do not map a Herdr pane
+  to an adopted external window or pretend pane metadata is a terminal renderer.
+- Preserve first-class split gestures, including Ctrl-D and drag-edge splitting:
+  create the new logical Panel through the server, then apply generation-scoped
+  local placement/adoption intent only after an authoritative commit. Rejection,
+  disconnect, or stale target invalidates the intent without replay.
+- Show unsupported/disconnected/stale-command errors. Do not silently switch to
+  a writable local organization model. Activating a stage or adopting a window
+  requires a separate explicit user action.
+- Add a no-desktop executable harness for the actual framing/client/projection
+  boundaries and register it in SwiftPM and the existing pre-push gate. Retire old
+  attachment code only where a real replacement exists; do not remove an
+  unrelated terminal experiment merely to make the diff look complete.
+
+The implementation reports partial coverage against P-613/P-621/P-623 rather
+than marking their broader exit contracts complete. Full runtime/native builds
+and the complete pre-push gate remain explicit user-run commands when long.
+
 ## 3. Alternatives
 
 - **ALT-001**: Stock Herdr plus App/plugins cannot by itself implement the chosen
@@ -99,7 +166,7 @@ gates for the Herdr fork. Their previous definitions remain in Git history.
 ## 5. Files
 
 - **FILE-001**: `runtime/herdr`, root Cargo manifests/config, and provenance.
-- **FILE-002**: Planned `crates/teaser-core` and server protocol/persistence seams.
+- **FILE-002**: `crates/teaser-core` and server protocol/persistence seams.
 - **FILE-003**: Existing `app/macos`, `Package.swift`, and native harnesses.
 - **FILE-004**: Canonical product/architecture/protocol docs and license notices.
 

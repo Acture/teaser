@@ -89,6 +89,10 @@ final class NotesWindowController: NSObject, NSWindowDelegate {
 		onFocus(panelID)
 	}
 
+	func updateText(_ text: String) {
+		if model.text != text { model.text = text }
+	}
+
 	func close() {
 		window.orderOut(nil)
 	}

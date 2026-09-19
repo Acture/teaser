@@ -29,7 +29,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private let orchestrator: DesktopStageOrchestrator
 	private let store: PresentationStore?
 	private let panelTypeChooser: PanelTypeChooserController = .init()
-	private let panelDefinitionEditor: PanelDefinitionEditorController = .init()
+	private lazy var organization: OrganizationSession = .init(orchestrator: orchestrator,
+		archiveDirectory: store?.documentURL.deletingLastPathComponent().appendingPathComponent("connection-scopes", isDirectory: true))
+	private lazy var organizationControls: OrganizationControls = .init(model: .init(session: organization,
+		startStage: { [weak self] in self?.toggleStage() },
+		adoptWindow: { [weak self] in self?.showWindowPicker() }))
 
 	private var notesWindows: [PanelID: NotesWindowController] = [:]
 	private var saveTask: Task<Void, Never>?
@@ -131,7 +135,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			onQuit: {
 				NSApplication.shared.terminate(nil)
 			},
-			onShowControls: { [weak self] in self?.showCanvas() },
+			onShowControls: { [weak self] in self?.showCanvas(); self?.organizationControls.show() },
 			onToggleStage: { [weak self] in self?.toggleStage() },
 			onAdoptWindow: { [weak self] in self?.showWindowPicker() },
 			onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
@@ -149,6 +153,18 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 		super.init()
 		orchestrator.host = self
+		organization.onChange = { [weak self] in
+			guard let self else { return }
+			self.organizationControls.model.refresh()
+			self.updateNoteContent()
+		}
+		organization.onProjection = { [weak self] in
+			guard let self else { return }
+			self.closeNotesWindows()
+			if self.orchestrator.isStageActive, let layout: PresentationLayout = self.orchestrator.layout {
+				self.updateNotesWindows(using: layout)
+			}
+		}
 	}
 
 	func start() {
@@ -159,6 +175,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		// Launching opens the canvas itself. The control window is a secondary
 		// surface reachable from the status menu, not the way in.
 		showCanvas()
+		organizationControls.show()
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
 			while !Task.isCancelled {
@@ -176,36 +193,13 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	func showCanvas() {
 		isCanvasOpen = true
 		canvasWindow.show()
-		startStageForCanvas()
+		orchestrator.relayout(synchronously: false)
 		updateChrome()
 	}
 
 	private static let accessibilityRequest: String =
 		"Allow Teaser in System Settings › Privacy & Security › Accessibility. "
-		+ "The canvas starts adopting windows as soon as it is allowed."
-
-	/// Opening the canvas is the whole gesture. A window dragged onto it has to be
-	/// adopted, and that needs the drag observer running, so the layout starts
-	/// with the canvas rather than behind a separate button.
-	private func startStageForCanvas() {
-		guard !orchestrator.isStageActive else { return }
-		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
-			// macOS shows its own prompt. Nothing else to click: the permission poll
-			// starts the canvas as soon as the grant arrives.
-			_ = orchestrator.permissionStatus(prompt: true)
-			orchestrator.setStatus(Self.accessibilityRequest)
-			return
-		}
-		do {
-			try orchestrator.startStage()
-			try managedWindowFocusObserver.start()
-			shortcutMonitor.start()
-			orchestrator.setStatus("Drag a window onto the canvas to adopt it")
-		} catch {
-			orchestrator.stopStage()
-			orchestrator.setStatus(error.localizedDescription)
-		}
-	}
+		+ "Then explicitly Start Stage or Adopt Window."
 
 	private func canvasGeometryDidChange(_ frame: LayoutRect) {
 		guard isCanvasOpen else { return }
@@ -223,6 +217,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	/// The Accessibility walk runs here, when a person asks to see the list, and
 	/// never from the chrome refresh path.
 	func showWindowPicker() {
+		if !orchestrator.isStageActive { toggleStage() }
+		guard orchestrator.isStageActive else { return }
 		windowPickerModel.update(from: orchestrator)
 		windowPickerModel.refresh()
 		windowPickerWindow.show()
@@ -241,6 +237,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	func stop() {
 		guard isRunning else { return }
+		organization.disconnect()
 		orchestrator.stopStage()
 		isRunning = false
 		permissionTask?.cancel()
@@ -257,6 +254,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		statusController.close()
 		layoutEditorWindow.close()
 		windowPickerWindow.close()
+		organizationControls.close()
 		if isCanvasOpen {
 			canvasWindow.close()
 			isCanvasOpen = false
@@ -341,6 +339,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func toggleStage() {
 		if orchestrator.isStageActive { orchestrator.stopStage(); return }
+		guard organization.client.state == .ready else {
+			orchestrator.setStatus("Connect to Herdr before starting the stage. Stop/Release remains available offline."); return
+		}
 		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
 			requestAccessibility()
 			return
@@ -393,17 +394,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			orchestrator.setStatus("Accessibility allowed. Drag a window onto the canvas.")
 			startExternalObservation(promptForAccessibility: false)
 		} else {
-			let released: Bool = orchestrator.releaseRetainedLeases()
-			if released, isCanvasOpen {
-				// Granting permission is the last step: the canvas starts itself.
-				startStageForCanvas()
-			} else {
-				orchestrator.setStatus(
-					released
-						? "Accessibility allowed."
-						: "Accessibility allowed; some window restorations still need retry."
-				)
-			}
+			orchestrator.setStatus("Accessibility allowed. Use Start Stage to begin adoption.")
 		}
 		updateChrome()
 	}
@@ -544,7 +535,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					return false
 				}(),
 				hasVirtualPanel: virtualPanelID != nil,
-				canSplit: virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
+				canSplit: organization.client.canApply && virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
 				canCycleWorkspaces: orchestrator.workspaceOrder().count > 1,
 				canHandInputToPanel: canHandInput,
 				canUndo: orchestrator.canUndo,
@@ -577,7 +568,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					title: panel.title,
 					text: orchestrator.notes[panel.id] ?? Self.defaultNotes,
 					onChange: { [weak self] text in
-						self?.orchestrator.setNote(text, for: panel.id)
+						self?.organization.setNote(text, panelID: panel.id)
 					},
 					onFocus: { [weak self] panelID in
 						self?.orchestrator.setVirtualPanel(panelID)
@@ -600,6 +591,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		notesWindows.removeAll()
 	}
 
+	private func updateNoteContent() {
+		for (panelID, controller): (PanelID, NotesWindowController) in notesWindows {
+			controller.updateText(orchestrator.notes[panelID] ?? "")
+		}
+	}
+
 	private func showPanelTypeChooser(for panelID: PanelID) {
 		guard let frame: LayoutRect = orchestrator.layout?.panelFrames[panelID] else {
 			return
@@ -615,108 +612,29 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	}
 
 	private func presentPanelDefinitionEditor() {
-		panelDefinitionEditor.present { [weak self] result in
-			guard let self else { return }
-			switch result {
-			case .success(let definition):
-				self.orchestrator.registerPanelKind(definition)
-			case .failure(let error):
-				self.orchestrator.setStatus(error.localizedDescription)
-			}
-		}
+		organizationControls.show()
+		orchestrator.setStatus("Set a custom kind in Organization controls; size profiles remain server-owned.")
 	}
 
 	private func confirmResetShowcase() {
-		let alert: NSAlert = .init()
-		alert.messageText = "Clear the canvas?"
-		alert.informativeText = "This throws away the saved layout, starts from one empty Panel, and releases every adopted provider window."
-		alert.addButton(withTitle: "Clear")
-		alert.addButton(withTitle: "Cancel")
-		guard alert.runModal() == .alertFirstButtonReturn else { return }
-		resetToBlankCanvas()
-	}
-
-	private func resetToBlankCanvas() {
-		orchestrator.stopStage()
-		orchestrator.resetToBlankCanvas()
-		closeNotesWindows()
-		startStageForCanvas()
+		organizationControls.show()
+		orchestrator.setStatus("Delete Panels and empty parents explicitly in Organization controls.")
 	}
 
 	// MARK: - Persistence
 
 	private static func loadInitialState() -> InitialState {
-		let displays: [DesktopStageDisplay] = connectedDisplaysWithFallback()
-		let primaryDisplayID: DisplayID = displays.first?.id ?? ShowcasePreset.mainDisplayID
-		let liveStore: PresentationStore?
+		// The legacy file remains untouched. It is never imported into the server
+		// graph or overwritten with an empty shared projection.
+		let presentation: WorkspacePresentation = .init(mode: .tiled, virtualFocus: .none,
+			displayLayouts: [:], workspaces: [:], panelKinds: try! .init())
 		do {
-			liveStore = try PresentationStore.live()
+			return .init(presentation: presentation, notes: [:], store: try PresentationStore.live(),
+				statusMessage: "Connect to an explicit Herdr socket in Connection & Organization.")
 		} catch {
-			var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
-				displayID: primaryDisplayID
-			)
-			presentation = DesktopStageDisplayTopology.adapt(
-				presentation,
-				to: displays
-			).presentation
-			return .init(
-				presentation: presentation,
-				notes: [:],
-				store: nil,
-				statusMessage: "Local layout persistence is unavailable: \(error.localizedDescription)"
-			)
+			return .init(presentation: presentation, notes: [:], store: nil,
+				statusMessage: "Local archive unavailable: \(error.localizedDescription)")
 		}
-
-		do {
-			if let document: PresentationDocument = try liveStore?.load() {
-				var loadedNotes: [PanelID: String] = [:]
-				for note: PersistedNote in document.notes {
-					loadedNotes[note.panelID] = note.text
-				}
-				let adapted = DesktopStageDisplayTopology.adapt(
-					document.presentation,
-					to: displays
-				)
-				return .init(
-					presentation: adapted.presentation,
-					notes: loadedNotes,
-					store: liveStore,
-					statusMessage: adapted.changed
-						? "Display topology changed; Workspaces were fitted to connected monitors"
-						: nil
-				)
-			}
-		} catch {
-			var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
-				displayID: primaryDisplayID
-			)
-			presentation = DesktopStageDisplayTopology.adapt(
-				presentation,
-				to: displays
-			).presentation
-			return .init(
-				presentation: presentation,
-				notes: [:],
-				store: nil,
-				statusMessage: "Saved layout could not be loaded: \(error.localizedDescription)"
-			)
-		}
-
-		// A first run starts empty. Every region comes from splitting the canvas,
-		// not from a preset that assumes which applications a person uses.
-		var presentation: WorkspacePresentation = ShowcasePreset.blankCanvas(
-			displayID: primaryDisplayID
-		)
-		presentation = DesktopStageDisplayTopology.adapt(
-			presentation,
-			to: displays
-		).presentation
-		return .init(
-			presentation: presentation,
-			notes: [:],
-			store: liveStore,
-			statusMessage: "Drag a window onto the canvas to adopt it"
-		)
 	}
 
 	private func scheduleSave() {
@@ -734,17 +652,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	}
 
 	private func saveNow() {
-		guard let store else { return }
-		let persistedNotes: [PersistedNote] = orchestrator.notes.map {
-			.init(panelID: $0.key, text: $0.value)
-		}.sorted { $0.panelID.rawValue < $1.panelID.rawValue }
-		do {
-			try store.save(
-				.init(presentation: orchestrator.presentation, notes: persistedNotes)
-			)
-		} catch {
-			orchestrator.setStatus("Layout could not be saved: \(error.localizedDescription)")
-		}
+		_ = organization.save()
 	}
 }
 

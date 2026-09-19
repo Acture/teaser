@@ -45,6 +45,10 @@ pub struct Request {
 // the simple serde shape and avoids boxing churn across every caller.
 #[allow(clippy::large_enum_variant)]
 pub enum Method {
+    #[serde(rename = "teaser.organization.snapshot")]
+    TeaserOrganizationSnapshot(EmptyParams),
+    #[serde(rename = "teaser.organization.apply")]
+    TeaserOrganizationApply(teaser_core::Apply),
     #[serde(rename = "ping")]
     Ping(PingParams),
     #[serde(rename = "server.stop")]

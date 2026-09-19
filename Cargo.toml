@@ -1,5 +1,5 @@
 [workspace]
-members = ["runtime/herdr"]
+members = ["runtime/herdr", "crates/teaser-core"]
 exclude = ["prototypes/attachment-runtime"]
 resolver = "2"
 

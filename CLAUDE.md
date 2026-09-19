@@ -30,10 +30,18 @@ workspace root. The root lockfile is authoritative; nested lockfiles record the
 inherited source. Never activate upstream release automation for Teaser or push
 to the upstream remote. Follow the explicit subtree update procedure.
 
-`app/macos/Teaser` and `Package.swift` retain the Swift/AppKit app and eight
-headless executable harnesses. The App is not yet connected to Herdr. Shared core,
-task providers, and multiple native-fullscreen canvases remain implementation
-work. Do not infer real-window adoption from pure geometry tests.
+`crates/teaser-core` owns pure organization transitions; the runtime exposes
+revisioned JSON commands/events and persists that state. Inherited terminal
+workspace/tab containers are not Teaser logical groups; TUI projection is pending.
+
+`app/macos/Teaser` and `Package.swift` contain the Swift/AppKit client and nine
+headless executable harnesses. Its Herdr connection is explicit, does not start
+a server or request Accessibility, and has no local organization fallback.
+Terminal bindings are metadata, not native interactive terminal rendering.
+Task providers and multiple native-fullscreen canvases remain implementation
+work. Do not infer real-window adoption from pure geometry tests. Preserve legacy
+presentation files and connection-scoped Notes archives; do not transplant local
+leases/content across connections using only a matching socket path or object ID.
 
 `prototypes/attachment-runtime` is the retired self-built Rust runtime. It and
 the root Ghostty submodule/patches are retained experiments, not a second

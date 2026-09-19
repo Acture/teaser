@@ -128,6 +128,7 @@ impl App {
                     context.tab_id = Some(tab_id.clone());
                     context
                 }),
+            EventData::TeaserOrganizationUpdated { .. } => empty_plugin_context(correlation_id),
             EventData::LayoutUpdated { layout } => self
                 .plugin_context_for_tab_id(&layout.tab_id, correlation_id)
                 .or_else(|| {

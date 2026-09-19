@@ -692,6 +692,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2",
+ "teaser-core",
  "time",
  "tokio",
  "toml",
@@ -1733,6 +1734,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "teaser-core"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -101,6 +101,14 @@ private struct DesktopStageStateSnapshot {
 }
 
 @MainActor
+struct DesktopStageSplitIntent {
+	let target: PanelID
+	let edge: LayoutEdge
+	let handle: (any ExternalWindowHandle)?
+	let bundleID: String?
+}
+
+@MainActor
 final class DesktopStageOrchestrator {
 	weak var host: (any DesktopStageOrchestratorHost)?
 
@@ -120,6 +128,13 @@ final class DesktopStageOrchestrator {
 	private(set) var isStageActive: Bool = false
 	private(set) var isArrangeModeEnabled: Bool = false
 	private(set) var dropHighlight: DesktopOverlayDropHighlight?
+	private(set) var isSharedOrganization: Bool = false
+	private var sharedAdoptablePanels: Set<PanelID> = []
+	var onSharedKindChange: ((PanelID, PanelKindID) -> Void)?
+	var onSharedSplit: ((DesktopStageSplitIntent) -> Void)?
+	var onSharedAdoption: ((PanelID, any ExternalWindowHandle, String) -> Bool)?
+	var onSharedSwapAllowed: ((PanelID, PanelID) -> Bool)?
+	var onStageStopped: (() -> Void)?
 
 	private var leases: [ExternalWindowIdentity: any ExternalWindowLease] = [:]
 	private var detachedIdentities: Set<ExternalWindowIdentity> = []
@@ -160,7 +175,36 @@ final class DesktopStageOrchestrator {
 		self.excludedProcessIdentifiers = excludedProcessIdentifiers
 	}
 
-	var canUndo: Bool { undoSnapshot != nil }
+	var canUndo: Bool { !isSharedOrganization && undoSnapshot != nil }
+
+	func useSharedOrganization() {
+		isSharedOrganization = true
+		discardUndoHistory()
+	}
+
+	/// Only an authoritative projection can replace logical state in shared mode.
+	/// Incompatible exact-window leases are released before the new graph arrives.
+	func reconcileOrganization(_ next: WorkspacePresentation, retaining compatible: Set<PanelID>,
+		adoptable: Set<PanelID>, notes nextNotes: [PanelID: String]) throws {
+		useSharedOrganization()
+		for (panelID, identity): (PanelID, ExternalWindowIdentity) in panelAssignments where !compatible.contains(panelID) {
+			guard leases[identity]?.release(restoringOriginalFrame: true) != false else {
+				throw DesktopStageOrchestratorError.restorationFailed
+			}
+			leases.removeValue(forKey: identity)
+			panelAssignments.removeValue(forKey: panelID)
+		}
+		discardUndoHistory()
+		presentation = next; notes = nextNotes; sharedAdoptablePanels = adoptable
+		relayout(synchronously: isStageActive)
+		host?.orchestratorDidChangeState(self)
+	}
+
+	private func refuseSharedMutation() -> Bool {
+		guard isSharedOrganization else { return false }
+		setStatus("Organization is server-owned. Use Organization controls to create, delete, regroup or change Panels.")
+		return true
+	}
 
 	var isDragging: Bool { draggingIdentity != nil }
 
@@ -205,6 +249,7 @@ final class DesktopStageOrchestrator {
 	}
 
 	func stopStage() {
+		onStageStopped?()
 		isStageActive = false
 		isArrangeModeEnabled = false
 		dragObserver.stop()
@@ -288,6 +333,7 @@ final class DesktopStageOrchestrator {
 
 	/// Throws the saved layout away and starts from one empty Panel again.
 	func resetToBlankCanvas() {
+		guard !refuseSharedMutation() else { return }
 		guard leases.isEmpty else {
 			setStatus("Reset paused: a provider window could not be restored. Restore Accessibility and stop again to retry.")
 			return
@@ -326,6 +372,8 @@ final class DesktopStageOrchestrator {
 		let changed: Bool = adaptPresentationToDisplays()
 		if isStageActive {
 			relayout(synchronously: true)
+		} else if isSharedOrganization {
+			relayout(synchronously: false)
 		} else if changed {
 			// Relayout notifies while active; stopped chrome still shows the old trees.
 			host?.orchestratorDidChangeState(self)
@@ -369,10 +417,18 @@ final class DesktopStageOrchestrator {
 			return
 		}
 		let targetPanelID: PanelID = .init(target.panelID)
+		if isSharedOrganization && (target.region == .empty || target.region == .center)
+			&& !sharedAdoptablePanels.contains(targetPanelID) {
+			setStatus("Only an unbound or App Panel can adopt an external window."); return
+		}
 
 		do {
 			switch target.region {
 			case .empty:
+				if isSharedOrganization {
+					_ = requestSharedAdoption(drag.selection, into: targetPanelID)
+					return
+				}
 				try performTransaction(label: "Window adopted") {
 					try ensureLease(for: drag.selection)
 					if let sourcePanelID, sourcePanelID != targetPanelID {
@@ -390,6 +446,10 @@ final class DesktopStageOrchestrator {
 					setStatus("Window returned to its Panel")
 					return
 				case .swap(let sourcePanelID, let targetIdentity):
+					if isSharedOrganization && onSharedSwapAllowed?(sourcePanelID, targetPanelID) != true {
+						setStatus("Cross-provider swaps require explicit server rebinding in Organization controls.")
+						return
+					}
 					try performTransaction(label: "Panels swapped") {
 						panelAssignments[sourcePanelID] = targetIdentity
 						panelAssignments[targetPanelID] = identity
@@ -399,6 +459,11 @@ final class DesktopStageOrchestrator {
 			case .leading, .trailing, .top, .bottom:
 				guard let edge: LayoutEdge = layoutEdge(for: target.region) else {
 					throw DesktopStageOrchestratorError.missingDropTarget
+				}
+				if isSharedOrganization {
+					onSharedSplit?(.init(target: targetPanelID, edge: edge, handle: drag.selection,
+						bundleID: service.bundleIdentifier(forProcessIdentifier: identity.processIdentifier)))
+					return
 				}
 				let newPanelID: PanelID = identifiers.makePanelID(prefix: "adopted")
 				let newPanel: PanelDescriptor = descriptor(
@@ -443,6 +508,9 @@ final class DesktopStageOrchestrator {
 	/// only the gesture differs.
 	@discardableResult
 	func adoptWindow(identity: ExternalWindowIdentity, into panelID: PanelID) -> Bool {
+		if isSharedOrganization && !sharedAdoptablePanels.contains(panelID) {
+			setStatus("Only an unbound or App Panel can adopt an external window."); return false
+		}
 		guard isStageActive else {
 			setStatus(DesktopStageOrchestratorError.layoutUnavailable.localizedDescription)
 			return false
@@ -459,6 +527,7 @@ final class DesktopStageOrchestrator {
 		}
 		do {
 			let handle: any ExternalWindowHandle = try service.selectWindow(identity: identity)
+			if isSharedOrganization { return requestSharedAdoption(handle, into: panelID) }
 			let sourcePanelID: PanelID? = panelAssignments.first { $0.value == identity }?.key
 			try performTransaction(label: "Window adopted") {
 				try ensureLease(for: handle)
@@ -472,6 +541,51 @@ final class DesktopStageOrchestrator {
 		} catch {
 			setStatus(error.localizedDescription)
 			relayout(synchronously: true)
+			return false
+		}
+	}
+
+	private func requestSharedAdoption(_ handle: any ExternalWindowHandle, into panelID: PanelID) -> Bool {
+		guard let bundleID: String = service.bundleIdentifier(forProcessIdentifier: handle.identity.processIdentifier) else {
+			setStatus("The selected provider has no bundle ID; an authoritative App binding is required.")
+			return false
+		}
+		return onSharedAdoption?(panelID, handle, bundleID) ?? false
+	}
+
+	/// Placement is client-owned and applied only after server membership exists.
+	func placeCommittedPanel(_ panelID: PanelID, target: PanelID, edge: LayoutEdge) throws {
+		guard let workspaceID: WorkspaceID = workspaceID(containing: target),
+			var workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID], workspace.panels[panelID] != nil
+		else { throw DesktopStageOrchestratorError.panelUnavailable(panelID) }
+		try workspace.panelTree.remove(panelID)
+		try workspace.panelTree.insert(panelID, at: edge, of: target, splitID: identifiers.makeSplitID(prefix: "local-server-split"))
+		presentation.workspaces[workspaceID] = workspace
+		try focusModel(on: panelID)
+		relayout(synchronously: isStageActive)
+		host?.orchestratorDidRequestSave(self)
+		host?.orchestrator(self, didCreatePanel: panelID)
+	}
+
+	@discardableResult
+	func adoptCommittedWindow(_ handle: any ExternalWindowHandle, into panelID: PanelID) -> Bool {
+		guard isStageActive, sharedAdoptablePanels.contains(panelID), !isPanelOccupied(panelID) else {
+			setStatus("Panel committed, but the stage or native adoption target is no longer available."); return false
+		}
+		do {
+			try service.validateIdentity(of: handle)
+			try service.validateWindowIsLive(of: handle)
+			try performTransaction(label: "Window adopted") {
+				try ensureLease(for: handle)
+				for source: PanelID in panelAssignments.keys where panelAssignments[source] == handle.identity {
+					panelAssignments.removeValue(forKey: source)
+				}
+				panelAssignments[panelID] = handle.identity
+				try focusModel(on: panelID)
+			}
+			return true
+		} catch {
+			setStatus("Panel committed; window adoption failed: \(error.localizedDescription)")
 			return false
 		}
 	}
@@ -690,6 +804,12 @@ final class DesktopStageOrchestrator {
 			setStatus(DesktopStageOrchestratorError.layoutUnavailable.localizedDescription)
 			return
 		}
+		if isSharedOrganization {
+			onSharedSplit?(.init(target: targetPanelID,
+				edge: targetFrame.size.width >= targetFrame.size.height ? .trailing : .bottom,
+				handle: nil, bundleID: nil))
+			return
+		}
 		let panelID: PanelID = identifiers.makePanelID(prefix: "panel")
 		let panel: PanelDescriptor = .init(
 			id: panelID,
@@ -764,6 +884,7 @@ final class DesktopStageOrchestrator {
 	}
 
 	func setPanelKind(_ kindID: PanelKindID, panelID: PanelID) {
+		if isSharedOrganization { onSharedKindChange?(panelID, kindID); return }
 		do {
 			try performTransaction(label: "Panel type changed") {
 				guard let workspaceID: WorkspaceID = workspaceID(containing: panelID),
@@ -783,6 +904,7 @@ final class DesktopStageOrchestrator {
 	}
 
 	func registerPanelKind(_ definition: PanelKindDefinition) {
+		guard !refuseSharedMutation() else { return }
 		do {
 			try performTransaction(label: "Panel type added") {
 				try presentation.panelKinds.register(definition)
@@ -802,9 +924,11 @@ final class DesktopStageOrchestrator {
 		do {
 			try change()
 			try solveAndApply(synchronously: true)
-			prepareForNewUndo(preserving: before.detachedIdentities.union(before.panelAssignments.values))
-			undoSnapshot = before
-			statusMessage = "\(label) · Undo available"
+			if !isSharedOrganization {
+				prepareForNewUndo(preserving: before.detachedIdentities.union(before.panelAssignments.values))
+				undoSnapshot = before
+			}
+			statusMessage = isSharedOrganization ? label : "\(label) · Undo available"
 			host?.orchestratorDidRequestSave(self)
 			host?.orchestratorDidChangeState(self)
 		} catch {
@@ -820,6 +944,7 @@ final class DesktopStageOrchestrator {
 	}
 
 	func undoLastLayoutChange() {
+		guard !refuseSharedMutation() else { return }
 		guard let undoSnapshot else { return }
 		undoCoalescingKey = nil
 		undoCoalescingTask?.cancel()
@@ -914,9 +1039,15 @@ final class DesktopStageOrchestrator {
 	// MARK: - Layout
 
 	func relayout(synchronously: Bool) {
-		guard isStageActive else { return }
+		guard isStageActive || isSharedOrganization else { return }
 		do {
-			try solveAndApply(synchronously: synchronously)
+			if isStageActive { try solveAndApply(synchronously: synchronously) }
+			else {
+				// A connected canvas can preview tiling without desktop leases,
+				// observers, Notes windows, or an Accessibility permission request.
+				layout = try solver.solve(presentation: presentation,
+					displayFrames: Dictionary(uniqueKeysWithValues: displays.map { ($0.id, $0.frame) }))
+			}
 			host?.orchestratorDidChangeState(self)
 		} catch {
 			setStatus(error.localizedDescription)

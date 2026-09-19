@@ -21,6 +21,7 @@ include = [
 ]
 
 [dependencies]
+teaser-core = { path = "../../crates/teaser-core" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

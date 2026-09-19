@@ -5,6 +5,7 @@ mod agents;
 mod env;
 mod integrations;
 mod layouts;
+mod organization;
 mod pane_graphics;
 mod panes;
 pub(crate) mod plugins;
@@ -892,6 +893,12 @@ impl App {
         };
 
         let response = match request.method {
+            Method::TeaserOrganizationSnapshot(_) => {
+                return self.handle_organization_snapshot(request.id)
+            }
+            Method::TeaserOrganizationApply(params) => {
+                return self.handle_organization_apply(request.id, params)
+            }
             Method::ServerStop(_) => {
                 self.state.should_quit = true;
                 SuccessResponse {

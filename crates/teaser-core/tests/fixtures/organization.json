@@ -1,0 +1,11 @@
+{
+  "revision": 7,
+  "projects": [{"id":"project-teaser","name":"Teaser"}],
+  "workspaces": [{"id":"workspace-native","project_id":"project-teaser","name":"Native integration","task":{"provider":"linear","id":"P-623"}}],
+  "panels": [
+    {"id":"panel-notes","workspace_id":"workspace-native","title":"Design 👩‍💻","kind":"notes","binding":{"type":"notes","document_id":"document-native"},"size_profile":{"name":"notes","min_width":2,"min_height":2,"preferred_width":6,"preferred_height":4,"growth_weight":1.5,"preferred_aspect_ratio":{"minimum":1.0,"maximum":2.0}}},
+    {"id":"panel-cli","workspace_id":"workspace-native","title":"Terminal","kind":"cli","binding":{"type":"terminal","pane_id":"w1:p1"},"size_profile":{"name":"terminal","min_width":3,"min_height":2,"preferred_width":8,"preferred_height":5,"growth_weight":2.0,"preferred_aspect_ratio":{"minimum":1.2,"maximum":2.4}}},
+    {"id":"panel-app","workspace_id":"workspace-native","title":"Editor","kind":"app","binding":{"type":"app","bundle_id":"com.example.editor"},"size_profile":{"name":"editor","min_width":2,"min_height":2,"preferred_width":5,"preferred_height":4,"growth_weight":1.0,"preferred_aspect_ratio":{"minimum":0.8,"maximum":1.8}}},
+    {"id":"panel-custom","workspace_id":"workspace-native","title":"Custom","kind":"custom-chart","binding":{"type":"unbound"},"size_profile":{"name":"chart","min_width":1,"min_height":1,"preferred_width":4,"preferred_height":3,"growth_weight":1.0,"preferred_aspect_ratio":{"minimum":1.0,"maximum":2.0}}}
+  ]
+}

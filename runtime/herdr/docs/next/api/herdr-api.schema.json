@@ -79,8 +79,110 @@
           ],
           "type": "string"
         },
+        "AspectRatio": {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "format": "double",
+              "type": "number"
+            },
+            "minimum": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        "Binding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "unbound",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "terminal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "bundle_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "app",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "bundle_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "document_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notes",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "document_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "snapshot": {
+                  "$ref": "#/schemas/event/$defs/Snapshot"
+                },
+                "type": {
+                  "const": "teaser_organization_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "snapshot"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -728,6 +830,7 @@
         },
         "EventKind": {
           "enum": [
+            "teaser.organization.updated",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -1022,6 +1125,135 @@
           ],
           "type": "object"
         },
+        "Panel": {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/schemas/event/$defs/Binding"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "size_profile": {
+              "$ref": "#/schemas/event/$defs/SizeProfile"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "workspace_id",
+            "title",
+            "kind",
+            "binding",
+            "size_profile"
+          ],
+          "type": "object"
+        },
+        "Project": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        "SizeProfile": {
+          "additionalProperties": false,
+          "description": "Relative layout preference, never terminal cells or native pixel geometry.",
+          "properties": {
+            "growth_weight": {
+              "format": "double",
+              "type": "number"
+            },
+            "min_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "preferred_aspect_ratio": {
+              "$ref": "#/schemas/event/$defs/AspectRatio"
+            },
+            "preferred_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "preferred_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "min_width",
+            "min_height",
+            "preferred_width",
+            "preferred_height",
+            "growth_weight",
+            "preferred_aspect_ratio"
+          ],
+          "type": "object"
+        },
+        "Snapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "panels": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/Panel"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/Project"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workspaces": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/Workspace"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "revision",
+            "projects",
+            "workspaces",
+            "panels"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -1065,6 +1297,52 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TaskReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "id"
+          ],
+          "type": "object"
+        },
+        "Workspace": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "task": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/TaskReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "project_id",
+            "name"
           ],
           "type": "object"
         },
@@ -1689,6 +1967,113 @@
           ],
           "type": "object"
         },
+        "Apply": {
+          "additionalProperties": false,
+          "properties": {
+            "commands": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/Command"
+              },
+              "type": "array"
+            },
+            "expected_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "expected_revision",
+            "commands"
+          ],
+          "type": "object"
+        },
+        "AspectRatio": {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "format": "double",
+              "type": "number"
+            },
+            "minimum": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        "Binding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "unbound",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "terminal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "bundle_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "app",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "bundle_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "document_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notes",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "document_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
           "properties": {
@@ -1711,6 +2096,286 @@
             "title"
           ],
           "type": "object"
+        },
+        "Command": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "project": {
+                  "$ref": "#/schemas/request/$defs/Project"
+                },
+                "type": {
+                  "const": "create_project",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "project"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "rename_project",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "project_id",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "project_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "delete_project",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "project_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "create_workspace",
+                  "type": "string"
+                },
+                "workspace": {
+                  "$ref": "#/schemas/request/$defs/Workspace"
+                }
+              },
+              "required": [
+                "type",
+                "workspace"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "rename_workspace",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "workspace_id",
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "delete_workspace",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "workspace_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "task": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/request/$defs/TaskReference"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "set_workspace_task",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "workspace_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "panel": {
+                  "$ref": "#/schemas/request/$defs/Panel"
+                },
+                "type": {
+                  "const": "create_panel",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "panel_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "rename_panel",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "panel_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "set_panel_kind",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id",
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "panel_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "delete_panel",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "panel_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "regroup_panel",
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id",
+                "workspace_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "binding": {
+                  "$ref": "#/schemas/request/$defs/Binding"
+                },
+                "panel_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "rebind_panel",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id",
+                "binding"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "panel_id": {
+                  "type": "string"
+                },
+                "size_profile": {
+                  "$ref": "#/schemas/request/$defs/SizeProfile"
+                },
+                "type": {
+                  "const": "set_panel_size_profile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panel_id",
+                "size_profile"
+              ],
+              "type": "object"
+            }
+          ]
         },
         "CommandInvokeParams": {
           "properties": {
@@ -3481,6 +4146,38 @@
           },
           "type": "object"
         },
+        "Panel": {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/schemas/request/$defs/Binding"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "size_profile": {
+              "$ref": "#/schemas/request/$defs/SizeProfile"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "workspace_id",
+            "title",
+            "kind",
+            "binding",
+            "size_profile"
+          ],
+          "type": "object"
+        },
         "PingParams": {
           "type": "object"
         },
@@ -3907,6 +4604,22 @@
           ],
           "type": "object"
         },
+        "Project": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -3959,6 +4672,52 @@
           },
           "type": "object"
         },
+        "SizeProfile": {
+          "additionalProperties": false,
+          "description": "Relative layout preference, never terminal cells or native pixel geometry.",
+          "properties": {
+            "growth_weight": {
+              "format": "double",
+              "type": "number"
+            },
+            "min_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "preferred_aspect_ratio": {
+              "$ref": "#/schemas/request/$defs/AspectRatio"
+            },
+            "preferred_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "preferred_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "min_width",
+            "min_height",
+            "preferred_width",
+            "preferred_height",
+            "growth_weight",
+            "preferred_aspect_ratio"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -3968,6 +4727,18 @@
         },
         "Subscription": {
           "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "teaser.organization.updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -4423,6 +5194,22 @@
           ],
           "type": "object"
         },
+        "TaskReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "id"
+          ],
+          "type": "object"
+        },
         "ToastHerdrPosition": {
           "enum": [
             "top-left",
@@ -4431,6 +5218,36 @@
             "bottom-right"
           ],
           "type": "string"
+        },
+        "Workspace": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "task": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/TaskReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "project_id",
+            "name"
+          ],
+          "type": "object"
         },
         "WorkspaceCloseParams": {
           "properties": {
@@ -4747,6 +5564,38 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "teaser.organization.snapshot",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "teaser.organization.apply",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/Apply"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "method": {
@@ -6849,6 +7698,92 @@
           ],
           "type": "string"
         },
+        "AspectRatio": {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "format": "double",
+              "type": "number"
+            },
+            "minimum": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        "Binding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "unbound",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "terminal",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "bundle_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "app",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "bundle_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "document_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notes",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "document_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -6867,6 +7802,22 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "snapshot": {
+                  "$ref": "#/schemas/success_response/$defs/Snapshot"
+                },
+                "type": {
+                  "const": "teaser_organization_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "snapshot"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -7529,6 +8480,7 @@
         },
         "EventKind": {
           "enum": [
+            "teaser.organization.updated",
             "workspace_created",
             "workspace_updated",
             "workspace_metadata_updated",
@@ -8650,6 +9602,38 @@
           ],
           "type": "object"
         },
+        "Panel": {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/schemas/success_response/$defs/Binding"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "size_profile": {
+              "$ref": "#/schemas/success_response/$defs/SizeProfile"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "workspace_id",
+            "title",
+            "kind",
+            "binding",
+            "size_profile"
+          ],
+          "type": "object"
+        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -9216,6 +10200,22 @@
             }
           ]
         },
+        "Project": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -9234,6 +10234,22 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "snapshot": {
+                  "$ref": "#/schemas/success_response/$defs/Snapshot"
+                },
+                "type": {
+                  "const": "teaser_organization_snapshot",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "snapshot"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "capabilities": {
@@ -10691,6 +11707,87 @@
           ],
           "type": "object"
         },
+        "SizeProfile": {
+          "additionalProperties": false,
+          "description": "Relative layout preference, never terminal cells or native pixel geometry.",
+          "properties": {
+            "growth_weight": {
+              "format": "double",
+              "type": "number"
+            },
+            "min_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "preferred_aspect_ratio": {
+              "$ref": "#/schemas/success_response/$defs/AspectRatio"
+            },
+            "preferred_height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "preferred_width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "min_width",
+            "min_height",
+            "preferred_width",
+            "preferred_height",
+            "growth_weight",
+            "preferred_aspect_ratio"
+          ],
+          "type": "object"
+        },
+        "Snapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "panels": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Panel"
+              },
+              "type": "array"
+            },
+            "projects": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Project"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workspaces": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Workspace"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "revision",
+            "projects",
+            "workspaces",
+            "panels"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -10734,6 +11831,52 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TaskReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "id"
+          ],
+          "type": "object"
+        },
+        "Workspace": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "task": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/TaskReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "project_id",
+            "name"
           ],
           "type": "object"
         },

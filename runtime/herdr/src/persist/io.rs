@@ -192,6 +192,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            teaser_organization: teaser_core::Snapshot::default(),
         }
     }
 
@@ -210,6 +211,22 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn organization_persists_through_existing_atomic_session_writer() {
+        let path: PathBuf = temp_session_path("teaser-organization");
+        let mut snapshot: SessionSnapshot = empty_snapshot();
+        snapshot.teaser_organization = serde_json::from_str(include_str!(
+            "../../../../crates/teaser-core/tests/fixtures/organization.json"
+        ))
+        .unwrap();
+        save_to_path(&path, &snapshot).unwrap();
+        let restored: SessionSnapshot =
+            parse_snapshot(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(restored.teaser_organization, snapshot.teaser_organization);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
     }
 
     #[test]

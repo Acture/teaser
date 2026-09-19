@@ -9,22 +9,27 @@ and the native macOS App. `runtime/upstream.toml` records the imported release.
 The baseline contains:
 
 - `runtime/herdr`: an editable full-history subtree, initially unchanged from
-  Herdr v0.9.1. Root Cargo builds it with its vendored PTY patch.
-- `app/macos`: the retained Swift/AppKit implementation and eight headless test
-  harnesses. It is not yet a client of the imported server.
+  Herdr v0.9.1. Root Cargo builds it with its vendored PTY patch. Its JSON API
+  now applies Teaser organization commands and persists the shared graph.
+- `crates/teaser-core`: pure typed identities, membership, task references,
+  content-neutral bindings, size profiles, and atomic revisioned transitions.
+- `app/macos`: the retained Swift/AppKit implementation, explicit JSON client,
+  and nine headless test harnesses. The client projects the server graph into
+  native tiling; interactive terminal rendering is not connected yet.
 - `prototypes/attachment-runtime`: the previous self-built PTY runtime, outside
   the active workspace. Its protocol and native Ghostty experiment are preserved
   as reference/test material, not as another production session authority.
 
-The import does not implement shared organization, native multi-canvas fullscreen,
-task providers, or dependable external-window adoption. No GUI acceptance follows
-from an import or a headless check.
+Shared organization is separate from inherited terminal workspace/tab containers;
+the TUI has not yet been projected onto it. Native multi-canvas fullscreen, task
+providers, and dependable external-window adoption remain implementation work.
+No GUI acceptance follows from an import or a headless check.
 
 ## Target responsibility boundaries
 
 ```text
-Shared organization core (planned)
-  Project / Workspace / TaskRef / Panel / placement intent / commands
+Shared organization core
+  Project / Workspace / TaskRef / Panel / size profiles / commands
                          |
 Herdr-derived server: authoritative state, sessions, persistence, events
                          |
@@ -66,8 +71,44 @@ resize one PTY against each other. Viewport and focus remain client-local.
 
 ## Native App and external windows
 
-Reuse the existing native implementation. Replace its single-canvas and
-display/Workspace/Panel hierarchy at the model boundary as it becomes a client.
+The JSON client reuses the existing native implementation. Its single-canvas and
+display/Workspace/Panel hierarchy still needs the planned multi-canvas projection.
+
+Connection and organization controls accept an explicit JSON socket path. They
+can create, rename, delete, regroup, change kind, and rebind through server
+commands. Only committed snapshots change the logical projection. Empty
+Workspaces remain in the controls; the current tiler needs at least one Panel.
+Pixel geometry and virtual focus stay local. Startup/connect do not activate the
+stage or request Accessibility; Stage and Adopt remain separate user gestures.
+
+Within a connection, unchanged bindings retain local window leases. Removed or
+rebound Panels release them. Connection switches stop/release before accepting
+the new graph, and Stop/Release stays available offline. Native terminal bindings
+are explicitly labelled metadata-only; they do not activate a terminal renderer.
+
+Splitting first creates the logical Panel at the server; local placement and
+adoption intent only proceeds after confirmation on the same connection. An
+unbound target is rebound to an App provider before installing its exact lease.
+An App-bound target requires a matching bundle; terminal/Notes and other App
+bindings require explicit rebind. Cross-provider center swaps are unavailable in
+this slice rather than changing bindings in native state alone.
+
+The old local organization reset, custom kind-definition registry editor, and
+organization undo are disabled in shared mode. Custom kind strings can be edited
+through server commands; the shared profile data is not a finished kind-template
+registry. Local focus, divider changes, and presentation still use native rules.
+The adapter validates the full wire profile and maps minima, aspect range and
+growth weight into the retained solver. Profile name and preferred dimensions
+are retained in the authoritative snapshot, not additional native solver inputs.
+
+The server has no durable instance identity in this slice. Each connection gets
+a fresh local scope, even at the same socket path. Notes text is keyed by scope
+and byte-exact UTF-8 document reference, without Unicode normalization; local
+layout preferences and Notes document records are archived beneath
+`~/Library/Application Support/Teaser/connection-scopes`. Reconnect does not
+automatically restore another scope's content or placement. The controls expose
+the archive directory for recovery and report write failures. Legacy
+`presentation.json` is neither overwritten nor silently imported.
 
 The target is one `Teaser.app`, several CanvasWindows, and macOS native
 green-button fullscreen per window. First launch targets an empty canvas; saved
@@ -113,9 +154,17 @@ organization operations must be typed server-visible commands, not TUI-only side
 effects. Preserve frozen endpoint contracts or negotiate a new capability; never
 silently reinterpret published IDs or wire fields.
 
-Persist membership, task references, binding hints, and layout intent at the
-server boundary. Native presentation preferences are not task/session truth.
-Reject stale commands; expose unavailable providers and reconnect state.
+Persist membership, task references, binding hints, and size preferences at the
+server boundary. Shared placement intent remains planned. Native presentation
+preferences are not task/session truth. The JSON organization extension rejects
+stale commands and publishes full revisioned snapshots; see `docs/ipc.md`.
+
+Successful writes confirm an in-memory authoritative commit; disk writes use the
+existing debounced atomic session writer. Organization-only sessions are retained.
+On startup and handoff, terminal bindings are cleared rather than guessing whether
+an old public pane ID still identifies the same process. App bindings are provider
+hints, not live window identities. Neither removing a Panel nor clearing a binding
+terminates its provider.
 
 Keep the runtime lifecycle: client detach need not terminate sessions. Restoring
 layout or resuming an agent conversation after server restart does not mean the

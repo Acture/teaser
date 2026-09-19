@@ -6,12 +6,20 @@ complete project contexts stay visible together instead of disappearing behind
 mutually exclusive tabs. A real terminal UI and a native App are two clients of
 the same intended organization and runtime, not two separate products.
 
+Teaser builds on the server, TUI, terminal, and agent integration work of the
+[Herdr contributors](https://github.com/herdrdev/herdr/graphs/contributors).
+Our imported baseline is [Herdr v0.9.1](https://github.com/herdrdev/herdr/releases/tag/v0.9.1);
+the exact revision is recorded in [upstream provenance](runtime/upstream.toml).
+Teaser is an independent fork, not an official or endorsed Herdr distribution.
+
 > Current state: the Herdr v0.9.1 server/TUI source and full history are imported.
-> The existing AppKit/SwiftUI canvas and window-adoption implementation are
-> preserved, but the App is **not yet connected to the Herdr server**. Shared
-> organization, task providers, multiple native-fullscreen canvases, and dependable
-> live-window adoption remain implementation work. The import is not a completed
-> end-to-end demo or a passing runtime build.
+> The fork now has a pure organization core and revisioned JSON commands/events.
+> The native App connects to an explicitly selected JSON socket and projects
+> server-owned Workspaces/Panels into its existing tiling and Notes interface.
+> Interactive native terminal rendering, TUI organization projection, task
+> providers, multiple native-fullscreen canvases, and dependable live-window
+> adoption remain implementation work. Focused headless tests are not a completed
+> end-to-end demo or a full build gate.
 
 ## Product model
 
@@ -43,6 +51,7 @@ geometry tests.
 | --- | --- |
 | `runtime/herdr` | Editable Herdr server/TUI fork, with upstream source and tests |
 | `runtime/upstream.toml` | Exact imported baseline and provenance |
+| `crates/teaser-core` | Shared organization model and atomic transitions |
 | `app/macos` and `Package.swift` | Native App, adapters, and headless harnesses |
 | `prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
 | `vendor/ghostty` and `patches/ghostty` | Retained native attachment experiment |
@@ -109,7 +118,7 @@ fish scripts/app.fish --build-only
 ```
 
 `--build-only` produces `target/macos/Teaser.app` without launching it and requires
-`TEASER_CODESIGN_IDENTITY`. The eight Swift suites are executable harnesses, not
+`TEASER_CODESIGN_IDENTITY`. The nine Swift suites are executable harnesses, not
 `swift test` targets. Headless tests must not create windows, install global
 monitors, request Accessibility, or move user windows.
 
@@ -126,6 +135,53 @@ checks; see [dependency/probe instructions](vendor/README.md). First builds can
 download and compile substantial dependencies. A manifest/format check is not a
 completed build.
 
+### Isolated native integration session
+
+Use a disposable development server, not an installed Herdr session. Build the
+runtime and App explicitly; these commands may take time:
+
+```fish
+cargo build --locked -p herdr
+direnv exec . fish scripts/app.fish --build-only
+```
+
+In one terminal, start the debug server with isolated configuration, state and
+sockets. Its debug build disables inherited background update checks. The
+directory is deliberately retained when the process exits:
+
+```fish
+set -l teaser_run (mktemp -d /tmp/teaser-herdr.XXXXXX)
+printf 'JSON socket: %s/control.sock\n' "$teaser_run"
+env -u HERDR_SESSION -u HERDR_CONFIG_PATH -u HERDR_CLIENT_SOCKET_PATH \
+    -u HERDR_STARTUP_CWD \
+    XDG_CONFIG_HOME="$teaser_run/config" \
+    XDG_STATE_HOME="$teaser_run/state" \
+    HERDR_SOCKET_PATH="$teaser_run/control.sock" \
+    ./target/debug/herdr server
+```
+
+Use the printed JSON socket path in the native connection controls, not the
+adjacent `control-client.sock` binary endpoint. Starting this server does not
+establish GUI or external-window acceptance. Do not substitute an upstream
+release binary: it lacks the Teaser organization methods.
+
+Open the built `Teaser.app`, enter that path in **Connection & Organization**,
+and choose **Connect / Reconnect**. **Create first context** submits a Project,
+Workspace and Panel together. The same controls expose rename, regroup, kind,
+binding and deletion; server rejections are visible. Empty Workspaces appear in
+the controls and enter tiling after gaining a Panel.
+
+Ctrl-D and drag-edge splits create the new Panel at the server before changing
+its local placement. The previous local reset, definition-registry editor, and
+organization undo cannot write around the server; these remain unavailable in
+shared mode. Custom kind strings are editable in the organization controls.
+
+Stage/adoption are separate explicit actions. **Stop / Release** remains usable
+offline. Terminal bindings identify real runtime panes but do not render a
+terminal. Notes text is local to this Mac and connection scope; reconnect starts
+a fresh scope. **Reveal local Notes / layout archives** exposes earlier data for
+recovery. The old `presentation.json` is left intact, not silently migrated.
+
 ## Fork maintenance and licensing
 
 Follow the explicit subtree update procedure in
@@ -137,3 +193,9 @@ Teaser-owned code retains [AGPL-3.0-or-later](LICENSE). Inherited Herdr code ret
 licenses. Preserve [NOTICE](NOTICE), [third-party notices](THIRD_PARTY_NOTICES.md),
 and the [trademark policy](TRADEMARKS.md). Teaser is independent of Herdr; the
 import does not imply endorsement or relicense inherited code.
+
+Apache-2.0 permits forks, modifications, and redistribution. When redistributing
+inherited code, include its license, retain applicable upstream notices, and
+mark modified files as changed. The license does not grant trademark rights or
+permission to imply upstream endorsement; see
+[Apache-2.0 sections 4 and 6](https://www.apache.org/licenses/LICENSE-2.0).

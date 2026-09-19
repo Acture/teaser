@@ -384,6 +384,8 @@ fn handle_request(
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
+        Method::TeaserOrganizationSnapshot(_) => "teaser.organization.snapshot",
+        Method::TeaserOrganizationApply(_) => "teaser.organization.apply",
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
         Method::ServerLiveHandoff(_) => "server.live_handoff",

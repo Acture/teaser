@@ -133,6 +133,14 @@ repos:
         stages: [pre-push]
 
       # SwiftPM does not assemble an .app bundle, so this stays a script.
+      - id: swift-test-herdr
+        name: TeaserHerdrTests
+        entry: swift run TeaserHerdrTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^crates/teaser-core/|^runtime/herdr/src/api/schema|^runtime/herdr/docs/next/api/herdr-api\.schema\.json$|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
       - id: teaser-app-bundle
         name: Teaser.app builds
         entry: fish scripts/app.fish --build-only

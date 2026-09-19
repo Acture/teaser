@@ -54,12 +54,13 @@ explicit action to an exact window; Teaser does not synthesize background input.
 
 ## Runtime and clients
 
-**Core**: The planned shared library of identities, membership, task associations,
-layout intent, commands, and transitions. It must not depend on AppKit, SwiftUI,
-Ratatui rectangles, PTYs, or network clients.
+**Core**: The shared library of identities, membership, task associations,
+commands, and transitions in `crates/teaser-core`. Its current model includes
+Panel size preferences; shared placement intent remains planned. It does not
+depend on AppKit, SwiftUI, Ratatui rectangles, PTYs, or network clients.
 
-**Server**: The Herdr-derived authoritative session runtime. It will apply core
-commands and publish snapshots/events. Sharing code does not justify independent
+**Server**: The Herdr-derived authoritative session runtime. It applies core
+commands and publishes snapshots/events. Sharing code does not justify independent
 mutable organization stores in App and TUI.
 
 **Session**: Interactive work owned by the server, separate from Panel placement.

@@ -14,6 +14,8 @@ pub(super) const SNAPSHOT_VERSION: u32 = 3;
 /// Serializable snapshot of the entire herdr session.
 #[derive(Serialize, Deserialize)]
 pub struct SessionSnapshot {
+    #[serde(default)]
+    pub teaser_organization: teaser_core::Snapshot,
     /// Format version — used to detect incompatible changes.
     #[serde(default)]
     pub version: u32,
@@ -171,6 +173,8 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
 #[derive(Deserialize)]
 struct RawSessionSnapshot {
     #[serde(default)]
+    teaser_organization: teaser_core::Snapshot,
+    #[serde(default)]
     version: u32,
     #[serde(default)]
     workspaces: Vec<serde_json::Value>,
@@ -187,7 +191,11 @@ struct RawSessionSnapshot {
 }
 
 fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
+    raw.teaser_organization
+        .validate()
+        .map_err(|error| error.code().to_string())?;
     Ok(SessionSnapshot {
+        teaser_organization: raw.teaser_organization,
         version: raw.version,
         workspaces: raw
             .workspaces
@@ -200,6 +208,29 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
     })
+}
+
+#[cfg(test)]
+mod organization_tests {
+    use super::*;
+
+    #[test]
+    fn organization_extension_migrates_old_sessions_and_round_trips_new_sessions() {
+        let old: SessionSnapshot = parse_snapshot(r#"{"version":3,"workspaces":[]}"#).unwrap();
+        assert_eq!(old.teaser_organization, teaser_core::Snapshot::default());
+        let organization: teaser_core::Snapshot = serde_json::from_str(include_str!(
+            "../../../../crates/teaser-core/tests/fixtures/organization.json"
+        ))
+        .unwrap();
+        let input: String =
+            serde_json::json!({"version":3,"workspaces":[],"teaser_organization":organization})
+                .to_string();
+        let restored: SessionSnapshot = parse_snapshot(&input).unwrap();
+        assert_eq!(restored.teaser_organization, organization);
+        let mut invalid: serde_json::Value = serde_json::from_str(&input).unwrap();
+        invalid["teaser_organization"]["panels"][0]["workspace_id"] = "missing".into();
+        assert!(parse_snapshot(&invalid.to_string()).is_err());
+    }
 }
 
 fn migrate_workspace(raw: serde_json::Value) -> Result<WorkspaceSnapshot, String> {
@@ -260,6 +291,7 @@ pub fn capture(
     selected: usize,
 ) -> SessionSnapshot {
     SessionSnapshot {
+        teaser_organization: teaser_core::Snapshot::default(),
         version: SNAPSHOT_VERSION,
         workspaces: workspaces
             .iter()
@@ -603,6 +635,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            teaser_organization: teaser_core::Snapshot::default(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
@@ -690,6 +723,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            teaser_organization: teaser_core::Snapshot::default(),
             version: SNAPSHOT_VERSION,
         };
 
@@ -1257,6 +1291,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            teaser_organization: teaser_core::Snapshot::default(),
         };
 
         let json = serde_json::to_string(&snap).unwrap();
