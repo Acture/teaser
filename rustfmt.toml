@@ -1,0 +1,2 @@
+# Match the inherited Herdr sources, independent of personal rustfmt settings.
+hard_tabs = false

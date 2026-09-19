@@ -1,184 +1,56 @@
-# Teaser roadmap
+# Teaser delivery outcomes
 
-This roadmap is ordered by risk and usable outcomes, not by visual feature count.
-A milestone starts only after the previous milestone's exit gates pass.
+Linear owns active milestones, issues, dependencies, and status. This file defines
+exit contracts, not a second tracker. Work can proceed concurrently across stable
+interfaces; no separate feasibility ticket blocks implementation.
 
-## M0 — Foundation and risk retirement
+## Fork foundation
 
-Goal: prove that the selected boundaries can support Teaser without rebuilding
-Ghostty or placing orchestration on the render path.
+Establish a history-preserving Herdr server/TUI source fork and retain the native
+App. Root Cargo resolves only the selected runtime, licenses/provenance remain
+intact, and old self-built PTY code is outside the active workspace. Importing
+source does not prove compilation, client integration, or desktop acceptance.
 
-Deliverables:
+## Shared organization across clients
 
-- clean-clone native AppKit host containing a pinned `libghostty` surface and all
-  required app resources;
-- runtime tick/wakeup, main-thread/lifetime, signed-bundle, Chinese/English IME,
-  selection, clipboard, resize, and 120 Hz smoke tests;
-- minimal Ghostty semantic-range API experiment and one persisted shell block;
-- daemon-owned PTY Session with exclusive detach/reattach, bounded replay, and a
-  bounded asynchronous binary Surface data plane;
-- Swift/Rust UniFFI control-path spike with no raw terminal data crossing it;
-- Claude and Codex ACP capability smoke tests, explicitly compared with native CLI
-  mode rather than treated as equivalent;
-- immutable project-scoped Workspace and content-neutral Panel models that do not
-  assume only one Workspace can be visible, plus data-defined Task, CLI, App,
-  Agent, File, and Notes layout profiles;
-- tmux `-CC` parser plus one `teaser-bridge` pane covering arbitrary bytes, Unicode,
-  bracketed paste, mouse input, resize, flow control, and capture repair;
-- a two-level constrained slicing layout in which each display contains connected
-  rectangular Workspaces and each Workspace contains unequal Panels;
-- generic window adoption through Accessibility and Core Graphics, with
-  window-server identity, drag-driven selection, transactional placement, Undo,
-  and safe same-window release; a window hidden by Stage Manager or sitting on
-  another Space stays adoptable, because its identity survives being hidden.
+Extract pure Project/Workspace/TaskRef/Panel organization and layout intent. The
+server applies commands and publishes authoritative snapshots/events. TUI and
+App refer to the same IDs and relationships, with local viewport and focus.
 
-Exit gates:
+Exit: either client can create/move/regroup a Panel and the other observes the
+committed result without recreating its session. Disconnect/reconnect converges;
+two clients do not fight over PTY size. Inherited terminal behavior stays usable.
 
-- benchmark methodology is locked for the same Ghostty revision, configuration,
-  hardware, workload, and refresh rate;
-- direct-terminal behavior targets no more than 10% regression from the same Ghostty
-  revision; any revised SLO is measurement-backed and recorded before v0.1;
-- semantic blocks require only a narrow embedding/query patch, not a new terminal
-  model, reflow implementation, or renderer;
-- terminal hot paths contain no UniFFI, JSON, or SQLite calls;
-- Ghostty callbacks perform no socket I/O, blocking waits, or AppKit work; queue
-  overflow and post-reconnect input uncertainty are explicit;
-- one real child keeps the same PID across Surface detach/reattach, while a second
-  live Surface is rejected and replay gaps are explicit;
-- reconnect resumes from committed output without replaying input, and teardown
-  completes only after socket workers and Surface feeds are quiescent;
-- explicit Session termination reaps a stubborn descendant in the verified owning
-  process group before the attachment closes;
-- two independent Workspace models retain distinct Panel layouts across parallel,
-  focused, switched, and restored presentation states;
-- Virtual Focus can navigate, split, and resize without changing macOS Input Focus,
-  while an explicit action transfers input to one exact adopted window;
-- a standard window from an arbitrary supported application can be dragged into a
-  Panel without title, repository-path, or application-specific lookup;
-- the desktop-stage showcase composes six unequal Workspace regions from real
-  provider windows plus Teaser-owned Notes, without fixture-rendered copies of
-  third-party interfaces;
-- all spikes have repeatable automated or scripted checks.
+## Task-driven spatial Demo
 
-Failure policy: stop and revise the foundation. Do not compensate for a failed gate
-by adding a second terminal renderer or an unbounded Ghostty fork.
+Demo is a milestone, not another duplicate feature ticket. Video work follows an
+operable product path.
 
-## v0.1 — Parallel project workspaces
+Exit:
 
-Goal: make multiple independent project Workspaces usable on one or more displays
-without forcing them into mutually exclusive tabs.
+- One `Teaser.app` has multiple independent native-fullscreen canvases.
+- Workspace membership spans canvases; a canvas can contain several Workspaces.
+  Unequal Panels tile with group contours and adjustable adjacency.
+- A task-provider reference leads to its existing terminal/agent/app context.
+  App and TUI use the same task associations and organization authority.
+- Real external apps can be selected, adopted, resized, used with native input,
+  and safely released; fake provider UIs are not substitutes.
+- Closing one canvas is local. Restart, display changes, and reconnect preserve
+  logical context without guessing replacement external windows.
+- Native desktop behavior is explicitly exercised in an authorized environment;
+  unrun scenarios are not claimed as passed.
 
-Deliverables:
+## Distribution and daily use
 
-- per-display Workspace presentation supporting connected unequal tiling,
-  temporary focus, whole-Workspace switching, and explicit display affinity;
-- one persistent `PanelTree` per Workspace with split, close, move, resize, virtual
-  focus, zoom, command palette, and restoration;
-- content-neutral Panels with data-defined kinds, custom layout profiles, external
-  window bindings, and initial project details and direct PTY content;
-- native agent CLIs and terminal-grid Neovim inside terminal Panels;
-- Quick Look/Image I/O image preview;
-- generic drag-to-adopt external windows, one-time permission education, virtual
-  focus, explicit input-focus transfer, safe release, and re-drag after restart;
-- a six-Workspace real-application showcase covering IDE, task, agent, CLI, file,
-  browser, and Teaser-owned Notes Panels;
-- `teaser`, `teaser shell`, and `teaser open` CLI flows.
+Isolate Teaser executable/config/socket/session and integration identity from an
+installed Herdr. Disable or replace upstream installers/updaters before shipping.
+Package one native App with its actual runtime notices and source obligations.
+Finish signing/notarization, recovery, resource limits, accessibility, and release
+automation under Teaser ownership. No implicit upstream release publishing.
 
-Exit gate: six unequal Workspace regions can remain visible in the showcase, and at
-least two different Projects remain interactive in parallel. Tiling, virtual focus,
-switching, display changes, and restart preserve Panel trees, requested ratios,
-Checkout bindings, and live Teaser Session identities. External bindings restore as
-empty hinted Panels and become live only after the user drags the window again.
+## Deferred
 
-## v0.2 — Semantic blocks
-
-Goal: expose structured terminal activity as Panel detail without replacing
-terminal-native drawing.
-
-Deliverables:
-
-- fish, zsh, and bash OSC 133/OSC 7 shell integration;
-- bounded SQLite BlockStore with live ranges, snapshots, retention controls, and
-  eviction handling;
-- block status, copy, jump, confirm-before-rerun, focused-Panel search, and Workspace
-  search;
-- opaque alternate-screen behavior for TUIs.
-
-Exit gate: command boundaries and copied text remain correct across wrapping,
-scrollback, resize, failed commands, prompts spanning multiple lines, and eviction.
-
-## v0.3 — Native agent sessions
-
-Goal: show structured Claude and Codex execution as Workspace Panel content without
-inheriting their terminal composers or pretending ACP covers every vendor CLI
-feature.
-
-Deliverables:
-
-- ACP protocol/capability negotiation and supervised pinned adapters;
-- `teaser agent claude` and `teaser agent codex`;
-- structured turns, plans, tool calls, approvals, diffs, images, and resources;
-- agent execution and related project details visible in separate Panels within the
-  same Workspace;
-- reusable native `InputView` for multiline input and attachments;
-- native `claude` and `codex` remain usable in TerminalSurface;
-- adapter crash isolation and transcript preservation.
-
-Exit gate: both structured sessions complete the same supported edit/review workflow
-with typed approvals and artifacts, while unsupported adapter capabilities degrade
-explicitly and native CLI mode remains available.
-
-## v0.4 — Persistent and remote sessions
-
-Goal: support durable local/remote terminal work without making tmux the UI host.
-
-Deliverables:
-
-- local tmux control-mode backend;
-- system SSH command sessions and SSH-carried tmux control mode for preconfigured
-  host-key and key/agent authentication;
-- separate bootstrap UX for password, MFA, and first-host-key prompts;
-- Mosh opaque sessions with visible capability degradation;
-- reconnect, flow control, stale-session handling, and pane-size synchronization.
-
-Exit gate: Teaser can restart and reattach tmux panes; recovered text is marked
-semantic-degraded when block lifecycle was missed; SSH loss does not misroute panes;
-Mosh roams while its owning Teaser PTY lives and never claims unsupported semantics.
-
-## v1.0 — Daily-driver release
-
-Goal: ship a supportable macOS application rather than a collection of demos.
-
-Deliverables:
-
-- crash recovery, accessibility, permissions UX, bounded history, logs, diagnostics,
-  and upgrades;
-- Developer ID signing, notarization, GitHub release artifacts, and Homebrew cask;
-- Ghostty update gates and accurate third-party notices generated from dependencies
-  actually bundled at release time;
-- user guide, contributor guide, benchmark report, and CI.
-
-Release criteria:
-
-- at least two project Workspaces can be tiled, focused, and switched without losing
-  their Panel layouts, running content, or spatial relationships;
-- Workspace Panels can present shell/Neovim, images, native agent CLIs, structured
-  ACP sessions, project details, and exact provider-owned external windows together
-  without claiming that those windows are embedded Teaser content;
-- unsupported CLIs/TUIs work through an unmodified PTY;
-- direct terminal and tmux bridge meet the recorded M0 SLOs;
-- tmux/SSH recovery and Mosh degradation behave deterministically;
-- denied permissions and crashed adapters degrade safely;
-- there are no third-party plugin APIs or accidental compatibility promises.
-
-## Explicitly deferred
-
-- native reusable Zed editor surface or Neovim remote-UI renderer;
-- Warp-style arbitrary block folding, reordering, or widget containers;
-- third-party plugins, ExtensionKit/WASM host, or stable surface SDK;
-- custom roaming daemon or replacement for Mosh/tmux;
-- Linux/Windows host;
-- external-GUI reparenting, pixel mirroring, synthetic application input, or private
-  macOS APIs beyond the window-identity declaration in `docs/architecture.md`
-  section 4.3;
-- automatic replacement-window guessing and cross-Space window movement.
+Native Windows App, custom terminal renderer, replacement task databases, GUI
+reparenting/capture proxies, and custom roaming infrastructure are not prerequisites
+for this demo. Inherited cross-platform runtime capability is not evidence of a
+completed cross-platform Teaser App.

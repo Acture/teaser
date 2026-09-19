@@ -1,596 +1,167 @@
 # Teaser architecture
 
-Status: design baseline; desktop-stage implementation in progress
+## Decision and implemented boundary
 
-Last updated: 2026-09-15
+Teaser is a product fork of Herdr: reuse its server, TUI, terminal machinery,
+agent integrations, and remote transport; add task-driven spatial organization
+and the native macOS App. `runtime/upstream.toml` records the imported release.
 
-## 1. System boundary
+The baseline contains:
 
-Teaser is a native spatial development environment, not a new shell, editor,
-browser, or agent model. Its primary unit of presentation is a complete,
-project-scoped Workspace rather than a mutually exclusive project tab. Workspaces
-can be tiled in parallel, focused, or switched as units while retaining their Panel
-layouts and running content. A Workspace is one connected rectangular region, even
-when its Panels are backed by windows owned by several applications.
+- `runtime/herdr`: an editable full-history subtree, initially unchanged from
+  Herdr v0.9.1. Root Cargo builds it with its vendored PTY patch.
+- `app/macos`: the retained Swift/AppKit implementation and eight headless test
+  harnesses. It is not yet a client of the imported server.
+- `prototypes/attachment-runtime`: the previous self-built PTY runtime, outside
+  the active workspace. Its protocol and native Ghostty experiment are preserved
+  as reference/test material, not as another production session authority.
 
-```text
-Teaser.app
-├── DesktopStageController                     AppKit shell: chrome, displays, store
-│   ├── DesktopStageOrchestrator               window-free adoption + layout core
-│   │   ├── WorkspacePresentation              display → WorkspaceTree → PanelTree
-│   │   ├── ExternalWindowService              queries, leases, permission state
-│   │   └── ManagedExternalWindow              exact provider-owned top-level window
-│   ├── NotesWindowController                  Teaser-owned Notes
-│   ├── DesktopOverlayController               passive visuals + bounded hit windows
-│   ├── DesktopStageLayoutEditorWindow         SplitView map → shared layout commands
-│   ├── DesktopStageShortcutMonitor            scoped KeyboardShortcuts subscriptions
-│   └── DesktopStageControlWindow              explicit start / stop / quit
-├── TerminalSurfaceAdapter
-│   └── pinned libghostty                      VT state + Metal + IME + selection
-├── TerminalAttachmentPump                    bounded asynchronous data plane
-│   └── AttachmentClient                       teaser.attach.v1 transport
-└── low-frequency typed control
+The import does not implement shared organization, native multi-canvas fullscreen,
+task providers, or dependable external-window adoption. No GUI acceptance follows
+from an import or a headless check.
 
-teaserd
-├── SessionRegistry                            exact Session / Surface leases
-├── PTY session workers                        child + master + replay + resize
-├── control.sock                               JSON handshake → binary attach
-├── TeaserCore                                 Rust, low-frequency UniFFI boundary
-│   ├── WorkspaceStore / BlockStore            SQLite WAL
-│   ├── ACP client                             Claude + Codex
-│   ├── tmux control parser
-│   ├── teaser-bridge                          tmux pane byte-stream helper
-│   └── CLI IPC                                per-user Unix socket
-
-teaser CLI                                     low-frequency control client
-```
-
-The host is macOS-first because AppKit already supplies the hard parts Teaser should
-not rebuild: responder routing, text input and IME, Accessibility, drag and drop,
-window lifecycle, and native view composition. A single opaque full-screen Teaser
-window cannot contain live third-party windows. The desktop stage therefore uses
-mutually non-overlapping top-level windows plus transparent overlay windows rather
-than a visual container pretending to own every Panel.
-
-## 2. Ownership and performance boundaries
-
-Swift/AppKit owns live window and view lifetime, Workspace and Panel geometry,
-presentation transitions, Virtual Focus, explicit Input Focus handoff, native
-input, clipboard, image preview, adopted-window leases, arrangement overlays, and
-Accessibility permission UX.
-
-`teaserd` owns each Teaser Session's canonical child process, PTY master, attachment
-lease, replay offsets, backend lifecycle, and eventual block state. Rust also owns
-the authoritative persistent Project, Workspace, Panel, capability, ACP, tmux, CLI
-IPC, and diagnostic state.
-
-The in-progress Swift desktop-stage slice persists a typed presentation snapshot in
-`~/Library/Application Support/Teaser` until the UniFFI-backed Workspace store
-exists. It does not persist AX object references or treat a saved application hint
-as live window identity. This is an implementation staging boundary, not a second
-long-term source of Workspace truth.
-
-Raw PTY output, keystrokes, pointer motion, IME composition, and render callbacks
-must never cross UniFFI, JSON, or SQLite. A TerminalSurface attaches to one exact
-Session through a bounded binary Unix-socket stream; JSON is used only for the
-initial handshake. Swift sends only low-frequency model commands and semantic
-events through the typed control boundary.
-
-## 3. Terminal foundation
-
-Teaser consumes the full Ghostty embedding API rather than implementing a second VT
-renderer. Upstream's full surface currently owns its PTY together with terminal
-state, renderer, input, selection, and platform surface. Teaser's architecture instead
-requires `teaserd` to own the canonical PTY. The pinned Teaser patch now proves an
-external-input/output surface mode with no `Exec`, PTY, or child state. This is a
-narrow feasibility result, not a stable upstream API. The adapter therefore pins one
-exact revision because Ghostty's header says the API is not yet general-purpose or
-stable.
-
-Initial baseline:
-
-- Ghostty tag: `v1.3.1`
-- commit: `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`
-- source location: a pinned Git submodule under `vendor/ghostty`
-- provenance and parent-owned Teaser patches: documented in `vendor/README.md`
-
-The submodule remains clean. Teaser keeps narrow Zig experiments under
-`patches/ghostty`; no workspace or agent behavior is implemented inside Ghostty.
-
-The M0 spike must prove a clean-clone build, bundled runtime resources, AppKit
-main-thread/lifetime rules, Ghostty tick/wakeup handling, IME, 120 Hz drawing, and a
-signed app bundle. It must also prove that externally supplied Session bytes can
-drive the full surface and that surface input/resize can return to `teaserd` without a
-second PTY. CP-M0.6 proves only the daemon-owned PTY and detachable binary data plane.
-If external transport or semantic blocks require redesigning Ghostty's terminal
-model, reflow, or renderer, implementation stops and the fork cost is reassessed.
-
-CP-M0.6 uses `portable-pty` 0.9.0 only to validate the macOS data-plane shape.
-CP-M0.7 verifies that its initial child is both the process-group and session
-leader, then explicitly terminates that owning group with bounded
-`SIGTERM`-to-`SIGKILL` escalation. Non-reaping exit observation keeps the PGID
-reserved while natural leader exit cleans up remaining members. The gate covers
-stubborn descendants that remain in that PGID. It does not claim to reach
-foreground or background jobs moved into other PGIDs by interactive shell job
-control.
-
-CP-M0.8 establishes the narrow Ghostty code seam for daemon-owned transport:
-an external full-surface backend has no exec, PTY, or child state; accepts
-ordered host output; and returns encoded input and resize events through C
-callbacks. The parent-owned patch touches only the embedding/backend boundary
-and includes focused Zig and ABI tests. With Metal Toolchain 17F109, the native
-Apple Silicon XCFramework builds and links. `app/macos/TeaserProbe` passes real
-AppKit/Metal draw plumbing to a live `IOSurfaceLayer`, full-screen readback,
-exact `probe\r` input forwarding, resize consistency, direct-child snapshots,
-and ordered teardown. The source-level backend tests remain the authoritative
-proof that no process or PTY state exists; the process snapshot is only
-corroborating runtime evidence. This closes CP-M0.8, but not TASK-003's broader
-clean-clone host, resources, IME, 120 Hz, and signed-bundle gates.
-
-CP-M0.9 joins the previously separate proofs through the real attachment
-protocol. A fixed, non-user-configurable `teaserd --probe-session` child owns the
-PTY while `TerminalSurfaceAdapter` forwards Ghostty output, input, and resize
-over `teaser.attach.v1`. The native probe verifies exclusive attachment, real
-PTY output readback, resize observed by the child, synchronous input, detach
-without child exit, bounded-offset offline replay, same-PID reattachment,
-Metal draw plumbing, process exit, and ordered teardown. The probe Session is
-created before `teaserd` accepts threaded IPC work, so this checkpoint does not
-claim that production interactive-shell spawning is safe. Its synchronous,
-bounded-frame Swift bridge is a feasibility harness, not the production
-asynchronous attachment pump or final paste/backpressure policy.
-
-CP-M0.10 replaces that synchronous bridge with the production-shaped
-`TerminalAttachmentPump`. Ghostty callbacks only copy and enqueue data; they
-perform no socket I/O and never wait. One reader continuously feeds ordered
-output into the Surface, while one writer preserves input/resize order. The
-outbound queue is capped at 1 MiB of input and 4,096 events. Only consecutive
-tail resize events coalesce. Overflow rejects the whole callback payload,
-discards input whose delivery is uncertain, reports that state, and reconnects
-rather than silently truncating input.
-
-The pump reconnects under one five-second monotonic deadline from the last
-output offset committed after a completed Surface feed. It never retransmits
-old input; it may resend only the latest resize. Output resumes after
-reconnection with input paused until explicit user confirmation acknowledges
-that recovery generation; a stale confirmation cannot unlock a later
-reconnect. A replay gap is a fatal desynchronization: the current Surface
-receives no later output. Normal detach stops accepting input and drains queued
-input for at most five seconds; a timeout aborts the transport and reports
-uncertain delivery. Teardown quiesces callbacks, drains or stops the pump,
-closes the socket to unblock both workers, joins them, waits for any Surface
-feed to finish, and only then frees the Surface on the main thread.
-
-The foreground daemon does not yet expose PTY creation. Before a user shell is
-wired in, the spawn path must resolve `portable-pty`'s multithreaded `pre_exec`
-risk and cross-PGID session cleanup. Working-directory selection is intentionally
-absent until the Checkout resolver can enforce it.
-
-## 4. Workspace, Panel, and desktop-stage model
-
-A Workspace is a persistent, project-scoped organization of Panels. Panels within
-that Workspace may bind to different Checkouts of the same Project, but a Workspace
-does not combine unrelated Projects. Multiple Workspaces keep unrelated project
-contexts independently available for parallel presentation.
-
-`WorkspacePresentation` is a two-level constrained slicing layout. Each display has
-one `WorkspaceTree`; each Workspace leaf owns one `PanelTree`. Both trees partition
-their parent rectangle exactly except for explicit gutters. This guarantees that a
-Workspace is one connected rectangle, Panels do not overlap, and unequal Workspace
-and Panel sizes can still fill the visible display. A Workspace has display affinity
-and does not span displays; each display in the current Space is solved independently.
-
-The persistent value model stores tree topology and user-requested split ratios.
-Minimum sizes clamp the feasible ratio without overwriting the user's requested
-ratio. Preferred aspect ranges currently contribute diagnostic quality metrics;
-growth weights are stored intent, not allocation inputs yet. Automatic aesthetic
-optimization remains planned. Manual divider movement is authoritative.
-Presentation may tile Workspaces, temporarily enlarge one, or switch complete
-Workspaces without recreating their Panel trees, content, or Session ownership.
-
-A Panel is a stable spatial identity, not a view subclass. Its data-defined
-`PanelKindDefinition` supplies a label and `LayoutProfile` containing minimum size,
-preferred aspect-ratio range, and growth weight. Initial kinds are Task, CLI, App,
-Agent, File, and Notes. Users may define more kinds and override a profile on one
-Panel; a kind does not select an application, provider, protocol, or capability.
-
-`PanelID`, a Panel binding, and `SurfaceID` are deliberately distinct. A binding is
-replaceable and may be:
-
-- Teaser-owned `PanelContent`, such as Notes, a `TerminalSurface`, structured agent
-  detail, project detail, a diff, Quick Look content, or native input;
-- one exact provider-owned external top-level window under a live
-  `ManagedExternalWindow` lease; or
-- empty, optionally retaining a provider hint for the user.
-
-Built-in Teaser content uses a closed internal enum, not a plugin API. Extensible
-Panel kinds change presentation metadata only. There is no dynamic loader, stable
-ABI, WASM host, or third-party SDK in v1. Neovim remains a normal TUI inside a
-terminal, and Notes is the only Teaser-owned content required by the real-window
-showcase.
-
-### 4.1 External-window adoption
-
-Adoption is geometry orchestration, not embedding. The provider retains ownership
-of rendering, input, accessibility, menus, tabs, process lifetime, and the top-level
-window. Teaser never reparents the window, mirrors its pixels, synthesizes its
-application input, or represents it as a Teaser Session or Surface.
-
-After macOS grants the stably signed Teaser application Accessibility access once,
-physically dragging a window into a Panel is one explicit selection action, and
-choosing a window from Teaser's adoptable-window list is the other, for a window
-that is hidden and therefore impossible to drag. During a drag, a global
-mouse monitor, button-state sampling, and front-to-back Core Graphics hit testing
-over ordinary-application windows lock one exact `(PID, window ID, AX element)`
-identity at drag start. The window server itself supplies that window ID through
-the one linked private declaration described in section 4.3, so identity never
-depends on matching frames, and windows owned by accessory processes such as
-Stage Manager's `WindowManager` are skipped rather than selected. Teaser recognizes the
-gesture only after the same window's movement correlates with pointer movement, so
-tab, file, text, and in-application drags do not become window adoptions.
-
-Selection from the adoptable-window list is the second path. It is an ordinary,
-explicitly opened window that registers no global hot key; it binds the chosen
-window into one named unoccupied Panel, never edge-splits, and never moves
-Virtual Focus while the user browses. Listing candidates requires Accessibility
-but not a running stage, because listing moves nothing.
-
-A candidate is a window with a resolvable Accessibility element. While Stage
-Manager holds an application off-stage, the window server lists that
-application's strip thumbnails and menu bars at the ordinary window layer with no
-element behind them, and it reports the thumbnail's geometry in place of the
-window's own: a 920×492 Finder window reads as 115×105. The list therefore omits
-element-less windows and takes every frame from Accessibility, not from Core
-Graphics.
-
-During a qualified drag, a nonactivating click-through overlay exposes Panel targets.
-Dropping on an empty Panel adopts it; dropping at an occupied Panel edge inserts a
-local split; dropping a managed window on another empty Panel moves its binding.
-An occupied center rejects an unmanaged window rather than silently replacing
-content. Every successful adoption is one atomic layout transaction with single-step
-Undo. On identity, feasibility, or frame verification failure, Teaser attempts
-compensation for every affected window, reports incomplete rollback, and retains
-failed restoration leases. This is best-effort orchestration, not an OS-atomic
-multi-window transaction.
-
-Only standard, unminimized, movable, resizable windows are eligible, whether or
-not they are visible at that moment. Stage Manager and other Spaces hide a window
-without destroying it: its window-server identity, its Accessibility element, and
-its geometry all remain reachable, so hiding is a reported state rather than a
-rejection. Teaser still never sends a provider window to a Space of its choosing,
-because no public macOS API does that, and it fails closed across that boundary. Multiple visible displays are
-supported. Display topology changes automatically redistribute whole Workspaces
-and rebuild display trees deterministically; they do not preserve old display
-split IDs or ratios. A Workspace never straddles displays.
-
-Launching opens Teaser's canvas, an ordinary closable window whose content
-rectangle is the layout surface: Panels are solved inside it, never across the
-desktop, so Teaser does not compete with Stage Manager, Mission Control, or
-Spaces. Opening the canvas begins adoption, after Accessibility authorization. Stop Layout and
-Control-Option-Escape immediately remove Teaser chrome and Notes before releasing
-provider leases. Switching Space stops the stage; overlays do not join every Space
-or full-screen application. The display-sized visual window always ignores mouse
-events; only bounded labels and divider handles intercept input in Arrange mode.
-
-Adoption orchestration is separated from the AppKit windows that present it.
-`DesktopStageOrchestrator` owns drag handling, drop targets, leases, layout
-transactions, and Undo without creating a window; `DesktopStageController` owns
-the chrome, display topology, permission UX, and persistence.
-`ExternalWindowService`, `ExternalWindowLease`, `ExternalWindowHandle`,
-`ExternalWindowPointerSource`, and `ExternalWindowClock` form the only
-replaceable boundary, so the default test gate drives the exact production
-orchestration with deterministic input and no user desktop. `AXUIElement` values
-never cross that boundary: a substituted handle is rejected by the Accessibility
-implementation rather than adapted, and identity checks are unchanged.
-
-The live AX identity and pre-adoption frame are ephemeral. Graceful release restores
-the original frame only while the exact window still exists and remains at the frame
-last applied by Teaser. Persistence retains layout and a non-authoritative provider
-hint, not PID, window ID, or AX references. After Teaser or the provider restarts,
-the Panel remains empty until the user drags that window again or picks it from
-the adoptable-window list; Teaser never guesses a replacement by title,
-repository path, or application name.
-
-### 4.2 Virtual and input focus
-
-`VirtualFocus` is Teaser's persistent Workspace and Panel selection for navigation,
-split, resize, focus, and arrangement commands. Moving it or changing Workspace
-presentation does not activate another application. It is drawn independently of
-the macOS key-window state.
-
-`InputFocus` is the operating system's actual keyboard destination. A direct click,
-double-click, or explicit focus action such as Control-Option-Return transfers it to the virtually
-focused Panel. For an external binding, the bridge focuses that exact AX window and
-activates only as required; it does not request that every window of the provider be
-raised. Clicking an adopted window also synchronizes Virtual Focus to its Panel.
-
-Teaser cannot deliver ordinary keyboard input to an inactive provider window without
-event injection or private behavior, so it does not attempt to virtualize Input
-Focus. Workspace enlargement and switching do not deliberately hand it to another
-Panel; macOS may still choose a new key window if the current provider closes or
-hides its own window.
-
-Control-Option-Z invokes layout Undo while Arrange is active. Command-Z is never
-registered as a Teaser command. KeyboardShortcuts 3.1.0 owns hotkey registration,
-delivery, repeat timing, and unregistration through cancellable event streams.
-The stage adapter owns binding scope and generation checks: nothing is registered
-at app launch, Stop cancels every stream, and layout Undo is additionally limited
-to Arrange. Unlike the previous passive monitors, a registered Carbon hot key
-consumes its keystroke system-wide while enabled. Every binding therefore carries
-Control-Option, and no unmodified provider key, including Escape, is bound;
-Control-Option-Space leaves Arrange. The upstream stream interface reports
-neither a failed nor a later dropped registration, so such a binding is silently
-inert. Conflicts with other applications' hot keys remain a desktop check, and
-the status menu and the canvas keep independent Stop and Quit paths. After
-first use the library keeps its process-wide Carbon handler and menu-tracking
-observers; they match no keys while nothing is registered.
-
-### 4.3 Existing-library integration
-
-Use upstream packages with small adapters first. v1 ships window control through
-public Accessibility and Core Graphics APIs with exactly one exception: the
-`TeaserPrivateAccessibility` target declares `_AXUIElementGetWindow`, which
-returns the window server's `CGWindowID` for an Accessibility element. No public
-API maps an AX window to its window ID. The public-only alternative, matching one
-process's AX window frames against its own `CGWindowList` bounds, cannot separate
-two windows of the same application that share a frame, drifts when AX and the
-window server disagree about a frame, and resolves nothing at all for a process
-that publishes no AX windows — which is how a Stage Manager thumbnail under the
-pointer became a rejected adoption. Teaser reads that ID and nothing else from private API: the call
-fails closed, there is no frame-matching fallback, and it is never a basis for
-reparenting, capture, or synthetic input. The approach — this declaration plus
-restricting candidates to `NSApplication.ActivationPolicy.regular` owners —
-follows AeroSpace (MIT, revision `39e519044725694635712c739df9ca40ae78c5d1`); no
-AeroSpace code is linked. Internal interfaces of other libraries stay limited to
-isolated, pinned probes.
-
-SplitView 3.5.3 implements nested divider gestures in an explicitly opened,
-ordinary layout-editor window. Its tree is a projection of
-`WorkspacePresentation`, not a second persistence model. A completed drag calls
-`DesktopStageOrchestrator.setDividerRatio`; the existing solver, transaction,
-readback, rollback, Undo, and save path remain authoritative. The editor rebuilds
-gesture state from committed effective ratios after each commit or rejection.
-Vertical children and fractions are reversed because SplitView is top-first,
-whereas Teaser's AppKit geometry is bottom-first. Stale callbacks are ignored.
-While a failed release retains provider leases, offline edits and editor Undo
-are disabled, and Undo history never spans Start. The desktop overlay keeps its
-own click-through divider handles with bounded hit windows, because SplitView
-lays both panes out in one SwiftUI hierarchy. SplitView does not embed external
-applications or replace the constraint solver: its fixed handle limits are editor
-affordances, and the solver clamps every commit.
-
-Swindler is **not a shipping dependency**. The compile-only probe in
-`probes/swindler-compatibility` pins revision
-`bf2c42f1db8bb1aa6c0b634d9fca3ab4bd37931d`. Against Teaser's contracts, that
-revision falls short in three ways:
-
-- identity: it exposes a window's PID publicly and its AX element only
-  internally. It has no provider window ID, so it cannot supply the identity
-  Teaser reads from `_AXUIElementGetWindow`, and its subrole filter still admits
-  non-standard windows;
-- lifecycle: initialization creates front-ordered tracker windows and subscribes
-  to every running application with retries and no per-element timeout, and there
-  is no subscription token or stop contract;
-- writes: frame writes are unordered and not compared with the request, use a
-  different coordinate origin, and observe only in the default run-loop mode.
-
-A backend built on it must create and show no windows, bound initialization and
-cancellation, remove its subscriptions, order and read back frame writes, convert
-coordinates against the primary display, observe in common run-loop modes, and
-detect a user move before same-window release. Do not match windows by title to
-avoid this work. Dated upstream evidence with file and line references lives in
-the implementation plan.
-
-Both shipping Swift dependencies are version-pinned in `Package.swift` and
-`Package.resolved`. App packaging uses SwiftPM's Xcode backend to generate
-`Bundle.main.resourceURL` lookup and puts resources and MIT notices in
-`Contents/Resources`. The native CLI backend's root-level bundle lookup does not
-satisfy a signed macOS app's resource layout. No upstream source patch is needed
-for either shipping dependency.
-
-## 5. Capability model
-
-Every session advertises a `CapabilitySet`; UI actions appear only when the backing
-session can honor them.
-
-| Tier | Integration | Guaranteed behavior |
-|---|---|---|
-| 0 | Legacy CLI/TUI | Normal PTY rendering and input |
-| 1 | Shell-aware | OSC 133 command semantics and OSC 7 cwd |
-| 2 | Adapter-assisted | ACP, tmux control mode, or application RPC |
-| 3 | Native Teaser surface | Typed actions, resources, and native presentation |
-
-Alternate-screen applications remain opaque. Teaser never infers fake blocks from a
-full-screen TUI merely because text happens to be visible.
-
-## 6. Block model
-
-A block is semantic metadata over terminal or agent activity, not an arbitrary UI
-widget container.
+## Target responsibility boundaries
 
 ```text
-Block
-├── id / session_id / source
-├── kind                             shell_command | agent_turn | tool_call
-├── cwd / command / timestamps
-├── status                           running | succeeded | failed | interrupted
-├── terminal live range              optional, ephemeral Ghostty handle
-├── durable payload                  bounded snapshot or structured ACP events
-└── artifacts                        files, images, diffs, links
+Shared organization core (planned)
+  Project / Workspace / TaskRef / Panel / placement intent / commands
+                         |
+Herdr-derived server: authoritative state, sessions, persistence, events
+                         |
+             +-----------+-----------+
+             |           |           |
+            TUI         CLI      Native App
+        cell layout   automation   CanvasWindows / native input / AX leases
 ```
 
-Terminal and agent blocks share identity, status, search, and artifact concepts, but
-do not pretend to have identical storage: terminal blocks have ephemeral Ghostty
-ranges plus plain-text snapshots; agent blocks retain structured ACP events.
+The core is a library, not another daemon. Server ownership prevents competing
+organization stores. Swift can use the shared rules through typed protocol calls;
+an FFI layer is not a prerequisite. Client snapshots are projections, not separate
+authoritative databases.
 
-Ghostty already stores OSC 133 semantic content on cells and rows. The full surface
-API does not expose enough range lifecycle information for Teaser, so M0 attempts a
-narrow API extension for semantic-zone lifecycle, opaque range handles, text reads,
-and eviction notification. Teaser assigns stable block IDs and persists completed
-payloads in SQLite at
-`~/Library/Application Support/Teaser/workspaces/<workspace-id>.sqlite`.
+Upstream currently binds Workspace to tabs and an active tab; layout depends on
+Ratatui cell rectangles/borders. These are not a finished content-neutral core.
+Extract seams incrementally with behavior tests, keeping the upstream runtime
+and TUI operational throughout.
 
-Workspace databases and snapshots use user-only permissions. Settings must expose
-history retention, maximum storage, clear-history, and disable-persistence controls;
-raw output is never retained without a bound because commands and agent events may
-contain secrets.
+## Organization and layout
 
-The first block UI supports status, copy, jump, rerun preparation, and search.
-`Rerun` restores the command into the original session/cwd input area for user
-confirmation; it never executes automatically. Missing cwd, remote sessions,
-multiline commands, and secret-like input require explicit review.
+Workspace membership is independent of placement. One Workspace can span native
+canvas windows; one canvas can display several Workspaces. Closing a canvas is
+not deleting a Workspace, terminating sessions, or releasing other canvases.
 
-Arbitrary block folding, reordering, or vertical gaps are not v1 promises because
-they require a second terminal layout engine or deep renderer changes.
+Panels have stable IDs, typed bindings, and data-defined size profiles. Task,
+CLI, App, Agent, File, and Notes are kinds, not subclasses. A move changes
+placement; explicit regroup changes membership. Neither recreates the content.
 
-Search defaults are local: `Cmd-F` searches the virtually focused Panel and
-`Cmd-Shift-F` searches the current Workspace. There is no default all-Workspaces
-search.
+Tiling fills usable space with unequal sizes and clear gaps. Same-Workspace
+adjacency is a soft preference, not a connected-rectangle constraint. Adjacent
+members share an outer fluorescent contour; disconnected fragments use the same
+color. Do not draw a giant bounding box around intervening groups.
 
-## 7. Agent sessions and input
+Share topology, constraints, ratios, and commands where meaningful. Native pixel
+geometry and TUI cell geometry remain separate projections. Terminal resize
+ownership needs explicit server arbitration: two clients must not continuously
+resize one PTY against each other. Viewport and focus remain client-local.
 
-ACP is an optional agent semantic/control plane. Teaser implements an ACP client and
-starts pinned Claude and Codex ACP adapters as supervised subprocesses. Protocol
-version and capabilities are negotiated at runtime; Teaser does not infer wire
-compatibility from a crate/package version. ACP events become blocks while vendor
-`_meta` fields are retained for lossless round-tripping.
+## Native App and external windows
 
-Structured public commands are:
+Reuse the existing native implementation. Replace its single-canvas and
+display/Workspace/Panel hierarchy at the model boundary as it becomes a client.
 
-```text
-teaser agent claude [--cwd PATH]
-teaser agent codex  [--cwd PATH]
-```
+The target is one `Teaser.app`, several CanvasWindows, and macOS native
+green-button fullscreen per window. First launch targets an empty canvas; saved
+layouts restore their own state. A borderless display-sized window is not native
+fullscreen, and six Workspaces are a density scene, not a startup preset.
 
-This mode exposes only adapter-supported capabilities and is not equivalent to the
-full vendor CLI. Existing `claude` and `codex` commands remain untouched and can
-always run in a normal TerminalSurface for complete vendor behavior.
+Provider-owned windows keep native rendering and input. The App leases exact
+PID + CGWindowID + AX identity, manages geometry, verifies writes, and compensates
+failures. Never rebind by title/path or duplicate a live window into several
+Panels. Persist provider hints, not live identities.
 
-Agent input uses the same host-owned `InputView` available to other workflows.
-It supports multiline text, native text services, file/image attachments, and typed
-approval or question interactions. The completed value is submitted to ACP as one
-operation; the agent adapter never handles per-keystroke editing.
+Virtual Focus selects layout targets without stealing OS input. Explicit input
+handoff activates the exact provider window. Local close releases local leases;
+global stop/quit releases all. Restore a provider frame only while its identity
+is valid and it remains at the frame last applied by Teaser.
 
-ACP does not replace PTY, LSP, DAP, workspace, or multiplexer protocols.
+The retained code uses public AX/CG APIs plus the isolated read-only
+`_AXUIElementGetWindow` declaration for exact identity, following AeroSpace's
+approach. SplitView and KeyboardShortcuts remain pinned native dependencies.
+Neither embeds windows or solves native fullscreen coexistence. Swindler remains
+an optional probe, not a fork-migration dependency.
 
-## 8. Multiplexing and remote sessions
+Fullscreen transitions, Spaces, permissions, and real-window coexistence remain
+native implementation work. Do not promise arbitrary reparenting, forced
+cross-Space movement, screenshots as live Panels, or synthetic background input.
 
-Teaser owns visible layout. Every Teaser-owned Session passes through `teaserd`, even
-when it has only one Surface. This means lifecycle and byte-stream multiplexing,
-not simultaneous mirroring: a Session has at most one live Surface lease.
+## Task-driven workflow
 
-The direct Session path is:
+Providers own task content/status. Teaser stores qualified task references and
+links to Workspaces, checkouts, Panels, and sessions. Selecting a task can reveal
+or arrange existing context without recreating terminals.
 
-```text
-child process ↔ PTY slave
-                 ↕
-teaserd PTY master → bounded replay / absolute offsets
-                 ↕ teaser.attach.v1
-TerminalSurfaceAdapter ↔ pinned libghostty external transport gate
-```
+Provider integration belongs behind a shared server-side interface. App and TUI
+render the same structured data. A native Linear/Notion window does not make a
+task readable in TUI: use provider data or an honest link/unavailable state. A
+cache is not another execution authority. Notes can remain Teaser-owned content.
 
-tmux remains a future persistence backend through documented control mode. Its
-helper must sit behind the same Session abstraction and report `SIGWINCH`, arbitrary
-bytes, backpressure, `%pause/%continue`, and `capture-pane` repair without sending
-terminal bytes through UniFFI.
+## Protocol and persistence
 
-Remote modes are intentionally distinct:
+Start from Herdr's JSON control/event API and negotiated client endpoint. Do not
+assume its private binary attachment protocol is stable across builds. Shared
+organization operations must be typed server-visible commands, not TUI-only side
+effects. Preserve frozen endpoint contracts or negotiate a new capability; never
+silently reinterpret published IDs or wire fields.
 
-- `ssh_command`: system `ssh` runs inside a normal terminal surface;
-- `ssh_tmux_control`: system `ssh` transports tmux control mode to TeaserCore;
-- `mosh_opaque`: `mosh` runs inside a normal terminal surface.
+Persist membership, task references, binding hints, and layout intent at the
+server boundary. Native presentation preferences are not task/session truth.
+Reject stale commands; expose unavailable providers and reconnect state.
 
-SSH control mode initially supports preconfigured host keys and key/agent
-authentication. Password, MFA, and first-host-key prompts require a separate
-bootstrap UI so they cannot corrupt the control stream.
+Keep the runtime lifecycle: client detach need not terminate sessions. Restoring
+layout or resuming an agent conversation after server restart does not mean the
+original PTY survived. See `docs/ipc.md`.
 
-If Teaser disconnects from tmux, `capture-pane` can restore visible text but cannot
-reconstruct missed OSC 133 lifecycles or exit status. Recovered text is marked
-semantic-degraded rather than converted into authoritative historical blocks. Teaser
-also supplies its own UI for tmux modes that control mode does not render.
+## Build and distribution boundary
 
-Mosh synchronizes terminal state rather than providing a transparent byte stream,
-so Teaser does not carry tmux control semantics through it. Mosh handles network
-roaming only while the owning `teaserd` PTY remains alive; a daemon crash/restart
-terminates that Mosh session. Running `tmux attach` inside Mosh remains usable but
-opaque.
+Root Cargo owns the active workspace and lockfile. Its patch section repeats the
+nested portable-pty patch because Cargo ignores non-root patches. The nested
+lockfile records upstream, not another authoritative Teaser resolution. Rust
+1.96.1 and Zig 0.16.0 match the imported baseline; the build script compiles
+vendored libghostty-vt. No installed Herdr binary is a build dependency.
 
-## 9. CLI and persistence
+The inherited package/binary remains `herdr`. Public `teaser` / `teaserd` names,
+config/socket/session isolation, integration launchers, and disabling/replacing
+upstream update endpoints are a coordinated follow-up, not a blind string
+replacement. Until then, do not install or launch against personal Herdr state.
+The App does not yet bundle the runtime.
 
-The following CLI and backend-history behavior is a v1 target, not implemented by
-the desktop-stage prototype. Current persistence contains presentation and Notes
-only, with no live external-window identities.
+Upstream workflows, installer payloads, maintainer metadata, and release scripts
+stay inside the subtree. They are not Teaser release automation. Do not activate
+them or upload to upstream repositories. Preserve inherited Apache-2.0 and vendor
+licenses; Teaser-owned code retains its existing license. Packaging must inventory
+notices for the actual artifacts shipped.
 
-The planned Rust `teaser` CLI connects to
-`~/Library/Application Support/Teaser/runtime/control.sock`. The app creates the
-parent directory with user-only access and the socket with mode `0600`. If the
-socket is absent, the CLI launches `Teaser.app`, waits for readiness with a bounded
-retry, and sends a versioned request.
+## Upstream maintenance
 
-Planned v1 commands:
+The initial subtree commit has both the pre-fork Teaser commit and the pinned
+Herdr release as parents. Source history is preserved without rewriting the
+published branch. The existing GitHub repository remains independent; its fork
+network badge is a separate hosting property.
 
-```text
-teaser
-teaser shell [--cwd PATH]
-teaser agent <claude|codex> [--cwd PATH]
-teaser open <PATH>
-```
+For an explicit upgrade on a clean integration branch:
 
-Workspace persistence includes display affinity, Workspace and Panel trees,
-requested split ratios, Virtual Focus, Panel kinds and profiles, Notes, bounded
-block history, resources, and Teaser backend identity. An external-window binding
-persists only an empty-slot provider hint and must be re-established by dragging the
-window again. Direct PTYs survive Surface or GUI disconnection while their owning
-`teaserd` process remains alive, but cannot survive daemon termination and restore
-as terminated placeholders. tmux-backed sessions reconnect to surviving pane IDs,
-with the semantic-degraded recovery rule above.
+1. Add remote `upstream` for `https://github.com/herdrdev/herdr.git` if absent.
+2. Fetch the reviewed release without global prune/submodule side effects:
+   `git -c fetch.prune=false -c fetch.pruneTags=false fetch --no-recurse-submodules --no-tags upstream refs/tags/RELEASE:refs/tags/herdr/RELEASE`.
+3. Review the diff and run
+   `git subtree merge --prefix=runtime/herdr herdr/RELEASE` without squash.
+4. Update `runtime/upstream.toml`, root toolchain/config/patches, and root lockfile
+   deliberately. Review protocol, persistence, and vendor changes. Do not
+   overwrite Teaser modifications by copying an upstream directory over them.
+5. Run runtime checks and affected native headless harnesses. Live desktop checks
+   stay separate and explicitly authorized. Publish only to Teaser's own branch;
+   upstream contribution is a separate action.
 
-## 10. Distribution and maintenance
-
-Teaser targets Apple Silicon macOS and direct Developer ID distribution.
-Accessibility window management is incompatible with the App Sandbox, so Mac App
-Store delivery is out of scope. A stable signature lets macOS retain one Teaser
-Accessibility decision; Teaser does not maintain a per-application authorization
-list. v1 distribution is a notarized release archive plus Homebrew cask.
-
-Ghostty updates are explicit dependency upgrades: change the pinned commit, rebuild
-the semantic patch, run compile/integration/performance gates, and record upstream
-API changes. Teaser never follows Ghostty `main` implicitly.
-
-M0 first locks a benchmark methodology using the same Ghostty revision, config,
-hardware, workload, and display refresh rate. The initial design targets are at most
-10% direct-terminal regression and 20% tmux-bridge regression; any revised release
-SLO must be recorded with measurements and rationale before later milestones begin.
-
-## 11. Fixed decisions
-
-| Area | Decision |
-|---|---|
-| License | AGPL-3.0-or-later plus separate trademark policy |
-| Host | AppKit/SwiftUI with Rust core |
-| Desktop stage | Provider-owned top-level windows plus Teaser-owned windows and overlays |
-| Workspace | One connected rectangle; multiple Workspaces may tile, focus, or switch |
-| Panel | Stable region; identity is separate from kind, binding, and Surface |
-| Layout | Per-display WorkspaceTree containing one PanelTree per Workspace |
-| Focus | Virtual Focus is independent from explicit macOS Input Focus |
-| Terminal | Full pinned `libghostty`, isolated behind one adapter |
-| External apps | Exact window leases through AX and CG APIs, whether or not the window is visible; one private declaration supplies the window ID (§4.3) |
-| Editor | Neovim in terminal or an adopted provider-owned editor window |
-| Agent | Native CLI for completeness; ACP for structured supported capabilities |
-| Input | Reusable native `NSTextView`-based input surface |
-| Blocks | OSC 133/ACP semantics plus bounded durable BlockStore |
-| Multiplexer | Teaser layout with tmux control-mode persistence |
-| Remote | system SSH, remote tmux control mode, opaque Mosh |
-| Plugins | none in v1; internal seams have no compatibility guarantee |
-| Unsupported apps | always usable through normal PTY behavior |
-
-## 12. Primary references
-
-- [Ghostty full embedding header](https://github.com/ghostty-org/ghostty/blob/main/include/ghostty.h)
-- [Ghostty VT screen semantics](https://github.com/ghostty-org/ghostty/blob/main/include/ghostty/vt/screen.h)
-- [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview)
-- [tmux control mode](https://github.com/tmux/tmux/wiki/Control-Mode)
-- [Mosh technical description](https://mosh.org/#techinfo)
-- [UniFFI user guide](https://mozilla.github.io/uniffi-rs/latest/)
-- [macOS AXUIElement API](https://developer.apple.com/documentation/applicationservices/axuielement_h)
-- [AppKit global event monitoring](https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents%28matching%3Ahandler%3A%29)
-- [Core Graphics window list](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo%28_%3A_%3A%29)
+`RELEASE` means a chosen upstream tag, not a literal argument. Shared-core
+extraction should minimize terminal/runtime churn so future merges stay tractable.
+Tests accompany implementation tasks, not a separate feasibility milestone.
