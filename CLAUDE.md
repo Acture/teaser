@@ -1,126 +1,98 @@
 # Repository Guidelines
 
-## Product Model and Documentation Authority
+## Product and authority
 
-Teaser is a macOS-first spatial development environment. Its core problem is
-screen presentation: tab-based ADEs hide complete project contexts behind mutually
-exclusive tabs even while work continues in parallel.
+Teaser is a macOS-first spatial development environment built as a Herdr product
+fork. Tiling is primary; TUI and native App are clients of a shared server. A
+Workspace groups Panels independently of canvas placement. Same-group adjacency
+is a preference, expressed with fluorescent outer contours, not container cards.
+Task providers retain task authority. Native input remains provider-owned.
 
-A `Workspace` is a persistent, project-scoped organization and display layer above
-Panels. Multiple Workspaces may be tiled, focused, or switched as complete units
-without rebuilding their state. A `Panel` is a content-neutral display region;
-terminal, agent, project details, diff, image, and input views are Panel content.
+One current-state source per concern:
 
-Use one current-state source per concern:
+- `README.md`: public scope and implemented boundary.
+- `CONTEXT.md`: canonical domain terminology.
+- `docs/architecture.md`: architecture and upstream maintenance.
+- `docs/ipc.md`: current protocol boundary and planned extensions.
+- `runtime/upstream.toml`: exact fork provenance.
+- `ROADMAP.md`: delivery outcomes and exit gates, not a second status tracker.
+- `plan/architecture-teaser-platform-1.md`: implementation/test contracts.
+- Linear: active tasks, dependencies, blockers, and execution status.
 
-- `README.md` defines the public product scope and motivation.
-- `CONTEXT.md` defines canonical product and domain terminology.
-- `docs/architecture.md` is the architectural source of truth.
-- `ROADMAP.md` records milestones and exit gates.
-- `plan/architecture-teaser-platform-1.md` contains the implementation and test
-  plan.
-- `docs/ipc.md` defines the current local control and attachment protocol.
+Do not add ADRs or another parallel plan. Update canonical documents and Linear
+when decisions change. Preserve `LICENSE`, `NOTICE`, and third-party licenses.
 
-Do not add ADRs or recreate `docs/adr`; decisions belong in the relevant canonical
-current-state document. Keep legal and naming changes aligned with `LICENSE`,
-`NOTICE`, and `TRADEMARKS.md`.
+## Source structure
 
-## Project Structure and Module Organization
+`runtime/herdr` is an editable, full-history subtree of the pinned upstream. Root
+Cargo builds this runtime/TUI; its vendored portable-pty patch is repeated at the
+workspace root. The root lockfile is authoritative; nested lockfiles record the
+inherited source. Never activate upstream release automation for Teaser or push
+to the upstream remote. Follow the explicit subtree update procedure.
 
-The repository contains an AppKit/SwiftUI desktop-stage prototype plus the Rust
-foundation. Real-window drag acceptance is still pending; do not infer it from
-pure geometry tests. The Rust workspace contains `crates/teaser-core` and
-`crates/teaserd`. Native application and terminal integration live under
-`app/macos/Teaser`; the native Ghostty probe lives under `app/macos/TeaserProbe`
-and `app/macos/TeaserProbeTests`, and library compatibility probes live under
-`probes/`.
+`app/macos/Teaser` and `Package.swift` retain the Swift/AppKit app and eight
+headless executable harnesses. The App is not yet connected to Herdr. Shared core,
+task providers, and multiple native-fullscreen canvases remain implementation
+work. Do not infer real-window adoption from pure geometry tests.
 
-The pinned Ghostty source is the `vendor/ghostty` submodule. Teaser-owned provenance
-and patches live under `vendor/README.md` and `patches/ghostty`. Shell integration,
-terminal benchmarks, the production Ghostty-backed macOS host, and additional
-`crates/teaser-*` packages remain planned until their paths exist.
+`prototypes/attachment-runtime` is the retired self-built Rust runtime. It and
+the root Ghostty submodule/patches are retained experiments, not a second
+production backend. Do not add new product behavior or compatibility aliases
+there. Remove superseded adapters when their replacement integration lands.
 
-Use exact names consistently: product `Teaser`, daemon and package `teaserd`, core
-package `teaser-core`, protocol `teaser.attach.v1`, and runtime directory
-`~/Library/Application Support/Teaser`. Do not add old-name aliases or data
-migration unless explicitly requested.
+The imported binary is still `herdr`; runtime namespace, installer, integration,
+and update-endpoint isolation must precede Teaser distribution. Never launch this
+baseline against the user's installed Herdr state. The native product remains
+one `Teaser.app`, not a separate demo app.
 
-## Build, Test, and Development Commands
+## Build and test
 
-The canonical full gate is:
+Runtime: Rust 1.96.1 and Zig 0.16.0. Native: Swift 6.2+, Xcode, and a stable
+signing identity for App packaging. From the repository root:
 
-```text
+```fish
+cargo build --locked -p herdr
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --locked
+swift run TeaserWindowAdoptionTests
+fish scripts/app.fish --build-only
 pre-commit run --all-files --hook-stage pre-push
 ```
 
-Install both Git hook stages with `pre-commit install`. The full gate verifies
-the `Teaser.app` build, Ghostty patch applicability, Rust formatting, Clippy
-warnings, Rust tests, Swift terminal-attachment, external-window, window-adoption,
-layout, topology, shortcut, and hidden-window safety tests, and whitespace. The
-window-adoption tests run headless: they substitute the external-window boundary
-and must never install a global event monitor, show a window, request Accessibility,
-or move a user's window. `Package.swift` requires Swift 6.2 or newer and builds
-one shared `TeaserKit` module for eight executable test harnesses. Run one with
-`swift run TeaserWindowAdoptionTests`; these are not `swift test` targets.
-The component Rust gates are:
+Install both Git hook stages with `pre-commit install`. Swift tests are executable
+harnesses, not `swift test` targets. `--build-only` creates
+`target/macos/Teaser.app` without launching it and requires
+`TEASER_CODESIGN_IDENTITY`. Do not claim a manifest check proves compilation.
+Give long toolchain/dependency downloads and full-build commands to the user to
+run manually; do not launch them implicitly during a migration check.
 
-```fish
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
-```
+Default native tests must not show windows, install global event monitors, request
+Accessibility, or move the user's windows. Do not launch the App, TUI, server, or
+desktop overlay for a smoke test without explicit scoped authorization. Headless
+runtime tests must use isolated disposable sessions and state.
 
-Run the foreground daemon prototype with:
+## Implementation conventions
 
-```fish
-cargo run -p teaserd
-```
+Use typed Rust and Swift, tabs where formatters permit, and small protocols/traits
+only at meaningful seams. Shared core owns pure organization and transitions;
+server owns mutable runtime authority; clients own presentation/focus. Keep
+terminal cell geometry separate from native pixels. Preserve negotiated upstream
+endpoint contracts when introducing Teaser capabilities.
 
-Build the native application prototype with:
+Use fish for Teaser-owned shell scripts. Fail fast at internal boundaries; log
+bounded lifecycle/timing diagnostics without raw terminal content or credentials.
+Preserve requirement IDs and wrap prose near 80 columns. Add behavior tests with
+each change, not separate feasibility tickets that defer implementation.
 
-```fish
-fish scripts/app.fish --build-only
-```
+## Git and vendored material
 
-It produces `target/macos/Teaser.app`. There is no Xcode project or production
-packaging command yet. Every build, `--build-only` included, requires
-`TEASER_CODESIGN_IDENTITY`: Teaser is never signed ad-hoc, because macOS binds
-Accessibility approval to the signature and an ad-hoc rebuild revokes it.
+Use focused conventional commits without AI co-author trailers. Never rewrite
+published history, change GitHub fork-network membership, or enable release
+automation as an implicit source migration step. Preserve unrelated work.
 
-Launch opens Teaser's canvas, an ordinary window whose content rectangle is the
-layout surface. Panels live inside that window. Do not create a display-sized
-overlay on the user's desktop, and do not move a user's windows for smoke testing.
-
-## Coding Style and Naming Conventions
-
-Wrap Markdown near 80 columns and preserve requirement identifiers such as
-`REQ-001` and `TASK-001`. Application code should be typed Rust and Swift. Use tabs
-where the language formatter permits, while letting rustfmt and Swift formatting
-control generated layout. Name Rust modules and functions in `snake_case`,
-Rust/Swift types in `UpperCamelCase`, and Swift members in `lowerCamelCase`.
-
-Prefer immutable typed values and small traits only at seams with multiple real
-implementations. Use native toolchain commands and pre-commit hooks for quality
-gates; keep existing `.fish` scripts valid fish. Fail fast at internal
-boundaries and add bounded, diagnostic logging around long-running or expensive
-operations.
-
-## Testing Guidelines
-
-There is no coverage threshold yet. Add tests with each module: Rust integration
-tests under `crates/<name>/tests`, Swift tests in the corresponding app test target,
-and performance harnesses under `benchmarks/terminal`. Name tests after observable
-behavior. Follow the implementation-plan matrix, especially malformed input,
-permissions, recovery, IME, attachment ordering, teardown, and equivalent-hardware
-performance cases.
-
-## Commit and Pull Request Guidelines
-
-History uses short conventional subjects such as `feat: add asynchronous terminal
-attachment pump`. Keep commits focused. Pull requests should summarize the change,
-reference applicable requirement or task IDs, and list verification performed.
-Include screenshots for visible UI changes and measurements for performance claims.
-
-Never commit `.codex/`, runtime databases, credentials, build products, or generated
-user state. Preserve third-party license notices and keep the Ghostty submodule
-clean when dependencies change.
+Root `CLAUDE.md` is the real instruction file; `AGENTS.md` and
+`.github/copilot-instructions.md` are symlinks. Nested upstream instructions are
+inherited project material, not Teaser hosting/release policy. Do not commit
+personal `.codex/` settings, runtime databases, credentials, or build products.
+Keep vendored source and license notices intact during dependency updates.

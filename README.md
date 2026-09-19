@@ -1,242 +1,119 @@
 # Teaser
 
-Teaser is a macOS-first spatial development environment. It keeps complete project
-Workspaces available as composable regions across visible displays instead of
-hiding each project behind a mutually exclusive tab.
+Teaser is a macOS-first spatial development environment, built as a product fork
+of [Herdr](https://github.com/herdrdev/herdr). Its main interface is tiling:
+complete project contexts stay visible together instead of disappearing behind
+mutually exclusive tabs. A real terminal UI and a native App are two clients of
+the same intended organization and runtime, not two separate products.
 
-> Status: desktop-stage implementation in progress. The native app and Rust
-> foundation include constrained layout, generic window-control code, local
-> presentation persistence, and a canvas that starts from one empty Panel.
-> Automated checks cover
-> geometry and desktop safety; signed real-window drag acceptance is still pending.
-> Production Ghostty and Session wiring also remain incomplete.
+> Current state: the Herdr v0.9.1 server/TUI source and full history are imported.
+> The existing AppKit/SwiftUI canvas and window-adoption implementation are
+> preserved, but the App is **not yet connected to the Herdr server**. Shared
+> organization, task providers, multiple native-fullscreen canvases, and dependable
+> live-window adoption remain implementation work. The import is not a completed
+> end-to-end demo or a passing runtime build.
 
-## Product thesis
+## Product model
 
-Many products marketed as agentic development environments place complete projects
-in separate tabs. That display model serializes project visibility even when work
-continues in parallel: showing one project hides the agent execution, terminals,
-diffs, and project details of the others.
+- A **Workspace** is a persistent, project-scoped group of Panels. Membership is
+  independent of placement: a Workspace can span canvases, and one canvas can
+  show several Workspaces.
+- A **Panel** is content-neutral. Task, CLI, App, Agent, File, and Notes are
+  extensible kinds with minimum size, preferred aspect ratio, and growth rules,
+  not application-specific subclasses.
+- Panels tile at unequal sizes. Same-Workspace adjacency is a preference, not a
+  rectangular-container constraint. A fluorescent outer contour expresses the
+  group without adding a Workspace card or title bar.
+- The native App targets multiple independently fullscreen windows using macOS's
+  green-button fullscreen. First launch targets an empty canvas with incremental
+  splits, not six prefilled project mockups.
+- Task-driven work links external tasks to Panels and sessions. Linear/Notion
+  remain task authorities; Teaser provides organization and its own Notes.
+- The TUI retains a terminal-native workflow. GUI-only providers are explicit
+  references or unavailable views, never simulated application windows.
 
-Teaser treats a Workspace as a persistent, project-scoped display unit. Multiple
-Workspaces can be tiled in parallel, one Workspace can temporarily take the full
-display, or complete Workspaces can be switched as units. Each keeps its own Panel
-layout, running content, and spatial relationships across those presentation
-changes.
+External applications retain their own rendering and input. Adoption manages one
+exact provider window's geometry and releases it safely; it does not reparent,
+capture, or inject input. Real-window acceptance is not inferred from headless
+geometry tests.
 
-A Panel is a content-neutral display region. Agent execution, project details,
-terminals, diffs, images, and input are content placed in Panels rather than separate
-application modes. Terminal content still behaves like an ordinary terminal: CLI
-and TUI applications require no Teaser-specific rewrite, while shell integration and
-built-in adapters add richer semantics progressively.
+## Source layout
 
-A Panel may instead bind to a standard window owned by another macOS application.
-Dragging that window into a Panel adopts its position and size into the Workspace
-layout, and a window that cannot be dragged, because Stage Manager or another
-Space hides it, can be chosen from Teaser's list of adoptable windows instead.
-The provider still owns rendering, input, and window lifetime: Teaser does
-not reparent the window, capture its pixels, or pretend it is an embedded view.
+| Path | Role |
+| --- | --- |
+| `runtime/herdr` | Editable Herdr server/TUI fork, with upstream source and tests |
+| `runtime/upstream.toml` | Exact imported baseline and provenance |
+| `app/macos` and `Package.swift` | Native App, adapters, and headless harnesses |
+| `prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
+| `vendor/ghostty` and `patches/ghostty` | Retained native attachment experiment |
 
-## Architecture at a glance
+The fork uses a history-preserving Git subtree, not an installed Herdr binary or
+a read-only submodule. It keeps the `Acture/teaser` repository and macOS history.
+This does not change GitHub's fork-network metadata.
 
-- **AppKit/SwiftUI desktop stage:** connected rectangular Workspace and Panel
-  layout, Teaser-owned windows, click-through arrangement overlays, virtual focus,
-  and Accessibility control of adopted external windows, each identified by its
-  own window-server window ID.
-- **`teaserd` runtime:** owns Teaser sessions, processes, PTYs, block state, and
-  lifetime independently of any GUI; each session has zero or one attached
-  surface.
-- **Ghostty terminal surface:** uses pinned `libghostty` APIs for Metal rendering,
-  terminal input, selection, and terminal compatibility.
-- **Rust core:** typed project, checkout, Workspace, Panel, session, attachment,
-  block, and control-plane state.
-- **External applications:** IDEs, terminals, task tools, browsers, and previewers
-  remain provider-owned top-level windows even when bound to Panels. Structured
-  federated environments remain outside Teaser's Session registry.
-
-Terminal parsing, rendering, and native input stay inside AppKit and `libghostty`.
-Canonical PTY bytes use the bounded local attachment stream; UniFFI remains
-reserved for low-frequency state and semantic events.
-
-See [Architecture](docs/architecture.md), [Roadmap](ROADMAP.md), and the
-[implementation plan](plan/architecture-teaser-platform-1.md).
+See [Architecture](docs/architecture.md), [Terminology](CONTEXT.md),
+[Protocol](docs/ipc.md), and the [implementation contract](plan/architecture-teaser-platform-1.md).
+Execution status and dependencies live in [Linear](https://linear.app/acturea/project/teaser-efe303ae636d).
 
 ## Development
 
-Use Swift 6.2 or newer, Rust, and pre-commit. Install the Git hooks once:
+The runtime requires **Rust 1.96.1 and Zig 0.16.0**. Swift harnesses require
+Swift 6.2 or newer; App packaging also needs Xcode and a stable Apple Development
+or Developer ID signing identity.
 
-```text
-pre-commit install
-```
-
-Run the full quality gate from the repository root:
-
-```text
-pre-commit run --all-files --hook-stage pre-push
-```
-
-The hooks build `Teaser.app` and check Swift integration tests, formatting,
-Clippy warnings, all Rust workspace tests, whitespace, and Ghostty patch
-applicability. Formatting and static analysis also run on commit. Initialize
-`vendor/ghostty` as described in [Vendored Dependencies](vendor/README.md) before
-running the full gate; it does not require building Ghostty or installing Zig.
-
-`Package.swift` defines the shared `TeaserKit` module, the `Teaser` executable,
-and eight Swift test executables. Build them with `swift build`, or run one suite:
-
-```text
-swift run TeaserWindowAdoptionTests
-```
-
-These are executable harnesses, so use `swift run`, not `swift test`. The adoption
-suite runs without desktop interaction, global monitors, or permission prompts.
-Only the Ghostty-backed adapter is excluded until its native library is built.
-The app script uses SwiftPM's Xcode build system for macOS resource lookup, so it
-needs an installed, licensed Xcode.app rather than only a Swift toolchain. It
-assembles the bundle from scratch, signs it, and checks library resources
-without opening any window.
-The [native Ghostty probe](vendor/README.md) remains a separate build.
-
-Build the current macOS app prototype with:
+Run production Cargo commands from the repository root:
 
 ```fish
+cargo build --locked -p herdr
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --locked
+```
+
+The inherited binary is still named `herdr`. Its configuration, session names,
+integration commands, and update endpoints have not been isolated for Teaser
+distribution. Do not install it over an existing Herdr, run upstream update or
+release commands, or launch it against a personal session. Namespace isolation is
+required before user-facing distribution.
+
+Cargo warns that the nested manifest's patch is ignored; the root manifest
+explicitly applies the same vendored `portable-pty` patch. Root `Cargo.lock` is
+authoritative. The nested lockfile is retained upstream material, not a second
+Teaser dependency authority.
+
+Native checks and packaging remain separate:
+
+```fish
+swift run TeaserWindowAdoptionTests
 fish scripts/app.fish --build-only
 ```
 
-This produces `target/macos/Teaser.app`. Every build, `--build-only` included,
-requires a stable Apple Development or Developer ID signing identity: macOS binds
-the one-time Accessibility approval to the signature, so Teaser is never signed
-ad-hoc. Set it once for every shell:
+`--build-only` produces `target/macos/Teaser.app` without launching it and requires
+`TEASER_CODESIGN_IDENTITY`. The eight Swift suites are executable harnesses, not
+`swift test` targets. Headless tests must not create windows, install global
+monitors, request Accessibility, or move user windows.
+
+The full gate is:
 
 ```fish
-set -Ux TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (TEAMID)'
-fish scripts/app.fish
+pre-commit install
+pre-commit run --all-files --hook-stage pre-push
 ```
 
-Launch opens Teaser's canvas: an ordinary window you move and resize like any
-other. The layout is solved inside that window's content rectangle, so Teaser
-never covers the desktop and never competes with Stage Manager, Mission Control,
-or Spaces for the screen. Dragging a standard window onto the canvas adopts it
-into the Panel under the pointer; choosing a window from Teaser's
-adoptable-window list is the other way in, for windows no drag can reach.
-Adoption requires Accessibility, which the canvas asks for once.
-Teaser does not request per-application or per-project
-authorization, and it does not guess a replacement window after either application
-restarts.
+It includes runtime Rust checks, native harnesses, App packaging, and retained
+Ghostty patch applicability. Initialize the legacy Ghostty submodule only for its
+checks; see [dependency/probe instructions](vendor/README.md). First builds can
+download and compile substantial dependencies. A manifest/format check is not a
+completed build.
 
-**Adopt Window…** in the status menu opens an ordinary list of windows Teaser
-can adopt, including windows Stage Manager or another Space hides, which no drag
-can reach. Choose a window and the unoccupied Panel to fill, then adopt it.
-Windows that cannot be adopted stay listed with the reason. The list registers
-no global shortcut.
+## Fork maintenance and licensing
 
-Use the Teaser menu's **Stop Layout**, or `Ctrl+Option+Esc`, to remove the stage.
-Switching macOS Space also stops it. The Dock icon reopens the canvas; closing
-the canvas or using `Cmd+Q` quits Teaser. Closed Notes stay closed until
-explicitly focused or a new stage session begins. Arrange uses only small labels
-and divider handles for input, never a display-sized mouse shield.
+Follow the explicit subtree update procedure in
+[Architecture](docs/architecture.md#upstream-maintenance); never automatically
+follow upstream master or activate its release automation.
 
-`Ctrl+Option+Space` toggles Arrange on and off. `Ctrl+Option+D` splits,
-`Ctrl+Option+F` focuses a Workspace, and `Ctrl+Option+Return` hands input to the
-selected Panel. Layout Undo is `Ctrl+Option+Z` in Arrange or the menu action;
-`Cmd+Z` remains exclusively with the app receiving keyboard input.
-KeyboardShortcuts registers these Control-Option chords only while the stage is
-running, and layout Undo only in Arrange. A registered chord is consumed
-system-wide, so no unmodified key such as `Esc` is bound. Conflicts with other
-apps' hot keys still need real-desktop verification; Stop and Quit remain
-available from the status menu and the canvas.
-
-**Layout Editor…** in the status menu opens a normal, closable SplitView
-layout map. Select a display or Workspace and drag its dividers. Releasing the
-divider commits to the same constrained layout, provider placement, Undo, and
-persistence used by desktop handles. While stopped, it edits saved proportions
-without starting the stage. The map labels are not replicas of provider apps.
-
-For read-only window-selection diagnostics, run the signed bundle's executable
-with `--inspect-windows PID`. It lists every window the window server attributes
-to that process, each with its layer, on-screen state, and either its selectable
-frame or the reason it is not selectable — an accessory owner, a non-standard
-window layer, no published Accessibility window, or an Accessibility failure. A
-window hidden by Stage Manager or sitting on another Space is still selectable,
-because its identity and its geometry remain reachable. The report also names AX
-permission and the owner's activation policy, without showing the stage,
-prompting, or moving windows:
-
-```fish
-target/macos/Teaser.app/Contents/MacOS/Teaser --inspect-windows PID
-```
-
-`--list-adoptable-windows` prints the same candidate list the **Adopt Window…**
-picker shows, as JSON, without opening it: each window's application, title when
-the provider publishes one, size, whether it is visible, and either that it is
-adoptable or the reason it is not. It also reports how long the Accessibility
-pass took, because that pass runs on the main thread. Exit status is 0 when at
-least one window is adoptable and 1 when none is. It shows no window, prompts
-for nothing, and moves nothing:
-
-```fish
-target/macos/Teaser.app/Contents/MacOS/Teaser --list-adoptable-windows
-```
-
-`--check-bundle-resources` instead checks the upstream shortcut localization
-accessor without creating `NSApplication`, registering hotkeys, or observing
-windows, and exits 1 when the bundled strings table is missing.
-
-Replace `PID` with the selected provider process, or pass `front` to inspect
-whichever application is frontmost. `front` is the usable form from a terminal:
-while Stage Manager is on, macOS hides every off-stage application from both
-Core Graphics and Accessibility, so a command can only ever observe the
-application that is in front — which, when you type the command, is your
-terminal. No selectable window returns exit status 1; invalid arguments return
-2. This is not a drag/placement test.
-`--observe-window-drag PID WINDOW_ID` passively watches one specified window for
-20 seconds without showing or adopting anything. It prints `BEGAN` and `ENDED`
-and returns 0 only after a complete qualified drag; timeout returns 1. A human or
-an authorized UI test driver must actually drag that window during observation.
-Runtime drag milestones use the `com.acture.teaser` log subsystem and
-`window-adoption` category; window titles and provider document contents are not
-included.
-
-To run the current foreground daemon prototype:
-
-```fish
-cargo run -p teaserd
-```
-
-It uses `~/Library/Application Support/Teaser/runtime` by default. Pass
-`--runtime-dir PATH` only for development or tests.
-
-The daemon supports metadata-only `session.create` plus an internal
-`session.attach` upgrade for already-resolved PTY Sessions. The public protocol
-does not accept arbitrary commands or working directories before the Checkout
-catalog exists. See [Local control and attachment protocol](docs/ipc.md) for the
-wire format and current limits.
-
-## Agent integration has two modes
-
-- **Native CLI mode:** run `claude`, `codex`, or any other harness inside a normal
-  TerminalSurface. This retains vendor behavior but provides only terminal-level
-  semantics.
-- **Structured ACP mode:** run `teaser agent claude` or `teaser agent codex`. Teaser
-  owns input and presentation, but only capabilities exposed by the ACP adapter are
-  available; this is not promised to equal every vendor CLI feature.
-
-## Deliberate non-goals for v1
-
-- no Warp, Zed, Claude Code, or Codex fork;
-- no browser-based host or custom terminal renderer;
-- no GUI reparenting, pixel-capture proxy, or synthetic application input;
-- no private macOS API beyond one declaration that returns a window's own window
-  ID, which no public API exposes;
-- no third-party plugin SDK or compatibility promise;
-- no custom agent protocol when ACP already covers the semantic control plane;
-- no replacement for every CLI application's own interface.
-
-## License and name
-
-Teaser is licensed under [AGPL-3.0-or-later](LICENSE). The source license preserves
-source-sharing and legal-notice obligations; it does not require derivative
-products to keep the Teaser product name. The separate
-[trademark policy](TRADEMARKS.md) reserves the Teaser name and logo against confusing
-redistribution while allowing truthful nominative use. See [NOTICE](NOTICE) for the
-project notice.
+Teaser-owned code retains [AGPL-3.0-or-later](LICENSE). Inherited Herdr code retains
+[Apache-2.0](runtime/herdr/LICENSE); vendored dependencies retain their own
+licenses. Preserve [NOTICE](NOTICE), [third-party notices](THIRD_PARTY_NOTICES.md),
+and the [trademark policy](TRADEMARKS.md). Teaser is independent of Herdr; the
+import does not imply endorsement or relicense inherited code.

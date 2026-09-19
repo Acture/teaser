@@ -1,13 +1,9 @@
 [workspace]
-members = ["crates/teaser-core", "crates/teaserd"]
-resolver = "3"
+members = ["runtime/herdr"]
+exclude = ["prototypes/attachment-runtime"]
+resolver = "2"
 
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.94"
-license = "AGPL-3.0-or-later"
-publish = false
-
-[workspace.lints.rust]
-unsafe_code = "forbid"
+# Cargo only applies patches from the workspace root. Keep this aligned with
+# the inherited Herdr manifest; its vendored PTY fixes are part of the fork.
+[patch.crates-io]
+portable-pty = { path = "runtime/herdr/vendor/portable-pty" }

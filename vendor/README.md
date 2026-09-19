@@ -1,5 +1,11 @@
 # Vendored Dependencies
 
+The active server/TUI is the Herdr source fork in `runtime/herdr`; its embedded
+libghostty-vt and portable-pty provenance stays inside that tree. See
+`runtime/upstream.toml` and `docs/architecture.md` for the fork baseline and update
+policy. The root `vendor/ghostty` submodule and patches below belong to the
+retired attachment-runtime experiment, not the new server integration path.
+
 ## Ghostty
 
 - Upstream: <https://github.com/ghostty-org/ghostty>
@@ -131,9 +137,10 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
 	-lproc \
 	-o $native_probe_dir/TeaserProbe
 
-cargo build -p teaserd
+cargo +1.94.0 build --manifest-path prototypes/attachment-runtime/Cargo.toml \
+	--locked --target-dir target/attachment-prototype -p teaserd
 set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
-set -lx TEASERD_BIN $teaser_root/target/debug/teaserd
+set -lx TEASERD_BIN $teaser_root/target/attachment-prototype/debug/teaserd
 $native_probe_dir/TeaserProbe
 ```
 

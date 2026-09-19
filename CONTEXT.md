@@ -1,109 +1,80 @@
-# Teaser Context
+# Teaser terminology
 
-Teaser composes multiple project Workspaces across visible displays while keeping
-their Panel layouts, running content, and concrete execution environments explicit.
+These are target product contracts. The imported runtime and retained native
+prototype do not yet implement every contract; see `docs/architecture.md`.
 
-## Language
+## Organization
 
-**Project**:
-A durable, named body of work that may contain one or more checkouts.
-_Avoid_: Repository, working directory, worktree
+**Project**: A durable body of work, optionally associated with several checkouts.
 
-**Checkout**:
-A concrete filesystem working copy or worktree through which terminals, agents,
-attached surfaces, and federated environments operate.
-_Avoid_: Project, workspace
+**Checkout**: A concrete working copy or worktree, not a Workspace identity.
 
-**Workspace**:
-A persistent, project-scoped organization and display of Panels. A Workspace may
-use multiple Checkouts from its Project, and retains its Panel layout and running
-content while tiled, focused, hidden, or restored.
-_Avoid_: Panel, tab, all-project catalog
+**Workspace**: A persistent, project-scoped logical group of Panels. Membership
+does not depend on one canvas, display, macOS Space, terminal tab, or active
+client. Closing a view does not delete the Workspace or terminate its sessions.
 
-**Workspace Presentation**:
-The persistent, two-level rectangular arrangement of one or more Workspaces on
-displays and Panels inside each Workspace. It can tile Workspaces in parallel,
-focus one Workspace, or switch complete Workspaces without rebuilding their
-internal Panel layouts.
-_Avoid_: Workspace, project tab bar
+**Task reference**: A provider-qualified task identity with cached display data
+and context links. The external provider owns task content/status; Teaser owns
+associations to Workspaces, Panels, and sessions. A cache is not a task authority.
 
-**Panel**:
-A content-neutral display region inside one Workspace. A Panel may show agent
-execution, project details, a terminal, a file, a diff, an image, input, or another
-built-in content type, or bind to one provider-owned external window. It remains a
-Panel while empty or unbound.
-_Avoid_: Workspace, Project, Session, terminal tab
+**Panel**: A content-neutral region with stable identity and Workspace membership.
+It can be empty, host terminal/agent/Notes content, or refer to an app, file, or
+task provider. A Panel is not a Session or native window.
 
-**Panel Kind**:
-A data-defined label and layout profile for a Panel. Built-in kinds are Task, CLI,
-App, Agent, File, and Notes; users may define more. A kind supplies layout intent,
-not a Swift subclass, provider, capability, or content implementation.
-_Avoid_: Panel subclass, application type, integration API
+**Panel kind/profile**: Data describing intent, minimum dimensions, preferred
+aspect ratio, and growth priority. Task, CLI, App, Agent, File, and Notes are
+predefined; users can add kinds and override Panels. Client adapters interpret
+units: terminal cells and native pixels are not interchangeable.
 
-**Panel Binding**:
-The replaceable association between a Panel and either Teaser-owned content or one
-adopted external window. Layout identity remains stable when the binding disappears.
-_Avoid_: Panel, Session, embedding
+**Panel binding**: Association to a session, task/file reference, Teaser-owned
+content, or one exact adopted window. Changing a binding preserves Panel identity.
 
-**Desktop Stage**:
-The AppKit runtime that realizes Workspace Presentation using Teaser-owned windows,
-provider-owned external windows, and temporary click-through arrangement overlays.
-_Avoid_: full-screen container window, screen capture, window manager
+## Presentation
 
-**Focused Workspace**:
-The Workspace containing Virtual Focus and therefore receiving Workspace-level
-commands. Focusing it may enlarge or isolate its presentation, but does not destroy
-or recreate sibling Workspaces and does not itself request an Input Focus transfer.
-_Avoid_: only visible project, selected tab
+**Canvas**: A client-owned presentation surface. Each native CanvasWindow can
+enter macOS native fullscreen. A TUI viewport is another presentation surface,
+not a container capable of embedding arbitrary external GUI windows.
 
-**Virtual Focus**:
-Teaser's persistent selection of one Workspace and Panel for navigation, split,
-resize, and layout commands. It can move without activating another application or
-changing the operating system's keyboard target.
-_Avoid_: key window, first responder, Input Focus
+**Placement**: A Panel's position in a presentation and layout tree. Moving across
+canvases does not implicitly change Workspace membership.
 
-**Input Focus**:
-The macOS window and responder currently receiving ordinary keyboard input. Teaser
-hands it to a virtually focused Panel only after an explicit click, double-click, or
-focus action; layout navigation alone does not transfer it.
-_Avoid_: Virtual Focus, selected Panel
+**Workspace contour**: The same-colored outer boundary of locally adjacent
+members. Separate fragments use the same group identity/color. It is not a
+background, title bar, or mandatory rectangular container.
 
-## Sessions and presentation
+**Layout**: Unequal tiling, split, move, resize, focus, and undo. Group adjacency is
+a soft preference. Topology and constraints can be shared; native pixel and TUI
+cell rectangles are computed by their respective adapters.
 
-**teaserd**:
-The long-lived Teaser runtime that owns sessions independently of any user interface.
-_Avoid_: Teaser app, terminal emulator, attached surface
+**Virtual Focus**: A client's selected Panel/Workspace for layout commands. It
+does not redirect another client's focus or native app input.
 
-**Session**:
-An authoritative unit of interactive work maintained by teaserd, attached to one
-checkout, and presented by at most one attached surface at a time.
-_Avoid_: Panel, Workspace, window
+**Input Focus**: The real input destination. External-app handoff requires an
+explicit action to an exact window; Teaser does not synthesize background input.
 
-**Multiplexing**:
-Maintaining multiple independent sessions in teaserd while routing each session to
-zero or one attached surface without transferring session ownership.
-_Avoid_: Simultaneous session mirroring, window tiling, duplicated session
+## Runtime and clients
 
-**Attached Surface**:
-A user interface actively connected to one exact Teaser Session for interaction and
-state. It may be Teaser-owned or an explicit protocol-capable external client; an
-arbitrary adopted window is not a Surface.
-_Avoid_: adopted external window, Panel, tiled window
+**Core**: The planned shared library of identities, membership, task associations,
+layout intent, commands, and transitions. It must not depend on AppKit, SwiftUI,
+Ratatui rectangles, PTYs, or network clients.
 
-**Federated Environment**:
-An external project environment connected to Teaser through a structured adapter
-while retaining ownership of its internal sessions, terminals, and layout.
-_Avoid_: Panel, attached surface, companion window, embedded application
+**Server**: The Herdr-derived authoritative session runtime. It will apply core
+commands and publish snapshots/events. Sharing code does not justify independent
+mutable organization stores in App and TUI.
 
-**Attachment**:
-The association of one attached surface with one exact session, established using
-system-managed identity rather than inferred from a checkout path.
-_Avoid_: Manual attach command, cwd matching
+**Session**: Interactive work owned by the server, separate from Panel placement.
+Client detach is not server termination; persistence does not imply original
+process survival after the server or machine restarts.
 
-**Adopted External Window**:
-A standard provider-owned top-level window whose exact runtime identity and frame
-are leased to one Panel, either by dragging the window there or by choosing it
-from Teaser's window list when it is hidden and cannot be dragged. Adoption manages
-geometry only: it is not reparenting, pixel capture, input forwarding, a Surface, or
-a Teaser Session. The binding is not guessed or silently recreated after restart.
-_Avoid_: embedded application, companion window, captured Panel
+**Client**: TUI, CLI, or native App using server commands and state. Viewport,
+interaction state, and focus are client-local. Session-size ownership must be
+explicit when several clients observe one terminal.
+
+**Adopted external window**: A provider-owned top-level macOS window bound by exact
+runtime identity. The App owns the live AX/CG lease; the server may hold a provider
+hint, never an AX object or authoritative stale PID/window ID. Adoption is not
+reparenting, capture, or a server-owned terminal Session.
+
+**Retired attachment runtime**: The old `teaserd` / `teaser.attach.v1` experiment in
+`prototypes/attachment-runtime`. Those names do not describe Herdr's protocol and
+must not become compatibility aliases for it.

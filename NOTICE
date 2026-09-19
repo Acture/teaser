@@ -10,3 +10,8 @@ TRADEMARKS.md.
 Third-party components retain their own licenses. See THIRD_PARTY_NOTICES.md;
 when dependency sources are initialized or distributed, preserve their embedded
 license files as well.
+
+Teaser contains a source fork of Herdr v0.9.1 by the Herdr contributors.
+The inherited source at runtime/herdr retains its Apache-2.0 license and
+third-party notices. See runtime/herdr/LICENSE and runtime/upstream.toml.
+Teaser is an independent project, not an official Herdr distribution.

@@ -1,5 +1,23 @@
 # Third-Party Notices
 
+## Herdr source fork
+
+Source: <https://github.com/herdrdev/herdr>
+
+Baseline: `v0.9.1`, commit `065ef9d6a531c49fb8bee7e818ef837065b21ee9`.
+
+The Herdr contributors' source is maintained under `runtime/herdr`, with its
+complete history and Apache-2.0 license at `runtime/herdr/LICENSE`. This import
+does not relicense the inherited code. Its vendored libghostty-vt and portable-pty
+retain their own embedded licenses and provenance records; preserve them when
+distributing the runtime. The root `LICENSE` continues to cover Teaser-owned
+code. No Herdr runtime binary is bundled in the current native App yet.
+
+The full Apache-2.0 text is included in source distributions at the path above;
+binary runtime packaging must include it and the runtime's dependency notices.
+The Swift-only App's existing notices do not constitute a complete runtime
+distribution notice inventory.
+
 ## Swift UI dependencies
 
 SplitView: <https://github.com/stevengharris/SplitView>, version `3.5.3`.

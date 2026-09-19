@@ -1,0 +1,10 @@
+[herdr]
+repository = "https://github.com/herdrdev/herdr.git"
+tag = "v0.9.1"
+commit = "065ef9d6a531c49fb8bee7e818ef837065b21ee9"
+path = "runtime/herdr"
+integration = "git-subtree-full-history"
+license = "Apache-2.0"
+
+[teaser]
+pre_fork_commit = "5895ef78c9854f49adf975acbf70fb5d30786d85"
