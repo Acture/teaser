@@ -32,8 +32,8 @@ end
 if test "$codesign_identity" = -
     printf '%s\n' \
         'error: building Teaser requires a stable code-signing identity.' \
-        'Set TEASER_CODESIGN_IDENTITY to an Apple Development or Developer ID identity,' \
-        'once for every shell: set -Ux TEASER_CODESIGN_IDENTITY "Apple Development: …"' >&2
+        'Set TEASER_CODESIGN_IDENTITY in the local .env, then run direnv allow.' \
+        'For noninteractive builds: direnv exec . fish scripts/app.fish --build-only' >&2
     exit 2
 end
 

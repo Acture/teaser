@@ -1,6 +1,12 @@
 # Local agent/session handoff
 .codex/
 
+# Local environment and direnv state; only the empty template is shared.
+/.env
+/.env.*
+!/.env.example
+/.direnv/
+
 # macOS
 .DS_Store
 

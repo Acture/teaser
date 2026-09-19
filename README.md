@@ -83,19 +83,25 @@ Teaser dependency authority.
 
 Native checks and packaging remain separate:
 
-Before packaging, list the available signing identities and configure one in
-fish. When rebuilding an existing App, keep its signing identity; do not select
-a different certificate automatically or substitute ad-hoc signing.
+Before packaging, put the signing identity in the local, Git-ignored `.env`.
+The checked-in `.envrc` loads it through direnv. For a new checkout, copy the
+template only if `.env` does not already exist:
 
 ```fish
+test -e .env; or cp .env.example .env
 security find-identity -v -p codesigning
-set -Ux TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (IDENTIFIER)'
 ```
 
-Replace the example with an exact listed Apple Development or Developer ID
-Application identity. If a global variable shadows the universal variable, set
-it in the current shell with `set -gx` as well. Do not commit a personal identity
-into the repository. Then run the native checks or build:
+Set `TEASER_CODESIGN_IDENTITY="..."` in `.env` to an exact listed Apple Development
+or Developer ID Application identity, then run `direnv allow`. Keep an existing
+App's identity; do not automatically switch certificates or use ad-hoc signing.
+Never commit `.env` or a personal signing identity.
+
+With the fish direnv hook enabled, entering this directory loads `.env` and
+leaving restores the previous environment. If needed, enable the hook once in
+the fish configuration with `direnv hook fish | source`. Noninteractive commands
+can use `direnv exec . fish scripts/app.fish --build-only` without a shell hook.
+Then run the native checks or build:
 
 ```fish
 swift run TeaserWindowAdoptionTests
