@@ -83,6 +83,20 @@ Teaser dependency authority.
 
 Native checks and packaging remain separate:
 
+Before packaging, list the available signing identities and configure one in
+fish. When rebuilding an existing App, keep its signing identity; do not select
+a different certificate automatically or substitute ad-hoc signing.
+
+```fish
+security find-identity -v -p codesigning
+set -Ux TEASER_CODESIGN_IDENTITY 'Apple Development: Your Name (IDENTIFIER)'
+```
+
+Replace the example with an exact listed Apple Development or Developer ID
+Application identity. If a global variable shadows the universal variable, set
+it in the current shell with `set -gx` as well. Do not commit a personal identity
+into the repository. Then run the native checks or build:
+
 ```fish
 swift run TeaserWindowAdoptionTests
 fish scripts/app.fish --build-only
