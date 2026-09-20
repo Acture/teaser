@@ -363,7 +363,7 @@ private func testARefusedReleaseRetriesOnlyItsOwnCanvas() throws {
 		"the retry must succeed once the window cooperates"
 	)
 	try expect(
-		world.log.contains(.restoreOriginal(windowA.identity, originalA))
+		try world.log.contains(.restoreOriginal(windowA.identity, originalA))
 			&& world.readBackFrame(windowA.identity) == originalA,
 		"the retried window must land back at its original frame"
 	)

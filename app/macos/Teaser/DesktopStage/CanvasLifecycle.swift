@@ -40,10 +40,6 @@ final class CanvasLifecycle {
 	/// A canvas appears at most once: asking again keeps its place, and the
 	/// queue also carries the exit a deferred close depends on.
 	private var pending: [CanvasID] = []
-	/// Canvases that asked to fill the screen and still need the rectangle to
-	/// fill. This machine holds no screen of its own, so the frame arrives as
-	/// the host's next `geometryChanged` and pins the canvas exactly once.
-	private var pendingFillFrames: Set<CanvasID> = []
 
 	// MARK: - Reading
 
@@ -202,7 +198,10 @@ final class CanvasLifecycle {
 		let settledLook: [CanvasEffect] = inFlight.contains(canvas)
 			? []
 			: appearanceEffects(canvas, fullScreenTarget: phase.isFullScreen)
-		return settledLook + [.displayFrame(canvas, frame)] + closing + next
+		let published: [CanvasEffect] = inFlight.contains(canvas)
+			? []
+			: [.displayFrame(canvas, frame)]
+		return settledLook + published + closing + next
 	}
 
 	private func geometryChanged(
@@ -216,12 +215,7 @@ final class CanvasLifecycle {
 		}
 		state.settledFrame = frame
 		states[canvas] = state
-		// A canvas that asked to fill the screen is pinned to the rectangle the
-		// host reports, once. Later moves are the person's own.
-		guard pendingFillFrames.remove(canvas) != nil else {
-			return [.displayFrame(canvas, frame)]
-		}
-		return [.setFrame(canvas, frame), .displayFrame(canvas, frame)]
+		return [.displayFrame(canvas, frame)]
 	}
 
 	private func setFillMode(
@@ -233,18 +227,9 @@ final class CanvasLifecycle {
 		}
 		state.fill = fill
 		states[canvas] = state
-		// This machine holds no screen rectangle, so Fill Screen only records the
-		// mode and asks for opacity; the frame it fills arrives as the host's
-		// next `geometryChanged`. A fullscreen canvas is opaque and owns its
-		// frame already, so there the mode only decides how it comes back.
-		switch fill {
-		case .fillScreen where !state.phase.isFullScreen:
-			pendingFillFrames.insert(canvas)
-		case .fillScreen:
-			break
-		case .free:
-			pendingFillFrames.remove(canvas)
-		}
+		// This machine holds no screen rectangle, so Fill Screen records the mode
+		// and asks for opacity; only the host knows which rectangle fills the
+		// screen this canvas is on, and it applies it once the canvas settles.
 		return appearanceEffects(canvas, fullScreenTarget: targetIsFullScreen(state))
 	}
 
@@ -280,7 +265,6 @@ final class CanvasLifecycle {
 		appearances.removeValue(forKey: canvas)
 		order.removeAll { $0 == canvas }
 		pending.removeAll { $0 == canvas }
-		pendingFillFrames.remove(canvas)
 		// A window that disappears mid-transition never delivers its callback,
 		// so closing it releases the gate.
 		inFlight.remove(canvas)
@@ -316,15 +300,30 @@ final class CanvasLifecycle {
 	/// asked to close while fullscreen leaves fullscreen first and closes when
 	/// that exit settles.
 	private func completeCloseIfRequested(_ canvas: CanvasID) -> [CanvasEffect] {
-		guard let state: CanvasState = states[canvas], state.closesWhenSettled else {
+		guard var state: CanvasState = states[canvas], state.closesWhenSettled else {
 			return []
 		}
 		guard !state.phase.isFullScreen else {
+			// The exit was refused. Retrying without end would hold the gate and
+			// never close anything, so the canvas gives the close up and stays
+			// where the person can see it and act.
+			state.refusedCloseExits += 1
+			guard state.refusedCloseExits <= Self.closeExitAttempts else {
+				state.closesWhenSettled = false
+				state.refusedCloseExits = 0
+				states[canvas] = state
+				return [.closeRefused(canvas)]
+			}
+			states[canvas] = state
 			enqueue(canvas)
 			return []
 		}
 		return closeNow(canvas)
 	}
+
+	/// One retry: a refusal is usually another animation in flight, and a second
+	/// refusal is a window macOS will not release right now.
+	private static let closeExitAttempts: Int = 2
 
 	/// The canvas stays registered until the host reports `windowClosed`: the
 	/// window is still on screen, and its display keeps a frame until it is not.

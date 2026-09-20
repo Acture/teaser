@@ -24,6 +24,7 @@ private func makeCanvas(
 		callbacks: .init(onVirtualFocusChange: { _ in }, onWorkspaceFocusRequest: { _ in },
 			onDividerRatioChange: { _, _, _ in }),
 		onEvent: onEvent,
+		onBecameKey: { _ in },
 		onContentClick: { _ in }
 	)
 }

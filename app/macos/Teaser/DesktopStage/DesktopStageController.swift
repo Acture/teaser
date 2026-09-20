@@ -158,6 +158,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		orchestrator.canvasDisplayAtScreenPoint = { [weak self] point in
 			self?.canvasDisplay(atScreenPoint: point)
 		}
+		// A canvas in fullscreen or on another Space shows none of its Panels
+		// here, so a drag of one of its adopted windows is not a drag out of it.
+		orchestrator.visibleCanvasDisplays = { [weak self] in
+			self?.visibleCanvasDisplays() ?? []
+		}
 		organization.onChange = { [weak self] in
 			guard let self else { return }
 			self.organizationControls.model.refresh()
@@ -224,6 +229,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		canvasesDidChange()
 	}
 
+	/// Canvas commands and new Workspaces follow the canvas the person is in,
+	/// which is the key window rather than whichever canvas opened last.
+	private func canvasBecameKey(_ id: CanvasID) {
+		guard canvases[id] != nil, lastKeyCanvasID != id else { return }
+		lastKeyCanvasID = id
+		organization.setTargetDisplay(.init(canvas: id))
+	}
+
 	private func makeCanvas(id: CanvasID, index: Int) -> DesktopCanvasWindow {
 		let canvas: DesktopCanvasWindow = .init(
 			id: id,
@@ -238,6 +251,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			),
 			callbacks: overlayCallbacks,
 			onEvent: { [weak self] event in self?.handle(event) },
+			onBecameKey: { [weak self] canvasID in self?.canvasBecameKey(canvasID) },
 			onContentClick: { [weak self] panelID in
 				self?.orchestrator.setVirtualPanel(panelID)
 			}
@@ -266,13 +280,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				}
 				try await Task.sleep(for: .milliseconds(800))
 				let after: SpaceSnapshot = try self.spaces.snapshot()
-				guard let added: SpaceIdentity = Self.addedSpace(before: before, after: after),
-					let index: Int = after.index(of: added)
-				else {
+				guard let added: SpaceIdentity = Self.addedSpace(before: before, after: after) else {
 					self.orchestrator.setStatus("The new desktop did not appear in Mission Control; no canvas was opened.")
 					return
 				}
-				try self.spaces.activateSpace(atSpacesBarIndex: index)
+				try self.spaces.activate(added)
 				try await Task.sleep(for: .milliseconds(600))
 				self.openCanvas(fill: .fillScreen)
 			} catch {
@@ -329,7 +341,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	/// knows the screen this canvas is on.
 	private func setFill(_ fill: CanvasFillMode, on canvas: DesktopCanvasWindow) {
 		apply(lifecycle.handle(.fillModeRequested(canvas.id, fill)))
-		guard lifecycle.state(of: canvas.id)?.phase.isFullScreen != true else { return }
+		guard lifecycle.state(of: canvas.id)?.phase == .windowed else { return }
+		applyFill(fill, to: canvas)
+	}
+
+	/// Filling is a window rectangle, so only the host can apply it, and only
+	/// once the canvas is settled and windowed: fullscreen owns its own frame
+	/// and a transition is still animating towards one.
+	private func applyFill(_ fill: CanvasFillMode, to canvas: DesktopCanvasWindow) {
 		switch fill {
 		case .fillScreen:
 			guard let frame: LayoutRect = canvas.screenFillFrame else { return }
@@ -350,6 +369,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private func handle(_ event: CanvasEvent) {
 		if case .opened(let id, _, _) = event { lastKeyCanvasID = id }
 		apply(lifecycle.handle(event))
+		restoreFillIfSettled(event)
 		guard case .windowClosed(let id) = event else { return }
 		// The window is gone, so the canvas stops being a display. Its adopted
 		// windows were already released by the preceding `releaseCanvas` effect;
@@ -361,6 +381,22 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			organization.setTargetDisplay(.init(canvas: target))
 		}
 		canvasesDidChange()
+	}
+
+	/// Leaving fullscreen restores the frame the canvas had before it, which is
+	/// not the screen it is meant to fill, so a canvas that still wants to fill
+	/// the screen is filled again once its transition settles.
+	private func restoreFillIfSettled(_ event: CanvasEvent) {
+		switch event {
+		case .didExitFullScreen(let id, _), .didFailToEnterFullScreen(let id, _):
+			guard let canvas: DesktopCanvasWindow = canvases[id],
+				lifecycle.state(of: id)?.fill == .fillScreen,
+				lifecycle.state(of: id)?.phase == .windowed
+			else { return }
+			applyFill(.fillScreen, to: canvas)
+		default:
+			return
+		}
 	}
 
 	private func apply(_ effects: [CanvasEffect]) {
@@ -376,8 +412,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				canvases[id]?.setOpaque(opaque)
 			case .setBackdropLevel(let id, let backdrop):
 				canvases[id]?.setBackdropLevel(backdrop)
-			case .setFrame(let id, let frame):
-				canvases[id]?.setFrame(frame)
+			case .closeRefused:
+				orchestrator.setStatus(
+					"macOS refused to leave full screen, so this canvas stayed open. Try closing it again."
+				)
 			case .releaseCanvas(let id):
 				releaseCanvas(id)
 			case .closeWindow(let id):
@@ -450,6 +488,15 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			return .init(canvas: canvas.id)
 		}
 		return nil
+	}
+
+	private func visibleCanvasDisplays() -> Set<DisplayID> {
+		var result: Set<DisplayID> = []
+		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases
+		where canvas.isVisible && canvas.isOnActiveSpace {
+			result.insert(.init(canvas: id))
+		}
+		return result
 	}
 
 	private func currentSpace() -> SpaceIdentity? {

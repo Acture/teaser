@@ -183,7 +183,9 @@ final class OrganizationSession {
 		let (presentation, assignments): (WorkspacePresentation, [WorkspaceID: DisplayID]) =
 			try OrganizationProjection.project(snapshot,
 				previous: previous == nil ? nil : parked(orchestrator.presentation), placement: placement)
-		rememberLayouts(of: orchestrator.presentation)
+		// The first projection of a connection has nothing of its own on screen
+		// yet; what is there belongs to the connection just left.
+		if previous != nil { rememberLayouts(of: orchestrator.presentation) }
 		let compatible: Set<PanelID> = Set(snapshot.panels.filter { panel in
 			previous?.panels.contains(where: { $0.id == panel.id && $0.binding == panel.binding }) == true
 		}.map { PanelID($0.id) })

@@ -554,11 +554,22 @@ final class SpaceDirectory {
 		return true
 	}
 
-	/// Switches to the Space at a Spaces-bar position, the position
-	/// `SpaceSnapshot.index(of:)` reports.
-	func activateSpace(atSpacesBarIndex index: Int) throws {
+	/// Switches to a Space by pressing its button in the bar.
+	///
+	/// The position comes from the preferences, the button from Mission Control,
+	/// and the two only line up while the bar shows exactly the Spaces of the
+	/// monitor that holds this one. When they disagree — another display's bar,
+	/// or a Space added since the read — pressing by position would switch the
+	/// person to a Space they never asked for, so this fails closed instead.
+	func activate(_ space: SpaceIdentity) throws {
+		let snapshot: SpaceSnapshot = try self.snapshot()
+		guard let monitor: SpaceMonitor = snapshot.monitor(hosting: space),
+			let index: Int = monitor.index(of: space)
+		else {
+			throw SpacesBarError.spaceButtonOutOfRange(index: 0, count: 0)
+		}
 		let buttons: [AXUIElement] = try controls.spacesBarButtons()
-		guard buttons.indices.contains(index) else {
+		guard buttons.count == monitor.spaces.count, buttons.indices.contains(index) else {
 			throw SpacesBarError.spaceButtonOutOfRange(
 				index: index,
 				count: buttons.count

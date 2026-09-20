@@ -348,10 +348,13 @@ private func testCloseDuringATransitionOnlyRecordsTheIntent() throws {
 		"the close is recorded as an intent"
 	)
 
+	// No display rectangle is published here: the canvas is already leaving the
+	// frame it just arrived at, and the solver would lay Panels out into a
+	// fullscreen rectangle that exists for one animation.
 	try expectEffects(
 		lifecycle.handle(.didEnterFullScreen(canvasA, frame: Frames.fullScreen)),
-		[.displayFrame(canvasA, Frames.fullScreen), .setOpaque(canvasA, false),
-			.setBackdropLevel(canvasA, true), .exitFullScreen(canvasA)],
+		[.setOpaque(canvasA, false), .setBackdropLevel(canvasA, true),
+			.exitFullScreen(canvasA)],
 		"a canvas that arrives fullscreen with a close recorded exits again"
 	)
 	_ = lifecycle.handle(.willExitFullScreen(canvasA))
@@ -481,15 +484,13 @@ private func testFillScreenChangesOpacityOnly() throws {
 		lifecycle.state(of: canvasA)?.phase == .windowed,
 		"filling the screen is never macOS fullscreen"
 	)
-	try expectEffects(
-		lifecycle.handle(.geometryChanged(canvasA, frame: Frames.screen)),
-		[.setFrame(canvasA, Frames.screen), .displayFrame(canvasA, Frames.screen)],
-		"the rectangle to fill is the host's, never one this machine invents"
-	)
+	// The rectangle that fills a screen belongs to the host: what arrives here
+	// is the layout rect, clipped once a canvas covers its screen, and echoing
+	// that back as a window frame would shrink the canvas it just filled.
 	try expectEffects(
 		lifecycle.handle(.geometryChanged(canvasA, frame: Frames.screen)),
 		[.displayFrame(canvasA, Frames.screen)],
-		"a canvas is pinned to the screen once, not held there"
+		"a filled canvas reports its display rectangle and asks for no resize"
 	)
 
 	try expectEffects(

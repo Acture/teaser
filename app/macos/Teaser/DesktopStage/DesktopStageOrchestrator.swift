@@ -142,6 +142,10 @@ final class DesktopStageOrchestrator {
 	/// or two overlapping canvases, let the same point match several Panels and
 	/// the dragged window is detached instead of adopted.
 	var canvasDisplayAtScreenPoint: ((CGPoint) -> DisplayID?)?
+	/// The canvases whose Panels are on screen right now. A canvas in fullscreen
+	/// or on another Space shows none of its Panels here, so its adopted windows
+	/// cannot be dragged out of it by a drag that happens elsewhere.
+	var visibleCanvasDisplays: (() -> Set<DisplayID>)?
 
 	private var leases: [ExternalWindowIdentity: any ExternalWindowLease] = [:]
 	/// Leases whose release was refused and which the user may retry. Only a
@@ -371,6 +375,17 @@ final class DesktopStageOrchestrator {
 	/// Every Panel of every Workspace this canvas holds. A canvas can hold more
 	/// than one Workspace, and Workspace membership — not canvas geometry — is
 	/// what decides which Panels belong to it.
+	/// Whether the canvas that shows this Panel is on screen. Without a host
+	/// answer every canvas counts as visible, which is the single-canvas
+	/// behavior this started from.
+	private func isOnScreen(panel panelID: PanelID) -> Bool {
+		guard let visibleCanvasDisplays,
+			let workspaceID: WorkspaceID = workspaceID(containing: panelID),
+			let display: DisplayID = presentation.workspaces[workspaceID]?.displayAffinity
+		else { return true }
+		return visibleCanvasDisplays().contains(display)
+	}
+
 	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
 		var result: Set<PanelID> = []
 		for workspace: WorkspaceDescriptor in presentation.workspaces.values
@@ -501,6 +516,13 @@ final class DesktopStageOrchestrator {
 		) else {
 			guard let sourcePanelID else {
 				setStatus(DesktopStageOrchestratorError.missingDropTarget.localizedDescription)
+				return
+			}
+			// Dragging a window out of its canvas detaches it. A canvas that is
+			// not on screen shows nothing to drag out of, so its windows keep
+			// their Panels until that canvas is in front again.
+			guard isOnScreen(panel: sourcePanelID) else {
+				setStatus("This window's canvas is not on screen, so it kept its Panel.")
 				return
 			}
 			detachWindow(identity: identity, from: sourcePanelID)

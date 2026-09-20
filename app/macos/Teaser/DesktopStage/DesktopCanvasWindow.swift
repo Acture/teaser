@@ -20,6 +20,10 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	private let statusLabel: NSTextField = .init(wrappingLabelWithString: "")
 	private let container: NSView
 	private let onEvent: @MainActor (CanvasEvent) -> Void
+	/// Which canvas the person is working in. It is not a lifecycle event: the
+	/// machine has no opinion about focus, while the host places new Workspaces
+	/// and aims canvas commands at the canvas that is actually key.
+	private let onBecameKey: @MainActor (CanvasID) -> Void
 	/// Teaser-owned Panel content lives inside the canvas rather than in
 	/// separate windows, so it is still there when the canvas is fullscreen: no
 	/// other application's window may join that Space, but ours is the Space.
@@ -30,10 +34,12 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		snapshot: DesktopOverlaySnapshot,
 		callbacks: DesktopOverlayCallbacks,
 		onEvent: @escaping @MainActor (CanvasEvent) -> Void,
+		onBecameKey: @escaping @MainActor (CanvasID) -> Void,
 		onContentClick: @escaping @MainActor (PanelID) -> Void
 	) {
 		self.id = id
 		self.onEvent = onEvent
+		self.onBecameKey = onBecameKey
 		let contentRect: NSRect = .init(x: 0, y: 0, width: 1_200, height: 800)
 		canvasView = .init(
 			frame: .init(origin: .zero, size: contentRect.size),
@@ -252,6 +258,10 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	}
 
 	// MARK: - NSWindowDelegate
+
+	func windowDidBecomeKey(_ notification: Notification) {
+		onBecameKey(id)
+	}
 
 	func windowShouldClose(_ sender: NSWindow) -> Bool {
 		// Closing is a lifecycle decision: a fullscreen canvas has to leave its

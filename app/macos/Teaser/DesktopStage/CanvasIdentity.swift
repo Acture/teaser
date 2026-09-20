@@ -60,6 +60,10 @@ struct CanvasState: Equatable, Sendable {
 	var settledFrame: LayoutRect?
 	var space: SpaceIdentity?
 	var closesWhenSettled: Bool = false
+	/// How often macOS has refused to leave fullscreen for a close. A refusal
+	/// that repeats forever would hold the transition gate and never close the
+	/// canvas, so the close gives up and says so instead.
+	var refusedCloseExits: Int = 0
 
 	var displayID: DisplayID { .init(canvas: id) }
 }
@@ -95,11 +99,13 @@ enum CanvasEffect: Equatable, Sendable {
 	/// The backdrop level sits below ordinary windows so adopted windows stay
 	/// above the canvas; fullscreen needs the normal level.
 	case setBackdropLevel(CanvasID, Bool)
-	case setFrame(CanvasID, LayoutRect)
 	/// Release this canvas's adopted windows and stop showing its Workspaces,
 	/// without touching any other canvas.
 	case releaseCanvas(CanvasID)
 	case closeWindow(CanvasID)
+	/// macOS kept refusing to leave fullscreen, so the close was given up rather
+	/// than retried forever. The canvas is still open and still fullscreen.
+	case closeRefused(CanvasID)
 	/// A settled frame the solver can use as this canvas's display rectangle.
 	case displayFrame(CanvasID, LayoutRect)
 }
