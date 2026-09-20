@@ -127,38 +127,19 @@ struct ConstrainedLayoutSolver: Sendable {
 		var dividers: [LayoutDivider] = []
 		var effectiveRatios: [LayoutSplitReference: Double] = [:]
 
+		let displayOrder: [DisplayID] = presentation.displayLayouts.keys.sorted(
+			by: { $0.rawValue < $1.rawValue }
+		)
 		switch presentation.mode {
 		case .tiled:
-			for displayID: DisplayID in presentation.displayLayouts.keys.sorted(
-				by: { $0.rawValue < $1.rawValue }
-			) {
-				guard let displayLayout: DisplayWorkspaceLayout =
-					presentation.displayLayouts[displayID],
-					let displayFrame: LayoutRect = displayFrames[displayID]
-				else {
-					throw ConstrainedLayoutError.missingDisplayFrame(displayID)
-				}
-				let scope: LayoutScope = .display(displayID)
-				let solution: TreeSolution<WorkspaceID> = try solveTree(
-					displayLayout.workspaceTree,
-					in: displayFrame,
-					gap: workspaceGap,
-					scope: scope
-				) { workspaceID in
-					try workspaceMetrics(
-						workspaceID,
-						presentation: presentation
-					)
-				}
-				workspaceFrames.merge(solution.leafFrames) { _, _ in
-					preconditionFailure("Validated workspace IDs must be unique")
-				}
-				try merge(
-					solution: solution,
-					intoDividers: &dividers,
-					effectiveRatios: &effectiveRatios
-				)
-			}
+			try tileDisplays(
+				displayOrder,
+				presentation: presentation,
+				displayFrames: displayFrames,
+				workspaceFrames: &workspaceFrames,
+				dividers: &dividers,
+				effectiveRatios: &effectiveRatios
+			)
 		case .focused(let workspaceID):
 			guard let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
 			else {
@@ -168,7 +149,18 @@ struct ConstrainedLayoutSolver: Sendable {
 			else {
 				throw ConstrainedLayoutError.missingDisplayFrame(workspace.displayAffinity)
 			}
+			// Focus belongs to one canvas. The focused Workspace takes over the
+			// display it is placed on, and every other display keeps the tiling it
+			// would have had, so focusing on one canvas never blanks the others.
 			workspaceFrames[workspaceID] = displayFrame
+			try tileDisplays(
+				displayOrder.filter { $0 != workspace.displayAffinity },
+				presentation: presentation,
+				displayFrames: displayFrames,
+				workspaceFrames: &workspaceFrames,
+				dividers: &dividers,
+				effectiveRatios: &effectiveRatios
+			)
 		}
 
 		for workspaceID: WorkspaceID in workspaceFrames.keys.sorted(
@@ -213,6 +205,47 @@ struct ConstrainedLayoutSolver: Sendable {
 			effectiveRatios: effectiveRatios,
 			quality: quality
 		)
+	}
+
+	/// Tiles the given displays into the accumulating layout. Both presentation
+	/// modes share it: focus only replaces the tiling of the display it is on,
+	/// so the remaining displays are solved here either way.
+	private func tileDisplays(
+		_ displayIDs: [DisplayID],
+		presentation: WorkspacePresentation,
+		displayFrames: [DisplayID: LayoutRect],
+		workspaceFrames: inout [WorkspaceID: LayoutRect],
+		dividers: inout [LayoutDivider],
+		effectiveRatios: inout [LayoutSplitReference: Double]
+	) throws {
+		for displayID: DisplayID in displayIDs {
+			guard let displayLayout: DisplayWorkspaceLayout =
+				presentation.displayLayouts[displayID],
+				let displayFrame: LayoutRect = displayFrames[displayID]
+			else {
+				throw ConstrainedLayoutError.missingDisplayFrame(displayID)
+			}
+			let scope: LayoutScope = .display(displayID)
+			let solution: TreeSolution<WorkspaceID> = try solveTree(
+				displayLayout.workspaceTree,
+				in: displayFrame,
+				gap: workspaceGap,
+				scope: scope
+			) { workspaceID in
+				try workspaceMetrics(
+					workspaceID,
+					presentation: presentation
+				)
+			}
+			workspaceFrames.merge(solution.leafFrames) { _, _ in
+				preconditionFailure("Validated workspace IDs must be unique")
+			}
+			try merge(
+				solution: solution,
+				intoDividers: &dividers,
+				effectiveRatios: &effectiveRatios
+			)
+		}
 	}
 
 	private func validate(
