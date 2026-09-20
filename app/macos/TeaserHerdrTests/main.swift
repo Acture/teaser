@@ -95,11 +95,23 @@ final class FixtureSession {
 	}
 }
 
+/// The projection needs to know which canvases are open. These cases are about
+/// the server model rather than placement, so they use one canvas.
+let testPlacement: WorkspacePlacement = .init(openDisplays: [testDisplayID], targetDisplay: testDisplayID)
+
+@MainActor
+func project(
+	_ snapshot: OrganizationSnapshot,
+	previous: WorkspacePresentation? = nil
+) throws -> WorkspacePresentation {
+	try OrganizationProjection.project(snapshot, previous: previous, placement: testPlacement).presentation
+}
+
 let cases: [TestCase] = [
 	.init("shared Rust fixture validates and projects all bindings") {
 		let value: OrganizationSnapshot = try fixture(); try value.validate()
 		try expect(value.panels[0].title == "Design 👩‍💻", "shared fixture includes joined emoji")
-		let projected: WorkspacePresentation = try OrganizationProjection.project(value, previous: nil, displayID: testDisplayID)
+		let projected: WorkspacePresentation = try project(value)
 		try expect(projected.workspaces.values.flatMap { $0.panels.values }.count == 4, "all fixture Panels")
 		try expect(projected.panelKinds.definition(for: .init("custom-chart")) != nil, "custom kind retained")
 	},
@@ -184,21 +196,21 @@ let cases: [TestCase] = [
 		value.panels[0].size_profile = .init(name: "invalid", min_width: 0, min_height: 1,
 			preferred_width: 1, preferred_height: 1, growth_weight: 1,
 			preferred_aspect_ratio: .init(minimum: 2, maximum: 1))
-		do { _ = try OrganizationProjection.project(value, previous: nil, displayID: testDisplayID); throw TestFailure.assertion("bad profile accepted") }
+		do { _ = try project(value); throw TestFailure.assertion("bad profile accepted") }
 		catch is HerdrError {}
 	},
 	.init("rename preserves placement; regroup and deletion reconcile stable IDs") {
 		var value: OrganizationSnapshot = try fixture()
-		var old: WorkspacePresentation = try OrganizationProjection.project(value, previous: nil, displayID: testDisplayID)
+		var old: WorkspacePresentation = try project(value)
 		let workspaceID: WorkspaceID = .init(value.workspaces[0].id)
 		let splitID: LayoutSplitID = old.workspaces[workspaceID]!.panelTree.splitIDs[0]
 		try old.setDesiredRatio(0.7, for: splitID, in: .workspace(workspaceID))
 		value.panels[0].title = "Renamed"
-		let renamed: WorkspacePresentation = try OrganizationProjection.project(value, previous: old, displayID: testDisplayID)
+		let renamed: WorkspacePresentation = try project(value, previous: old)
 		try expect(renamed.workspaces[workspaceID]!.panelTree == old.workspaces[workspaceID]!.panelTree, "pixel placement survives rename")
 		value.workspaces.append(.init(id: "second", project_id: value.projects[0].id, name: "Second"))
 		value.panels[0].workspace_id = "second"; value.panels.removeLast()
-		let next: WorkspacePresentation = try OrganizationProjection.project(value, previous: renamed, displayID: testDisplayID)
+		let next: WorkspacePresentation = try project(value, previous: renamed)
 		try expect(next.workspaces[.init("second")]?.panels[.init("panel-notes")] != nil, "regroup accepted")
 		try expect(next.workspaces[workspaceID]?.panels[.init("panel-custom")] == nil, "deleted Panel removed")
 	},

@@ -3,9 +3,14 @@ import CoreGraphics
 import Foundation
 
 /// The AppKit shell around `DesktopStageOrchestrator`. It owns every window
-/// Teaser creates, Accessibility permission UX, display topology, and local
+/// Teaser creates, Accessibility permission UX, Space awareness, and local
 /// persistence; the orchestration it drives contains no window creation and runs
 /// unchanged under a substituted external-window environment.
+///
+/// Teaser has several canvases. Each open canvas window is one display to the
+/// orchestrator, so Workspaces, dividers and drop targets are scoped to the
+/// canvas that shows them, while leases, the drag observer and the one-lease-per
+/// window rule stay app-wide. Closing a canvas releases only its own windows.
 @MainActor
 final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private struct InitialState {
@@ -13,6 +18,13 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		let notes: [PanelID: String]
 		let store: PresentationStore?
 		let statusMessage: String?
+	}
+
+	/// What reopening needs: the identity the Workspaces are still placed on,
+	/// and where the window was. Restoring across launches belongs to P-563.
+	private struct ClosedCanvas {
+		let id: CanvasID
+		let frame: LayoutRect?
 	}
 
 	private static let defaultNotes: String = """
@@ -29,19 +41,28 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private let orchestrator: DesktopStageOrchestrator
 	private let store: PresentationStore?
 	private let panelTypeChooser: PanelTypeChooserController = .init()
+	private let canvasesMenu: NSMenu
+	private let lifecycle: CanvasLifecycle = .init()
+	private let spaces: SpaceDirectory = .init()
 	private lazy var organization: OrganizationSession = .init(orchestrator: orchestrator,
 		archiveDirectory: store?.documentURL.deletingLastPathComponent().appendingPathComponent("connection-scopes", isDirectory: true))
 	private lazy var organizationControls: OrganizationControls = .init(model: .init(session: organization,
 		startStage: { [weak self] in self?.toggleStage() },
 		adoptWindow: { [weak self] in self?.showWindowPicker() }))
 
-	private var notesWindows: [PanelID: NotesWindowController] = [:]
+	private var canvases: [CanvasID: DesktopCanvasWindow] = [:]
+	private var closedCanvases: [ClosedCanvas] = []
+	private var canvasSequence: Int = 0
+	/// New Workspaces land on the canvas the person used last, not on whichever
+	/// canvas happens to be first.
+	private var lastKeyCanvasID: CanvasID?
+	private var notesPanels: [PanelID: NotesPanelController] = [:]
 	private var saveTask: Task<Void, Never>?
 	private var isRunning: Bool = false
 	private var permissionTask: Task<Void, Never>?
+	private var newSpaceTask: Task<Void, Never>?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
-
 
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
 		presentation: orchestrator.presentation,
@@ -82,32 +103,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		}
 	)
 
-	private lazy var overlayController: DesktopOverlayController = .init(
-		callbacks: overlayCallbacks
-	)
-
-	/// Teaser's own window, and the surface the layout lives in. Its content
-	/// rectangle is the display the solver works in, so Panels stay inside it
-	/// instead of on the desktop.
-	private lazy var canvasWindow: DesktopCanvasWindow = .init(
-		snapshot: .init(
-			displayID: ShowcasePreset.mainDisplayID,
-			screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
-			workspaces: [],
-			panels: [],
-			dividers: [],
-			virtualFocus: orchestrator.presentation.virtualFocus,
-			arrangeMode: false
-		),
-		callbacks: overlayCallbacks,
-		onGeometryChange: { [weak self] frame in
-			self?.canvasGeometryDidChange(frame)
-		},
-		// The canvas is Teaser; closing it quits.
-		onClose: { NSApplication.shared.terminate(nil) }
-	)
-	private var isCanvasOpen: Bool = false
-
 	private lazy var managedWindowFocusObserver: ManagedWindowFocusObserver = .init {
 		[weak self] identity in
 		self?.orchestrator.synchronizeVirtualFocus(with: identity)
@@ -135,15 +130,19 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			onQuit: {
 				NSApplication.shared.terminate(nil)
 			},
-			onShowControls: { [weak self] in self?.showCanvas(); self?.organizationControls.show() },
+			onShowControls: { [weak self] in
+				self?.reopenFromDock()
+				self?.organizationControls.show()
+			},
 			onToggleStage: { [weak self] in self?.toggleStage() },
 			onAdoptWindow: { [weak self] in self?.showWindowPicker() },
 			onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
 		)
 	)
 
-	override init() {
+	init(canvasesMenu: NSMenu) {
 		let initialState: InitialState = Self.loadInitialState()
+		self.canvasesMenu = canvasesMenu
 		self.store = initialState.store
 		self.lastLoggedStatusMessage = initialState.statusMessage
 		self.orchestrator = .init(
@@ -153,6 +152,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 		super.init()
 		orchestrator.host = self
+		// A drop belongs to the canvas under the pointer. Without this, Panels of
+		// a canvas on another Space, or of an overlapping canvas, match the same
+		// point and the dragged window is detached instead of adopted.
+		orchestrator.canvasDisplayAtScreenPoint = { [weak self] point in
+			self?.canvasDisplay(atScreenPoint: point)
+		}
 		organization.onChange = { [weak self] in
 			guard let self else { return }
 			self.organizationControls.model.refresh()
@@ -160,9 +165,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		}
 		organization.onProjection = { [weak self] in
 			guard let self else { return }
-			self.closeNotesWindows()
-			if self.orchestrator.isStageActive, let layout: PresentationLayout = self.orchestrator.layout {
-				self.updateNotesWindows(using: layout)
+			if let layout: PresentationLayout = self.orchestrator.layout {
+				self.updateNotesPanels(using: layout)
+			} else {
+				self.removeAllNotesPanels()
 			}
 		}
 	}
@@ -171,10 +177,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard !isRunning else { return }
 		isRunning = true
 		installSystemObservers()
-		orchestrator.setDisplays(connectedDisplaysWithFallback())
-		// Launching opens the canvas itself. The control window is a secondary
-		// surface reachable from the status menu, not the way in.
-		showCanvas()
+		// Launch opens one canvas filling its screen. Filling keeps it on this
+		// Space, which is the only state where adopted windows can sit inside it.
+		openCanvas(fill: .fillScreen)
 		organizationControls.show()
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
@@ -188,30 +193,277 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		updateChrome()
 	}
 
-	/// Opens the canvas. From here on the layout is solved inside this window's
-	/// content rectangle rather than across the desktop.
-	func showCanvas() {
-		isCanvasOpen = true
-		canvasWindow.show()
-		orchestrator.relayout(synchronously: false)
-		updateChrome()
-	}
-
 	private static let accessibilityRequest: String =
 		"Allow Teaser in System Settings › Privacy & Security › Accessibility. "
 		+ "Then explicitly Start Stage or Adopt Window."
 
-	private func canvasGeometryDidChange(_ frame: LayoutRect) {
-		guard isCanvasOpen else { return }
-		orchestrator.screenParametersDidChange(displays: [
-			.init(id: ShowcasePreset.mainDisplayID, frame: frame),
-		])
+	// MARK: - Canvases
+
+	func openCanvas(inNewSpace newSpace: Bool) {
+		guard newSpace else {
+			openCanvas(fill: .free)
+			return
+		}
+		openCanvasInNewSpace()
 	}
 
-	/// The canvas rectangle while the canvas is open, the screens otherwise.
+	private func openCanvas(fill: CanvasFillMode, restoring closed: ClosedCanvas? = nil) {
+		canvasSequence += 1
+		let id: CanvasID = closed?.id ?? .init("canvas-\(canvasSequence)")
+		let canvas: DesktopCanvasWindow = makeCanvas(id: id, index: canvases.count + 1)
+		canvases[id] = canvas
+		if let frame: LayoutRect = closed?.frame {
+			canvas.setFrame(frame)
+		}
+		canvas.show(space: currentSpace())
+		lastKeyCanvasID = id
+		organization.setTargetDisplay(.init(canvas: id))
+		if fill == .fillScreen {
+			setFill(.fillScreen, on: canvas)
+		}
+		canvasesDidChange()
+	}
+
+	private func makeCanvas(id: CanvasID, index: Int) -> DesktopCanvasWindow {
+		let canvas: DesktopCanvasWindow = .init(
+			id: id,
+			snapshot: .init(
+				displayID: .init(canvas: id),
+				screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
+				workspaces: [],
+				panels: [],
+				dividers: [],
+				virtualFocus: orchestrator.presentation.virtualFocus,
+				arrangeMode: false
+			),
+			callbacks: overlayCallbacks,
+			onEvent: { [weak self] event in self?.handle(event) },
+			onContentClick: { [weak self] panelID in
+				self?.orchestrator.setVirtualPanel(panelID)
+			}
+		)
+		canvas.window.title = "Teaser — Canvas \(index)"
+		return canvas
+	}
+
+	/// Mission Control's own controls add the desktop and switch to it; Teaser
+	/// creates no Space itself and synthesizes no input. Every step is bounded
+	/// and reports what it could not do.
+	private func openCanvasInNewSpace() {
+		guard newSpaceTask == nil else { return }
+		newSpaceTask = Task { @MainActor [weak self] in
+			defer { self?.newSpaceTask = nil }
+			guard let self else { return }
+			do {
+				let before: SpaceSnapshot = try self.spaces.snapshot()
+				NSWorkspace.shared.open(URL(fileURLWithPath: Self.missionControlPath))
+				try await Task.sleep(for: .milliseconds(1_200))
+				guard try self.spaces.addDesktop() else {
+					self.orchestrator.setStatus(
+						"Mission Control is not offering its add-desktop button. Add a desktop there, then use New Canvas."
+					)
+					return
+				}
+				try await Task.sleep(for: .milliseconds(800))
+				let after: SpaceSnapshot = try self.spaces.snapshot()
+				guard let added: SpaceIdentity = Self.addedSpace(before: before, after: after),
+					let index: Int = after.index(of: added)
+				else {
+					self.orchestrator.setStatus("The new desktop did not appear in Mission Control; no canvas was opened.")
+					return
+				}
+				try self.spaces.activateSpace(atSpacesBarIndex: index)
+				try await Task.sleep(for: .milliseconds(600))
+				self.openCanvas(fill: .fillScreen)
+			} catch {
+				self.orchestrator.setStatus(
+					"A new Space could not be prepared: \(error.localizedDescription). Add a desktop in Mission Control, then use New Canvas."
+				)
+			}
+		}
+	}
+
+	private static let missionControlPath: String = "/System/Applications/Mission Control.app"
+
+	private static func addedSpace(before: SpaceSnapshot, after: SpaceSnapshot) -> SpaceIdentity? {
+		let known: Set<Int> = .init(before.monitors.flatMap { $0.spaces.map(\.managedID) })
+		return after.monitors
+			.flatMap(\.spaces)
+			.first { !$0.isFullScreen && !known.contains($0.managedID) }
+	}
+
+	func reopenMostRecentlyClosedCanvas() {
+		guard let closed: ClosedCanvas = closedCanvases.popLast() else {
+			orchestrator.setStatus("No closed canvas to reopen.")
+			updateChrome()
+			return
+		}
+		openCanvas(fill: .free, restoring: closed)
+	}
+
+	/// Clicking the Dock icon with every canvas closed opens one again; with a
+	/// canvas open it brings the last one forward, switching Space if it lives
+	/// on another one.
+	func reopenFromDock() {
+		guard let canvas: DesktopCanvasWindow = keyCanvas() else {
+			openCanvas(fill: .fillScreen)
+			return
+		}
+		canvas.bringForward()
+	}
+
+	func goToCanvas(at index: Int) {
+		let ordered: [CanvasID] = lifecycle.openCanvases
+		guard ordered.indices.contains(index) else { return }
+		canvases[ordered[index]]?.bringForward()
+	}
+
+	func toggleFillScreenOnKeyCanvas() {
+		guard let canvas: DesktopCanvasWindow = keyCanvas(),
+			let state: CanvasState = lifecycle.state(of: canvas.id)
+		else { return }
+		setFill(state.fill == .fillScreen ? .free : .fillScreen, on: canvas)
+	}
+
+	/// The mode is the lifecycle's, the rectangle is the host's: only AppKit
+	/// knows the screen this canvas is on.
+	private func setFill(_ fill: CanvasFillMode, on canvas: DesktopCanvasWindow) {
+		apply(lifecycle.handle(.fillModeRequested(canvas.id, fill)))
+		guard lifecycle.state(of: canvas.id)?.phase.isFullScreen != true else { return }
+		switch fill {
+		case .fillScreen:
+			guard let frame: LayoutRect = canvas.screenFillFrame else { return }
+			canvas.setFrame(frame)
+		case .free:
+			guard let visible: NSRect = (canvas.window.screen ?? NSScreen.main)?.visibleFrame else { return }
+			canvas.setFrame(
+				.init(
+					x: Double(visible.minX) + 60,
+					y: Double(visible.minY) + 60,
+					width: Double(visible.width) - 120,
+					height: Double(visible.height) - 120
+				)
+			)
+		}
+	}
+
+	private func handle(_ event: CanvasEvent) {
+		if case .opened(let id, _, _) = event { lastKeyCanvasID = id }
+		apply(lifecycle.handle(event))
+		guard case .windowClosed(let id) = event else { return }
+		// The window is gone, so the canvas stops being a display. Its adopted
+		// windows were already released by the preceding `releaseCanvas` effect;
+		// re-projecting now is what stops showing its Workspaces, and it must
+		// happen after the release, which finds Panels through their placement.
+		canvases.removeValue(forKey: id)
+		if lastKeyCanvasID == id { lastKeyCanvasID = lifecycle.openCanvases.last }
+		if let target: CanvasID = lastKeyCanvasID {
+			organization.setTargetDisplay(.init(canvas: target))
+		}
+		canvasesDidChange()
+	}
+
+	private func apply(_ effects: [CanvasEffect]) {
+		var displaysChanged: Bool = false
+		for effect: CanvasEffect in effects {
+			switch effect {
+			case .enterFullScreen(let id), .exitFullScreen(let id):
+				// macOS ignores a toggle issued from inside a fullscreen callback,
+				// so the transition starts on the next run-loop turn.
+				let canvas: DesktopCanvasWindow? = canvases[id]
+				Task { @MainActor in canvas?.toggleFullScreen() }
+			case .setOpaque(let id, let opaque):
+				canvases[id]?.setOpaque(opaque)
+			case .setBackdropLevel(let id, let backdrop):
+				canvases[id]?.setBackdropLevel(backdrop)
+			case .setFrame(let id, let frame):
+				canvases[id]?.setFrame(frame)
+			case .releaseCanvas(let id):
+				releaseCanvas(id)
+			case .closeWindow(let id):
+				canvases[id]?.closeWindow()
+			case .displayFrame:
+				displaysChanged = true
+			}
+		}
+		if displaysChanged {
+			orchestrator.screenParametersDidChange(displays: canvasDisplays())
+			updateChrome()
+		}
+	}
+
+	/// Everything this canvas holds, and nothing else: its adopted windows go
+	/// back where they came from and its Teaser-owned content is torn down,
+	/// while other canvases keep their leases and layouts.
+	private func releaseCanvas(_ id: CanvasID) {
+		let displayID: DisplayID = .init(canvas: id)
+		let released: Bool = orchestrator.releaseWindows(onDisplay: displayID)
+		if !released {
+			orchestrator.setStatus(
+				"Some windows of this canvas could not be restored; their leases are kept for a retry."
+			)
+		}
+		if let canvas: DesktopCanvasWindow = canvases[id] {
+			for panelID: PanelID in canvas.contentPanelIDs { canvas.removeContent(for: panelID) }
+			closedCanvases.append(.init(id: id, frame: canvas.canvasFrame))
+		}
+	}
+
+	private func canvasesDidChange() {
+		// setDisplays does not solve, so the projection can drop a closed
+		// canvas's Workspaces before anything tries to lay them out.
+		orchestrator.setDisplays(canvasDisplays())
+		do {
+			try organization.canvasesDidChange()
+		} catch {
+			orchestrator.setStatus("Canvas placement could not be applied: \(error.localizedDescription)")
+		}
+		orchestrator.relayout(synchronously: orchestrator.isStageActive)
+		updateCanvasesMenu()
+		updateChrome()
+	}
+
 	private func canvasDisplays() -> [DesktopStageDisplay] {
-		guard isCanvasOpen else { return connectedDisplaysWithFallback() }
-		return [.init(id: ShowcasePreset.mainDisplayID, frame: canvasWindow.canvasFrame)]
+		lifecycle.openCanvases.compactMap { id in
+			guard let frame: LayoutRect = lifecycle.state(of: id)?.settledFrame else { return nil }
+			return .init(id: .init(canvas: id), frame: frame)
+		}
+	}
+
+	private func keyCanvas() -> DesktopCanvasWindow? {
+		if let id: CanvasID = lastKeyCanvasID, let canvas: DesktopCanvasWindow = canvases[id] {
+			return canvas
+		}
+		return lifecycle.openCanvases.compactMap { canvases[$0] }.last
+	}
+
+	/// The frontmost canvas that can actually receive the drop: one that is
+	/// visible on the Space the pointer is on.
+	private func canvasDisplay(atScreenPoint point: CGPoint) -> DisplayID? {
+		for window: NSWindow in NSApplication.shared.orderedWindows {
+			guard let canvasWindow: CanvasNSWindow = window as? CanvasNSWindow,
+				canvasWindow.isVisible,
+				canvasWindow.isOnActiveSpace,
+				canvasWindow.frame.contains(point),
+				let canvas: DesktopCanvasWindow = canvases.values.first(where: { $0.window === canvasWindow })
+			else { continue }
+			return .init(canvas: canvas.id)
+		}
+		return nil
+	}
+
+	private func currentSpace() -> SpaceIdentity? {
+		try? spaces.currentSpace(ofDisplayIdentifier: "Main")
+	}
+
+	private func updateCanvasesMenu() {
+		TeaserMainMenu.fill(
+			canvasesMenu,
+			with: lifecycle.openCanvases.compactMap { id in
+				guard let canvas: DesktopCanvasWindow = canvases[id] else { return nil }
+				return (id: id, title: canvas.window.title)
+			}
+		)
 	}
 
 	/// The Accessibility walk runs here, when a person asks to see the list, and
@@ -242,6 +494,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		isRunning = false
 		permissionTask?.cancel()
 		permissionTask = nil
+		newSpaceTask?.cancel()
+		newSpaceTask = nil
 		saveTask?.cancel()
 		saveTask = nil
 		saveNow()
@@ -250,16 +504,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		managedWindowFocusObserver.stop()
 		shortcutMonitor.stop()
 		panelTypeChooser.close()
-		overlayController.close()
 		statusController.close()
 		layoutEditorWindow.close()
 		windowPickerWindow.close()
 		organizationControls.close()
-		if isCanvasOpen {
-			canvasWindow.close()
-			isCanvasOpen = false
-		}
-		closeNotesWindows()
+		removeAllNotesPanels()
+		// Quitting is the one global teardown: every canvas goes, in one pass.
+		for canvas: DesktopCanvasWindow in canvases.values { canvas.closeWindow() }
+		canvases.removeAll()
 	}
 
 	func perform(_ command: DesktopStageCommand) {
@@ -291,27 +543,25 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		_ orchestrator: DesktopStageOrchestrator,
 		didSolve layout: PresentationLayout
 	) {
-		updateNotesWindows(using: layout)
+		updateNotesPanels(using: layout)
 	}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
 		raiseContentIn panelID: PanelID
 	) {
-		guard let notesWindow: NotesWindowController = notesWindows[panelID],
-			let frame: LayoutRect = orchestrator.layout?.panelFrames[panelID]
-		else { return }
-		notesWindow.update(frame: nsRect(frame), visible: true)
+		guard let layout: PresentationLayout = orchestrator.layout else { return }
+		updateNotesPanels(using: layout)
 	}
 
 	func orchestrator(
 		_ orchestrator: DesktopStageOrchestrator,
 		handInputToContentIn panelID: PanelID
 	) -> Bool {
-		guard let notesWindow: NotesWindowController = notesWindows[panelID] else {
+		guard let controller: NotesPanelController = notesPanels[panelID] else {
 			return false
 		}
-		notesWindow.focus()
+		controller.focus()
 		return true
 	}
 
@@ -331,8 +581,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		shortcutMonitor.setArrangeModeEnabled(false)
 		managedWindowFocusObserver.stop()
 		panelTypeChooser.close()
-		overlayController.close()
-		closeNotesWindows()
+		removeAllNotesPanels()
 	}
 
 	// MARK: - Stage lifecycle
@@ -346,14 +595,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			requestAccessibility()
 			return
 		}
-		// While the canvas is open it owns the layout rectangle; taking the screen
-		// back here would move every Panel out onto the desktop.
 		orchestrator.setDisplays(canvasDisplays())
 		do {
 			try orchestrator.startStage()
 			try managedWindowFocusObserver.start()
 			shortcutMonitor.start()
-			orchestrator.setStatus("Drag a window onto the canvas to adopt it")
+			orchestrator.setStatus("Drag a window onto a canvas to adopt it")
 		} catch {
 			orchestrator.stopStage()
 			orchestrator.setStatus(error.localizedDescription)
@@ -391,7 +638,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			if orchestrator.isStageActive { orchestrator.stopStage() }
 			orchestrator.setStatus(Self.accessibilityRequest)
 		} else if orchestrator.isStageActive {
-			orchestrator.setStatus("Accessibility allowed. Drag a window onto the canvas.")
+			orchestrator.setStatus("Accessibility allowed. Drag a window onto a canvas.")
 			startExternalObservation(promptForAccessibility: false)
 		} else {
 			orchestrator.setStatus("Accessibility allowed. Use Start Stage to begin adoption.")
@@ -399,22 +646,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		updateChrome()
 	}
 
-	// MARK: - Display topology and system notifications
-
-	private static func connectedDisplaysWithFallback() -> [DesktopStageDisplay] {
-		let connected: [DesktopStageDisplay] = DesktopStageDisplayTopology.connectedDisplays()
-		guard connected.isEmpty else { return connected }
-		return [
-			.init(
-				id: ShowcasePreset.mainDisplayID,
-				frame: .init(x: 0, y: 0, width: 1_600, height: 900)
-			),
-		]
-	}
-
-	private func connectedDisplaysWithFallback() -> [DesktopStageDisplay] {
-		Self.connectedDisplaysWithFallback()
-	}
+	// MARK: - System notifications
 
 	private func installSystemObservers() {
 		NotificationCenter.default.addObserver(
@@ -423,31 +655,20 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			name: NSApplication.didChangeScreenParametersNotification,
 			object: nil
 		)
-		NSWorkspace.shared.notificationCenter.addObserver(
-			self,
-			selector: #selector(activeSpaceDidChange(_:)),
-			name: NSWorkspace.activeSpaceDidChangeNotification,
-			object: nil
-		)
 	}
 
 	private func removeSystemObservers() {
 		NotificationCenter.default.removeObserver(self)
-		NSWorkspace.shared.notificationCenter.removeObserver(self)
 	}
 
+	/// A display change moves canvases, and the canvases are the displays the
+	/// solver works in. Physical screens are never fed to the orchestrator: that
+	/// would lay Panels out on the desktop instead of inside a canvas.
 	@objc
 	private func screenParametersDidChange(_ notification: Notification) {
-		orchestrator.screenParametersDidChange(displays: connectedDisplaysWithFallback())
-	}
-
-	@objc
-	private func activeSpaceDidChange(_ notification: Notification) {
-		// The canvas is an ordinary window: switching Space or Stage Manager stage
-		// leaves it where it is, so the layout keeps running.
-		guard orchestrator.isStageActive, !isCanvasOpen else { return }
-		orchestrator.stopStage()
-		orchestrator.setStatus("Layout stopped after switching Space. Open Teaser to start here.")
+		for canvas: DesktopCanvasWindow in canvases.values {
+			handle(.geometryChanged(canvas.id, frame: canvas.canvasFrame))
+		}
 	}
 
 	// MARK: - Teaser-owned chrome
@@ -458,27 +679,25 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		let layout: PresentationLayout? = orchestrator.layout
 		layoutEditorModel.update(from: orchestrator)
 		windowPickerModel.update(from: orchestrator)
-		let overlaySnapshots: [DesktopOverlaySnapshot]
-		if isCanvasOpen {
-			// The canvas owns the layout surface; nothing is drawn on the desktop.
-			overlaySnapshots = []
-			let canvasFrame: LayoutRect = canvasWindow.canvasFrame
+		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
+			let displayID: DisplayID = .init(canvas: id)
+			let canvasFrame: LayoutRect = lifecycle.state(of: id)?.settledFrame ?? canvas.canvasFrame
 			// Status is not drawn into the canvas: drawn text cannot be copied, so
 			// the canvas shows it in a selectable label instead.
 			if let layout {
-				canvasWindow.update(.init(
-					displayID: ShowcasePreset.mainDisplayID,
+				canvas.update(.init(
+					displayID: displayID,
 					screenFrame: canvasFrame,
 					presentation: presentation,
 					layout: layout,
 					arrangeMode: orchestrator.isArrangeModeEnabled,
 					dragActive: orchestrator.isDragging,
-					dropHighlight: orchestrator.dropHighlight,
+					dropHighlight: dropHighlight(on: displayID),
 					status: nil
 				))
 			} else {
-				canvasWindow.update(.init(
-					displayID: ShowcasePreset.mainDisplayID,
+				canvas.update(.init(
+					displayID: displayID,
 					screenFrame: canvasFrame,
 					workspaces: [],
 					panels: [],
@@ -488,40 +707,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					status: nil
 				))
 			}
-			canvasWindow.setStatus(orchestrator.statusMessage)
-		} else if !orchestrator.isStageActive {
-			overlaySnapshots = []
-		} else if let layout {
-			overlaySnapshots = orchestrator.displays.enumerated().map { index, display in
-				.init(
-					displayID: display.id,
-					screenFrame: display.frame,
-					presentation: presentation,
-					layout: layout,
-					arrangeMode: orchestrator.isArrangeModeEnabled,
-					dragActive: orchestrator.isDragging,
-					dropHighlight: orchestrator.dropHighlight,
-					status: index == 0 ? orchestrator.statusMessage : nil
-				)
-			}
-		} else {
-			overlaySnapshots = orchestrator.displays.enumerated().map { index, display in
-				.init(
-					displayID: display.id,
-					screenFrame: display.frame,
-					workspaces: [],
-					panels: [],
-					dividers: [],
-					virtualFocus: presentation.virtualFocus,
-					arrangeMode: orchestrator.isArrangeModeEnabled,
-					status: index == 0 ? orchestrator.statusMessage : nil
-				)
-			}
+			canvas.setStatus(status(for: id))
 		}
-		overlayController.update(overlaySnapshots)
 		let virtualPanelID: PanelID? = presentation.virtualFocus.panelID
 		let canHandInput: Bool = virtualPanelID.map {
-			orchestrator.panelAssignments[$0] != nil || notesWindows[$0] != nil
+			orchestrator.panelAssignments[$0] != nil || notesPanels[$0] != nil
 		} ?? false
 		let accessibility: DesktopStageAccessibilityState =
 			orchestrator.permissionStatus(prompt: false) == .authorized
@@ -546,55 +736,92 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 	}
 
-	private func updateNotesWindows(using nextLayout: PresentationLayout) {
-		let presentation: WorkspacePresentation = orchestrator.presentation
-		let notePanels: [(WorkspaceID, PanelDescriptor)] = presentation.workspaces.values
-			.flatMap { workspace in
-				workspace.panels.values.compactMap { panel in
-					panel.nativeContent == .notes ? (workspace.id, panel) : nil
-				}
-			}
-		let validPanelIDs: Set<PanelID> = .init(notePanels.map { $0.1.id })
-		for panelID: PanelID in notesWindows.keys where !validPanelIDs.contains(panelID) {
-			notesWindows.removeValue(forKey: panelID)?.close()
+	/// A highlight belongs to the canvas whose Workspace it points at, so a drag
+	/// never lights up a Panel outline on a canvas it cannot land on.
+	private func dropHighlight(on displayID: DisplayID) -> DesktopOverlayDropHighlight? {
+		guard let highlight: DesktopOverlayDropHighlight = orchestrator.dropHighlight,
+			orchestrator.presentation.workspaces[highlight.workspaceID]?.displayAffinity == displayID
+		else { return nil }
+		return highlight
+	}
+
+	private func status(for id: CanvasID) -> String? {
+		var lines: [String] = []
+		if let message: String = orchestrator.statusMessage { lines.append(message) }
+		if lifecycle.state(of: id)?.phase.isFullScreen == true,
+			!panelIDs(onDisplay: .init(canvas: id)).isDisjoint(with: orchestrator.panelAssignments.keys)
+		{
+			// Being explicit beats a canvas that silently shows outlines with no
+			// windows in them: macOS admits no other app's window to this Space.
+			lines.append("Adopted windows stay on the desktop Space while this canvas is full screen.")
 		}
-		for (_, panel): (WorkspaceID, PanelDescriptor) in notePanels {
-			let controller: NotesWindowController
-			if let existing: NotesWindowController = notesWindows[panel.id] {
-				controller = existing
-			} else {
-				controller = .init(
-					panelID: panel.id,
-					title: panel.title,
-					text: orchestrator.notes[panel.id] ?? Self.defaultNotes,
-					onChange: { [weak self] text in
-						self?.organization.setNote(text, panelID: panel.id)
-					},
-					onFocus: { [weak self] panelID in
-						self?.orchestrator.setVirtualPanel(panelID)
-					}
-				)
-				notesWindows[panel.id] = controller
+		return lines.isEmpty ? nil : lines.joined(separator: "\n")
+	}
+
+	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
+		var result: Set<PanelID> = []
+		for workspace: WorkspaceDescriptor in orchestrator.presentation.workspaces.values
+		where workspace.displayAffinity == displayID {
+			result.formUnion(workspace.panels.keys)
+		}
+		return result
+	}
+
+	// MARK: - Teaser-owned Panel content
+
+	/// Notes live inside the canvas that shows their Panel, so they follow it
+	/// into fullscreen and never strand themselves on another Space.
+	private func updateNotesPanels(using layout: PresentationLayout) {
+		let presentation: WorkspacePresentation = orchestrator.presentation
+		var hosted: [CanvasID: Set<PanelID>] = [:]
+		for workspace: WorkspaceDescriptor in presentation.workspaces.values {
+			guard let canvasID: CanvasID = canvasID(forDisplay: workspace.displayAffinity),
+				let canvas: DesktopCanvasWindow = canvases[canvasID]
+			else { continue }
+			for panel: PanelDescriptor in workspace.panels.values
+			where panel.nativeContent == .notes {
+				guard let frame: LayoutRect = layout.panelFrames[panel.id] else { continue }
+				let controller: NotesPanelController = notesPanels[panel.id] ?? makeNotesPanel(for: panel)
+				notesPanels[panel.id] = controller
+				canvas.setContent(controller.view, for: panel.id, frame: frame)
+				hosted[canvasID, default: []].insert(panel.id)
 			}
-			guard let frame: LayoutRect = nextLayout.panelFrames[panel.id] else {
-				controller.close()
-				continue
+		}
+		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
+			for panelID: PanelID in canvas.contentPanelIDs.subtracting(hosted[id] ?? []) {
+				canvas.removeContent(for: panelID)
 			}
-			controller.update(frame: nsRect(frame), visible: true)
+		}
+		let live: Set<PanelID> = .init(hosted.values.flatMap { $0 })
+		for panelID: PanelID in notesPanels.keys where !live.contains(panelID) {
+			notesPanels.removeValue(forKey: panelID)
 		}
 	}
 
-	private func closeNotesWindows() {
-		for controller: NotesWindowController in notesWindows.values {
-			controller.close()
-		}
-		notesWindows.removeAll()
+	private func makeNotesPanel(for panel: PanelDescriptor) -> NotesPanelController {
+		.init(
+			panelID: panel.id,
+			title: panel.title,
+			text: orchestrator.notes[panel.id] ?? Self.defaultNotes,
+			onChange: { [weak self] text in
+				self?.organization.setNote(text, panelID: panel.id)
+			}
+		)
+	}
+
+	private func removeAllNotesPanels() {
+		for canvas: DesktopCanvasWindow in canvases.values { canvas.removeAllContent() }
+		notesPanels.removeAll()
 	}
 
 	private func updateNoteContent() {
-		for (panelID, controller): (PanelID, NotesWindowController) in notesWindows {
+		for (panelID, controller): (PanelID, NotesPanelController) in notesPanels {
 			controller.updateText(orchestrator.notes[panelID] ?? "")
 		}
+	}
+
+	private func canvasID(forDisplay displayID: DisplayID) -> CanvasID? {
+		canvases.keys.first { DisplayID(canvas: $0) == displayID }
 	}
 
 	private func showPanelTypeChooser(for panelID: PanelID) {

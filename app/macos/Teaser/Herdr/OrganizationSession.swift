@@ -17,6 +17,13 @@ final class OrganizationSession {
 	private(set) var scope: OrganizationLocalScope?
 	private(set) var projected: OrganizationSnapshot?
 	private(set) var persistenceError: String?
+	/// Which canvas shows each Workspace, including canvases that are closed right
+	/// now. Placement is client-owned and lives in memory only: restoring it across
+	/// launches belongs to P-563, so it is deliberately absent from the persisted
+	/// `OrganizationLocalScope`.
+	private(set) var workspacePlacement: [WorkspaceID: DisplayID] = [:]
+	/// The canvas that receives Workspaces with no placement yet.
+	private var targetDisplayID: DisplayID?
 	private var nativeIntent: NativeIntent?
 	var onChange: (() -> Void)?
 	var onProjection: (() -> Void)?
@@ -58,9 +65,14 @@ final class OrganizationSession {
 		client.disconnect()
 		scope = .init(scope: UUID(), endpoint: path)
 		projected = nil
+		// A new connection is a new organization: nothing placed here belongs to it.
+		workspacePlacement = [:]
+		parkedWorkspaces = [:]
+		parkedDisplayLayouts = [:]
 		do { try project(.empty) } catch { orchestrator.setStatus(error.localizedDescription); return }
 		client.connect(path: path)
 	}
+
 	func disconnect() {
 		nativeIntent = nil
 		_ = save()
@@ -71,6 +83,65 @@ final class OrganizationSession {
 	func stopAndRelease() {
 		orchestrator.stopStage()
 		if !orchestrator.releaseRetainedLeases() { orchestrator.setStatus("Some windows could not be restored; retry Stop/Release after restoring Accessibility.") }
+	}
+
+	/// The canvas new Workspaces land on; the host keeps it on the canvas the
+	/// person last used. It never moves a Workspace that is already placed, so it
+	/// is safe to set on every canvas key change.
+	func setTargetDisplay(_ displayID: DisplayID) {
+		targetDisplayID = displayID
+	}
+
+	/// A canvas opened, closed or reopened. Placement is client-owned, so the last
+	/// accepted snapshot already says what every canvas shows and the server is not
+	/// asked again. The host releases a closing canvas's adopted windows first: this
+	/// leaves their leases untouched, it only stops showing their Panels.
+	func canvasesDidChange() throws {
+		guard let snapshot: OrganizationSnapshot = projected else { return }
+		// The organization itself did not move, so a pending native intent is still
+		// pending; only a fresh server snapshot can complete or cancel one.
+		try reconcile(snapshot)
+		onProjection?()
+	}
+
+	/// Closing a canvas takes its Workspaces out of the presentation, so their
+	/// trees would be gone by the time it reopens. Keeping the last shown trees
+	/// here — not the Workspaces themselves — is what makes a reopened canvas
+	/// come back arranged the way it was, for this session only.
+	private var parkedWorkspaces: [WorkspaceID: WorkspaceDescriptor] = [:]
+	private var parkedDisplayLayouts: [DisplayID: DisplayWorkspaceLayout] = [:]
+
+	private func rememberLayouts(of presentation: WorkspacePresentation) {
+		for (workspaceID, workspace): (WorkspaceID, WorkspaceDescriptor) in presentation.workspaces {
+			parkedWorkspaces[workspaceID] = workspace
+		}
+		for (displayID, layout): (DisplayID, DisplayWorkspaceLayout) in presentation.displayLayouts {
+			parkedDisplayLayouts[displayID] = layout
+		}
+	}
+
+	/// What the projection reconciles against: everything on screen now, plus the
+	/// trees of canvases that are currently closed.
+	private func parked(_ presentation: WorkspacePresentation) -> WorkspacePresentation {
+		var merged: WorkspacePresentation = presentation
+		for (workspaceID, workspace): (WorkspaceID, WorkspaceDescriptor) in parkedWorkspaces
+		where merged.workspaces[workspaceID] == nil {
+			merged.workspaces[workspaceID] = workspace
+		}
+		for (displayID, layout): (DisplayID, DisplayWorkspaceLayout) in parkedDisplayLayouts
+		where merged.displayLayouts[displayID] == nil {
+			merged.displayLayouts[displayID] = layout
+		}
+		return merged
+	}
+
+	/// The open canvases come from the orchestrator, which the host keeps at one
+	/// display per open canvas. A target that has since closed falls back to the
+	/// first open canvas rather than hiding a Workspace nobody placed.
+	private var placement: WorkspacePlacement {
+		let open: [DisplayID] = orchestrator.displays.map(\.id)
+		let target: DisplayID? = open.contains { $0 == targetDisplayID } ? targetDisplayID : open.first
+		return .init(openDisplays: open, assignments: workspacePlacement, targetDisplay: target)
 	}
 	func setNote(_ text: String, panelID: PanelID) {
 		guard let document: String = projected?.panels.first(where: { $0.id == panelID.rawValue })?.binding.document_id else { return }
@@ -99,10 +170,20 @@ final class OrganizationSession {
 		}
 	}
 	private func project(_ snapshot: OrganizationSnapshot) throws {
+		try reconcile(snapshot)
+		completeIntent(snapshot)
+		onProjection?()
+	}
+
+	/// Shows `snapshot` on the open canvases. Safe to repeat for the snapshot that
+	/// is already shown, which is how a canvas change re-projects without asking
+	/// the server again.
+	private func reconcile(_ snapshot: OrganizationSnapshot) throws {
 		let previous: OrganizationSnapshot? = projected
-		let presentation: WorkspacePresentation = try OrganizationProjection.project(snapshot,
-			previous: previous == nil ? nil : orchestrator.presentation,
-			displayID: orchestrator.displays.first?.id ?? ShowcasePreset.mainDisplayID)
+		let (presentation, assignments): (WorkspacePresentation, [WorkspaceID: DisplayID]) =
+			try OrganizationProjection.project(snapshot,
+				previous: previous == nil ? nil : parked(orchestrator.presentation), placement: placement)
+		rememberLayouts(of: orchestrator.presentation)
 		let compatible: Set<PanelID> = Set(snapshot.panels.filter { panel in
 			previous?.panels.contains(where: { $0.id == panel.id && $0.binding == panel.binding }) == true
 		}.map { PanelID($0.id) })
@@ -112,9 +193,10 @@ final class OrganizationSession {
 			if let document: String = panel.binding.document_id { notes[.init(panel.id)] = scope?.documents[document] ?? "" }
 		}
 		try orchestrator.reconcileOrganization(presentation, retaining: compatible, adoptable: adoptable, notes: notes)
+		// Placement advances with the snapshot it was computed for; a refused
+		// reconcile leaves both untouched so the next attempt starts from one state.
+		workspacePlacement = assignments
 		projected = snapshot
-		completeIntent(snapshot)
-		onProjection?()
 	}
 
 	private func split(_ intent: DesktopStageSplitIntent) {
