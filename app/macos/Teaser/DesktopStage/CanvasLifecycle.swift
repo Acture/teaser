@@ -40,6 +40,10 @@ final class CanvasLifecycle {
 	/// A canvas appears at most once: asking again keeps its place, and the
 	/// queue also carries the exit a deferred close depends on.
 	private var pending: [CanvasID] = []
+	/// Canvases that asked to fill the screen and still need the rectangle to
+	/// fill. This machine holds no screen of its own, so the frame arrives as
+	/// the host's next `geometryChanged` and pins the canvas exactly once.
+	private var pendingFillFrames: Set<CanvasID> = []
 
 	// MARK: - Reading
 
@@ -128,7 +132,9 @@ final class CanvasLifecycle {
 	}
 
 	private func toggleFullScreen(_ canvas: CanvasID) -> [CanvasEffect] {
-		guard states[canvas] != nil else {
+		// A canvas on its way out never starts a transition: its window is being
+		// torn down, and a queued intent would wake it again.
+		guard let state: CanvasState = states[canvas], !state.closesWhenSettled else {
 			return []
 		}
 		guard !isTransitioning else {
@@ -189,14 +195,14 @@ final class CanvasLifecycle {
 		state.phase = phase
 		state.settledFrame = frame
 		states[canvas] = state
-		var effects: [CanvasEffect] = appearanceEffects(
-			canvas,
-			fullScreenTarget: phase.isFullScreen
-		)
-		effects.append(.displayFrame(canvas, frame))
-		effects += completeCloseIfRequested(canvas)
-		effects += startNextIfIdle()
-		return effects
+		let closing: [CanvasEffect] = completeCloseIfRequested(canvas)
+		let next: [CanvasEffect] = startNextIfIdle()
+		// A canvas that went straight back into a transition is already dressed
+		// for where it is going now, so restating how it settled would undo it.
+		let settledLook: [CanvasEffect] = inFlight.contains(canvas)
+			? []
+			: appearanceEffects(canvas, fullScreenTarget: phase.isFullScreen)
+		return settledLook + [.displayFrame(canvas, frame)] + closing + next
 	}
 
 	private func geometryChanged(
@@ -210,27 +216,42 @@ final class CanvasLifecycle {
 		}
 		state.settledFrame = frame
 		states[canvas] = state
-		return [.displayFrame(canvas, frame)]
+		// A canvas that asked to fill the screen is pinned to the rectangle the
+		// host reports, once. Later moves are the person's own.
+		guard pendingFillFrames.remove(canvas) != nil else {
+			return [.displayFrame(canvas, frame)]
+		}
+		return [.setFrame(canvas, frame), .displayFrame(canvas, frame)]
 	}
 
 	private func setFillMode(
 		_ canvas: CanvasID,
 		_ fill: CanvasFillMode
 	) -> [CanvasEffect] {
-		guard var state: CanvasState = states[canvas] else {
+		guard var state: CanvasState = states[canvas], state.fill != fill else {
 			return []
 		}
 		state.fill = fill
 		states[canvas] = state
 		// This machine holds no screen rectangle, so Fill Screen only records the
-		// mode and asks for opacity; the frame reaches it as the host's next
-		// `geometryChanged`. A fullscreen canvas is opaque and owns its frame
-		// already, so there the mode only decides how it comes back.
+		// mode and asks for opacity; the frame it fills arrives as the host's
+		// next `geometryChanged`. A fullscreen canvas is opaque and owns its
+		// frame already, so there the mode only decides how it comes back.
+		switch fill {
+		case .fillScreen where !state.phase.isFullScreen:
+			pendingFillFrames.insert(canvas)
+		case .fillScreen:
+			break
+		case .free:
+			pendingFillFrames.remove(canvas)
+		}
 		return appearanceEffects(canvas, fullScreenTarget: targetIsFullScreen(state))
 	}
 
 	private func closeRequested(_ canvas: CanvasID) -> [CanvasEffect] {
-		guard var state: CanvasState = states[canvas] else {
+		// Asking twice closes the canvas once: the window stays until the host
+		// reports `windowClosed`, so a second ⌘W must not release it again.
+		guard var state: CanvasState = states[canvas], !state.closesWhenSettled else {
 			return []
 		}
 		state.closesWhenSettled = true
@@ -259,6 +280,7 @@ final class CanvasLifecycle {
 		appearances.removeValue(forKey: canvas)
 		order.removeAll { $0 == canvas }
 		pending.removeAll { $0 == canvas }
+		pendingFillFrames.remove(canvas)
 		// A window that disappears mid-transition never delivers its callback,
 		// so closing it releases the gate.
 		inFlight.remove(canvas)

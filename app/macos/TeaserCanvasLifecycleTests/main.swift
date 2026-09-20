@@ -27,6 +27,9 @@ private enum Frames {
 	static let windowedB: LayoutRect = .init(x: 1_400, y: 80, width: 900, height: 700)
 	static let windowedC: LayoutRect = .init(x: 200, y: 900, width: 800, height: 600)
 	static let fullScreen: LayoutRect = .init(x: 0, y: 0, width: 1_728, height: 1_117)
+	/// The screen rectangle a canvas that fills its screen is pinned to, which
+	/// only the host knows.
+	static let screen: LayoutRect = .init(x: 0, y: 38, width: 1_728, height: 1_079)
 	/// A frame AppKit reports part-way through an animation.
 	static let animating: LayoutRect = .init(x: 60, y: 40, width: 1_500, height: 950)
 }
@@ -379,6 +382,20 @@ private func testClosingAWindowedCanvasNeedsNoGate() throws {
 		"a closing canvas drops the transition it was waiting for"
 	)
 	try expectEffects(
+		lifecycle.handle(.closeRequested(canvasB)),
+		[],
+		"asking twice releases the canvas once"
+	)
+	try expectEffects(
+		lifecycle.handle(.toggleFullScreenRequested(canvasB)),
+		[],
+		"a canvas on its way out never queues another transition"
+	)
+	try expect(
+		lifecycle.pendingTransitions.isEmpty,
+		"nothing waiting behind a window that is closing"
+	)
+	try expectEffects(
 		lifecycle.handle(.didEnterFullScreen(canvasA, frame: Frames.fullScreen)),
 		[.displayFrame(canvasA, Frames.fullScreen)],
 		"a closing canvas is never started when the gate frees"
@@ -463,6 +480,16 @@ private func testFillScreenChangesOpacityOnly() throws {
 	try expect(
 		lifecycle.state(of: canvasA)?.phase == .windowed,
 		"filling the screen is never macOS fullscreen"
+	)
+	try expectEffects(
+		lifecycle.handle(.geometryChanged(canvasA, frame: Frames.screen)),
+		[.setFrame(canvasA, Frames.screen), .displayFrame(canvasA, Frames.screen)],
+		"the rectangle to fill is the host's, never one this machine invents"
+	)
+	try expectEffects(
+		lifecycle.handle(.geometryChanged(canvasA, frame: Frames.screen)),
+		[.displayFrame(canvasA, Frames.screen)],
+		"a canvas is pinned to the screen once, not held there"
 	)
 
 	try expectEffects(
@@ -569,7 +596,7 @@ private func canvasLifecycleCases() -> [TestCase] {
 
 // Every case runs even after one fails, so a mutation of the machine reports
 // the whole set of regressions that caught it rather than only the first.
-let cases: [TestCase] = canvasLifecycleCases() + spaceDirectoryCases()
+let cases: [TestCase] = canvasLifecycleCases() + spaceDirectoryCases() + canvasIsolationCases()
 var failures: [String] = []
 for testCase: TestCase in cases {
 	do {
