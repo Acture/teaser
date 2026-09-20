@@ -23,6 +23,9 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
+        # Vendored upstream material keeps its own formatting; a clang-format
+        # file is YAML that this hook cannot read as a single document.
+        exclude: ^runtime/herdr/vendor/
 
   - repo: local
     hooks:
