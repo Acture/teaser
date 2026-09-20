@@ -16,9 +16,10 @@ Teaser is an independent fork, not an official or endorsed Herdr distribution.
 > The fork now has a pure organization core and revisioned JSON commands/events.
 > The native App connects to an explicitly selected JSON socket and projects
 > server-owned Workspaces/Panels into its existing tiling and Notes interface.
-> Interactive native terminal rendering, TUI organization projection, task
-> providers, multiple native-fullscreen canvases, and dependable live-window
-> adoption remain implementation work. Focused headless tests are not a completed
+> The App now hosts several canvas windows, each with its own Workspaces,
+> lifecycle and adopted windows. Interactive native terminal rendering, TUI
+> organization projection, task providers, and dependable live-window adoption
+> remain implementation work. Focused headless tests are not a completed
 > end-to-end demo or a full build gate.
 
 ## Product model
@@ -32,9 +33,11 @@ Teaser is an independent fork, not an official or endorsed Herdr distribution.
 - Panels tile at unequal sizes. Same-Workspace adjacency is a preference, not a
   rectangular-container constraint. A fluorescent outer contour expresses the
   group without adding a Workspace card or title bar.
-- The native App targets multiple independently fullscreen windows using macOS's
-  green-button fullscreen. First launch targets an empty canvas with incremental
-  splits, not six prefilled project mockups.
+- The native App hosts several canvas windows. Each can fill its screen, which
+  keeps it on its Space where adopted windows tile above it, or enter macOS
+  green-button fullscreen, which gives it a Space of its own that only Teaser's
+  own content can appear in. First launch opens an empty canvas filling its
+  screen, with incremental splits, not six prefilled project mockups.
 - Task-driven work links external tasks to Panels and sessions. Linear/Notion
   remain task authorities; Teaser provides organization and its own Notes.
 - The TUI retains a terminal-native workflow. GUI-only providers are explicit
@@ -118,7 +121,7 @@ fish scripts/app.fish --build-only
 ```
 
 `--build-only` produces `target/macos/Teaser.app` without launching it and requires
-`TEASER_CODESIGN_IDENTITY`. The nine Swift suites are executable harnesses, not
+`TEASER_CODESIGN_IDENTITY`. The ten Swift suites are executable harnesses, not
 `swift test` targets. Headless tests must not create windows, install global
 monitors, request Accessibility, or move user windows.
 

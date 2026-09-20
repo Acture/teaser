@@ -14,15 +14,15 @@ The baseline contains:
 - `crates/teaser-core`: pure typed identities, membership, task references,
   content-neutral bindings, size profiles, and atomic revisioned transitions.
 - `app/macos`: the retained Swift/AppKit implementation, explicit JSON client,
-  and nine headless test harnesses. The client projects the server graph into
+  and ten headless test harnesses. The client projects the server graph into
   native tiling; interactive terminal rendering is not connected yet.
 - `prototypes/attachment-runtime`: the previous self-built PTY runtime, outside
   the active workspace. Its protocol and native Ghostty experiment are preserved
   as reference/test material, not as another production session authority.
 
 Shared organization is separate from inherited terminal workspace/tab containers;
-the TUI has not yet been projected onto it. Native multi-canvas fullscreen, task
-providers, and dependable external-window adoption remain implementation work.
+the TUI has not yet been projected onto it. Task providers and dependable
+external-window adoption remain implementation work.
 No GUI acceptance follows from an import or a headless check.
 
 ## Target responsibility boundaries
@@ -71,8 +71,9 @@ resize one PTY against each other. Viewport and focus remain client-local.
 
 ## Native App and external windows
 
-The JSON client reuses the existing native implementation. Its single-canvas and
-display/Workspace/Panel hierarchy still needs the planned multi-canvas projection.
+The JSON client reuses the existing native implementation. Each open canvas is
+one display to the layout solver, and the projection places every Workspace on a
+canvas the client owns, so closing one canvas never rearranges another.
 
 Connection and organization controls accept an explicit JSON socket path. They
 can create, rename, delete, regroup, change kind, and rebind through server
@@ -110,10 +111,14 @@ automatically restore another scope's content or placement. The controls expose
 the archive directory for recovery and report write failures. Legacy
 `presentation.json` is neither overwritten nor silently imported.
 
-The target is one `Teaser.app`, several CanvasWindows, and macOS native
-green-button fullscreen per window. First launch targets an empty canvas; saved
-layouts restore their own state. A borderless display-sized window is not native
-fullscreen, and six Workspaces are a density scene, not a startup preset.
+One `Teaser.app` hosts several CanvasWindows. A canvas either fills its screen
+and stays on its ordinary Space, where adopted windows tile above it, or enters
+macOS green-button fullscreen, which macOS gives a Space of its own. No public or
+private interface admits another application's window to a fullscreen Space, so a
+fullscreen canvas carries Teaser's own content; adopted windows keep their leases
+on the desktop Space. First launch opens an empty canvas filling its screen;
+restoring saved canvases across launches is still implementation work. Six
+Workspaces are a density scene, not a startup preset.
 
 Provider-owned windows keep native rendering and input. The App leases exact
 PID + CGWindowID + AX identity, manages geometry, verifies writes, and compensates
