@@ -178,10 +178,25 @@ canvases, focus routing, persistence/restore, or the multi-application demo.
   fullscreen canvas exits fullscreen first and then closes the window; hiding a
   fullscreen window is not closing it. Every open creates a fresh window.
 - macOS does not admit other applications' windows to a fullscreen Space
-  (REQ-008). Adopted windows keep their leases and are re-solved on the desktop
-  Space. A fullscreen canvas solves inside its frame clipped to the screen's
-  visible frame, so drawn and applied frames agree. Teaser-owned Notes are views
-  inside their canvas and therefore appear in fullscreen.
+  (REQ-008), and no private interface changes this: window managers that disable
+  SIP still leave fullscreen Spaces unmanaged. Native fullscreen therefore
+  carries Teaser-owned content only. Adopted windows keep their leases and are
+  re-solved on the desktop Space; a fullscreen canvas solves inside its frame
+  clipped to the screen's visible frame, so drawn and applied frames agree.
+  Teaser-owned Notes are views inside their canvas and appear in fullscreen.
+- A canvas therefore also has a Fill Screen state: opaque, covering its screen,
+  staying on its ordinary Space, where adopted windows tile above it with native
+  rendering and input. It is presented as filling the screen, never as macOS
+  fullscreen. Immersion comes from the opaque canvas plus the system settings
+  that hide the menu bar and Dock, not from imitating a fullscreen Space.
+- Canvases are Space-aware through public interfaces only. A canvas records the
+  Space it was opened on, read from `com.apple.spaces` (`ManagedSpaceID`,
+  `uuid`, desktop vs fullscreen type, and the current Space). Going to a canvas
+  orders its window front, which makes macOS switch Spaces; a canvas that is not
+  on the active Space says so instead of being silently re-solved into view.
+  Opening a canvas on a new Space drives the Dock's own Accessibility Spaces bar
+  to add a desktop and press it, and falls back to asking the person to add one
+  when the Dock no longer exposes those controls.
 
 #### Placement and isolation
 
