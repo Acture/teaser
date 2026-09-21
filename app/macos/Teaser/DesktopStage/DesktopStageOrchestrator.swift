@@ -135,8 +135,23 @@ final class DesktopStageOrchestrator {
 	var onSharedAdoption: ((PanelID, any ExternalWindowHandle, String) -> Bool)?
 	var onSharedSwapAllowed: ((PanelID, PanelID) -> Bool)?
 	var onStageStopped: (() -> Void)?
+	/// Resolves an AppKit screen point to the canvas that owns it: the frontmost
+	/// visible canvas containing the point. Only the host knows window order,
+	/// visibility and Space membership. While it is set, a drop is hit-tested
+	/// against that canvas's Panels alone — otherwise a canvas on another Space,
+	/// or two overlapping canvases, let the same point match several Panels and
+	/// the dragged window is detached instead of adopted.
+	var canvasDisplayAtScreenPoint: ((CGPoint) -> DisplayID?)?
+	/// The canvases whose Panels are on screen right now. A canvas in fullscreen
+	/// or on another Space shows none of its Panels here, so its adopted windows
+	/// cannot be dragged out of it by a drag that happens elsewhere.
+	var visibleCanvasDisplays: (() -> Set<DisplayID>)?
 
 	private var leases: [ExternalWindowIdentity: any ExternalWindowLease] = [:]
+	/// Leases whose release was refused and which the user may retry. Only a
+	/// refused release enters this set, so a retry can never reach a window a
+	/// still-open canvas is tiling.
+	private var retainedLeases: Set<ExternalWindowIdentity> = []
 	private var detachedIdentities: Set<ExternalWindowIdentity> = []
 	private var draggingIdentity: ExternalWindowIdentity?
 	private var undoSnapshot: DesktopStageStateSnapshot?
@@ -189,9 +204,11 @@ final class DesktopStageOrchestrator {
 		useSharedOrganization()
 		for (panelID, identity): (PanelID, ExternalWindowIdentity) in panelAssignments where !compatible.contains(panelID) {
 			guard leases[identity]?.release(restoringOriginalFrame: true) != false else {
+				retainedLeases.insert(identity)
 				throw DesktopStageOrchestratorError.restorationFailed
 			}
 			leases.removeValue(forKey: identity)
+			retainedLeases.remove(identity)
 			panelAssignments.removeValue(forKey: panelID)
 		}
 		discardUndoHistory()
@@ -264,6 +281,7 @@ final class DesktopStageOrchestrator {
 			}
 		}
 		leases = leases.filter { $0.value.identity != nil }
+		retainedLeases = .init(leases.keys)
 		detachedIdentities.removeAll()
 		panelAssignments.removeAll()
 		statusMessage = failedRestorations == 0
@@ -281,19 +299,101 @@ final class DesktopStageOrchestrator {
 			_ = lease.release(restoringOriginalFrame: true)
 		}
 		leases.removeAll()
+		retainedLeases.removeAll()
 		panelAssignments.removeAll()
 	}
 
-	/// Retries restoration for leases retained after a failed release. Returns
-	/// true once none remain.
+	/// Retries restoration for leases retained after a failed release. Only those
+	/// leases are touched: a live lease belongs to a canvas that is still tiling
+	/// its window, and restoring it here would undo that canvas's layout. Returns
+	/// true once no retained lease remains.
 	@discardableResult
 	func releaseRetainedLeases() -> Bool {
-		for (identity, lease): (ExternalWindowIdentity, any ExternalWindowLease) in leases {
+		// A stable retry order keeps the restoration diagnostics reproducible.
+		for identity: ExternalWindowIdentity in retainedLeases.sorted(by: {
+			($0.processIdentifier, $0.windowID) < ($1.processIdentifier, $1.windowID)
+		}) {
+			guard let lease: any ExternalWindowLease = leases[identity] else {
+				retainedLeases.remove(identity)
+				continue
+			}
 			if lease.release(restoringOriginalFrame: true) {
 				leases.removeValue(forKey: identity)
+				retainedLeases.remove(identity)
 			}
 		}
-		return leases.isEmpty
+		return retainedLeases.isEmpty
+	}
+
+	/// Releases only the windows one canvas adopted, restoring their original
+	/// frames. The canvas's Workspaces stay exactly where they are: organization
+	/// is server-owned, and a closing canvas must never hand its Workspaces to
+	/// another one. Every other canvas keeps its leases, assignments and detached
+	/// windows. A refused release keeps its lease for `releaseRetainedLeases()`
+	/// rather than stopping the rest of the canvas from closing. Returns whether
+	/// every window on that canvas was released.
+	@discardableResult
+	func releaseWindows(onDisplay displayID: DisplayID) -> Bool {
+		let canvasPanelIDs: Set<PanelID> = panelIDs(onDisplay: displayID)
+		var releasedIdentities: Set<ExternalWindowIdentity> = []
+		var failures: Int = 0
+		for panelID: PanelID in canvasPanelIDs.sorted(by: { $0.rawValue < $1.rawValue }) {
+			guard let identity: ExternalWindowIdentity = panelAssignments.removeValue(
+				forKey: panelID
+			) else { continue }
+			releasedIdentities.insert(identity)
+			guard let lease: any ExternalWindowLease = leases[identity] else { continue }
+			if lease.release(restoringOriginalFrame: true) {
+				leases.removeValue(forKey: identity)
+				retainedLeases.remove(identity)
+			} else {
+				retainedLeases.insert(identity)
+				failures += 1
+			}
+		}
+		if let panelID: PanelID = dropHighlight?.panelID, canvasPanelIDs.contains(panelID) {
+			dropHighlight = nil
+		}
+		if let draggingIdentity, releasedIdentities.contains(draggingIdentity) {
+			self.draggingIdentity = nil
+		}
+		// A snapshot taken while this canvas was open places Workspaces on a
+		// display that no longer exists, so no Undo step can survive its close.
+		discardUndoHistory()
+		if case .focused(let workspaceID) = presentation.mode,
+			presentation.workspaces[workspaceID]?.displayAffinity == displayID
+		{
+			presentation.showTiled()
+		}
+		if failures > 0 {
+			statusMessage = "Canvas closed; \(failures) window(s) could not be restored"
+		}
+		host?.orchestratorDidChangeState(self)
+		return failures == 0
+	}
+
+	/// Every Panel of every Workspace this canvas holds. A canvas can hold more
+	/// than one Workspace, and Workspace membership — not canvas geometry — is
+	/// what decides which Panels belong to it.
+	/// Whether the canvas that shows this Panel is on screen. Without a host
+	/// answer every canvas counts as visible, which is the single-canvas
+	/// behavior this started from.
+	private func isOnScreen(panel panelID: PanelID) -> Bool {
+		guard let visibleCanvasDisplays,
+			let workspaceID: WorkspaceID = workspaceID(containing: panelID),
+			let display: DisplayID = presentation.workspaces[workspaceID]?.displayAffinity
+		else { return true }
+		return visibleCanvasDisplays().contains(display)
+	}
+
+	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
+		var result: Set<PanelID> = []
+		for workspace: WorkspaceDescriptor in presentation.workspaces.values
+			where workspace.displayAffinity == displayID
+		{
+			result.formUnion(workspace.panels.keys)
+		}
+		return result
 	}
 
 	func perform(_ command: DesktopStageCommand) {
@@ -356,6 +456,11 @@ final class DesktopStageOrchestrator {
 
 	@discardableResult
 	private func adaptPresentationToDisplays() -> Bool {
+		// In shared mode each canvas is a display and the projection owns which
+		// canvas a Workspace sits on. Rebalancing Workspaces evenly across the
+		// connected displays here would move them between canvases every time one
+		// is opened, closed, moved or resized.
+		guard !isSharedOrganization else { return false }
 		let adapted = DesktopStageDisplayTopology.adapt(presentation, to: displays)
 		guard adapted.changed else { return false }
 		// A snapshot from the previous topology would restore displays that no longer exist.
@@ -411,6 +516,13 @@ final class DesktopStageOrchestrator {
 		) else {
 			guard let sourcePanelID else {
 				setStatus(DesktopStageOrchestratorError.missingDropTarget.localizedDescription)
+				return
+			}
+			// Dragging a window out of its canvas detaches it. A canvas that is
+			// not on screen shows nothing to drag out of, so its windows keep
+			// their Panels until that canvas is in front again.
+			guard isOnScreen(panel: sourcePanelID) else {
+				setStatus("This window's canvas is not on screen, so it kept its Panel.")
 				return
 			}
 			detachWindow(identity: identity, from: sourcePanelID)
@@ -610,6 +722,8 @@ final class DesktopStageOrchestrator {
 	private func ensureLease(for handle: any ExternalWindowHandle) throws {
 		let identity: ExternalWindowIdentity = handle.identity
 		detachedIdentities.remove(identity)
+		// A window Teaser is tiling again is no longer waiting for a release retry.
+		retainedLeases.remove(identity)
 		if let existing: any ExternalWindowLease = leases[identity] {
 			if existing.identity == nil {
 				_ = try existing.bind(handle: handle)
@@ -647,6 +761,8 @@ final class DesktopStageOrchestrator {
 				panelAssignments.removeValue(forKey: panelID)
 			}
 			leases.removeValue(forKey: identity)
+			// A window that no longer exists cannot be restored by a retry.
+			retainedLeases.remove(identity)
 			setStatus("A provider window closed; its Panel is ready for another window")
 			relayout(synchronously: false)
 		}
@@ -978,9 +1094,11 @@ final class DesktopStageOrchestrator {
 		{
 			guard let lease: any ExternalWindowLease = leases[identity] else { continue }
 			guard lease.release(restoringOriginalFrame: true) else {
+				retainedLeases.insert(identity)
 				throw DesktopStageOrchestratorError.restorationFailed
 			}
 			leases.removeValue(forKey: identity)
+			retainedLeases.remove(identity)
 		}
 		for identity: ExternalWindowIdentity in desiredIdentities {
 			let lease: any ExternalWindowLease
@@ -1055,7 +1173,11 @@ final class DesktopStageOrchestrator {
 	}
 
 	private func solveAndApply(synchronously: Bool) throws {
-		guard !displays.isEmpty else {
+		// Closing the last canvas leaves nothing to place, and the app keeps
+		// running until another one opens. Only a presentation that does place
+		// Workspaces still needs a display to place them on; the solver reports
+		// the individual display each placed Workspace is missing.
+		guard !displays.isEmpty || presentation.displayLayouts.isEmpty else {
 			throw DesktopStageOrchestratorError.displayUnavailable
 		}
 		let displayFrames: [DisplayID: LayoutRect] = Dictionary(
@@ -1197,7 +1319,17 @@ final class DesktopStageOrchestrator {
 		for sample: ExternalWindowDragSample
 	) -> ExternalWindowPanelDropTarget? {
 		guard let layout else { return nil }
-		let panels: [ExternalWindowPanelGeometry] = layout.panelFrames.map {
+		var panelFrames: [PanelID: LayoutRect] = layout.panelFrames
+		if let canvasDisplayAtScreenPoint {
+			// No canvas under the pointer means no drop target at all: the window
+			// was dragged onto the desktop or over another application.
+			guard let displayID: DisplayID = canvasDisplayAtScreenPoint(
+				sample.mouseAppKitScreenLocation
+			) else { return nil }
+			let candidates: Set<PanelID> = panelIDs(onDisplay: displayID)
+			panelFrames = panelFrames.filter { candidates.contains($0.key) }
+		}
+		let panels: [ExternalWindowPanelGeometry] = panelFrames.map {
 			panelID, frame in
 			.init(
 				panelID: panelID.rawValue,

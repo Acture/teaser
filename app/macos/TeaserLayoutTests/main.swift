@@ -393,6 +393,184 @@ private func testMultiDisplayAffinity() throws {
 	}
 }
 
+/// Every open canvas is one display, so focus has to be scoped to the canvas it
+/// happens on. The focused Workspace takes over its own display, and every other
+/// display must be solved exactly as the tiled mode would solve it — otherwise
+/// focusing on one canvas blanks the rest.
+private func testFocusIsScopedToItsOwnDisplay() throws {
+	let main: DisplayID = .init("main-display")
+	let secondary: DisplayID = .init("secondary-display")
+	let secondarySplitID: LayoutSplitID = .init("secondary-workspaces")
+	let secondaryWorkspaceIDs: [WorkspaceID] = [
+		ShowcasePreset.paperWorkspaceID,
+		ShowcasePreset.sortAndPourWorkspaceID,
+	]
+	var presentation: WorkspacePresentation = ShowcasePreset.presentation(
+		displayID: main
+	)
+	for workspaceID: WorkspaceID in secondaryWorkspaceIDs {
+		try presentation.displayLayouts[main]!.workspaceTree.remove(workspaceID)
+		presentation.workspaces[workspaceID]!.displayAffinity = secondary
+	}
+	// Two Workspaces on the second display, so it owns a display-scope divider
+	// and ratio that the focused solve has something to preserve.
+	presentation.displayLayouts[secondary] = .init(
+		displayID: secondary,
+		workspaceTree: .split(
+			id: secondarySplitID,
+			axis: .horizontal,
+			preference: .init(desiredRatio: 0.45),
+			first: .leaf(ShowcasePreset.paperWorkspaceID),
+			second: .leaf(ShowcasePreset.sortAndPourWorkspaceID)
+		)
+	)
+
+	let mainFrame: LayoutRect = .init(x: 0, y: 0, width: 2_560, height: 1_400)
+	let secondaryFrame: LayoutRect = .init(
+		x: -1_440,
+		y: 100,
+		width: 1_440,
+		height: 900
+	)
+	let displayFrames: [DisplayID: LayoutRect] = [
+		main: mainFrame,
+		secondary: secondaryFrame,
+	]
+	let tiled: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: displayFrames
+	)
+	try expect(
+		tiled.dividers.filter { $0.scope == .display(main) }.count == 3,
+		"the fixture must give the focused display dividers there are to suppress"
+	)
+
+	try presentation.focusWorkspace(ShowcasePreset.researchWorkspaceID)
+	let focused: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: displayFrames
+	)
+
+	try expect(
+		focused.workspaceFrames[ShowcasePreset.researchWorkspaceID] == mainFrame,
+		"the focused Workspace must fill the display it is placed on"
+	)
+	try expect(
+		focused.workspaceFrames.count == 3,
+		"focus must hide only the other Workspaces of its own display"
+	)
+	try expect(
+		focused.panelFrames.count == 4,
+		"only the focused Workspace's two Panels plus the other display's two"
+	)
+	try expect(
+		focused.dividers.filter { $0.scope == .display(main) }.isEmpty,
+		"the focused display exposes no Workspace dividers"
+	)
+	try expect(
+		!focused.effectiveRatios.keys.contains { $0.scope == .display(main) },
+		"the focused display exposes no Workspace split ratios"
+	)
+
+	// The other display is untouched: the same solve has to reproduce its tiled
+	// slices exactly, not merely keep them somewhere inside its frame.
+	for workspaceID: WorkspaceID in secondaryWorkspaceIDs {
+		let expected: LayoutRect = try unwrap(
+			tiled.workspaceFrames[workspaceID],
+			"missing tiled Workspace \(workspaceID.rawValue)"
+		)
+		let actual: LayoutRect = try unwrap(
+			focused.workspaceFrames[workspaceID],
+			"focus dropped Workspace \(workspaceID.rawValue) from another display"
+		)
+		try expect(
+			actual == expected,
+			"Workspace \(workspaceID.rawValue) must keep its tiled frame, got \(actual)"
+		)
+		try expect(
+			secondaryFrame.contains(actual),
+			"Workspace \(workspaceID.rawValue) must stay on its own display"
+		)
+	}
+	for panelID: PanelID in [
+		ShowcasePreset.previewPanelID,
+		ShowcasePreset.chromePanelID,
+	] {
+		let expected: LayoutRect = try unwrap(
+			tiled.panelFrames[panelID],
+			"missing tiled Panel \(panelID.rawValue)"
+		)
+		let actual: LayoutRect = try unwrap(
+			focused.panelFrames[panelID],
+			"focus dropped Panel \(panelID.rawValue) from another display"
+		)
+		try expect(
+			actual == expected,
+			"Panel \(panelID.rawValue) must keep its tiled frame, got \(actual)"
+		)
+	}
+
+	let secondaryDividers: [LayoutDivider] = focused.dividers.filter {
+		$0.scope == .display(secondary)
+	}
+	try expect(
+		secondaryDividers.count == 1,
+		"the unfocused display's Workspace divider must survive the focused solve"
+	)
+	try expect(
+		secondaryDividers == tiled.dividers.filter { $0.scope == .display(secondary) },
+		"the unfocused display's dividers must match the tiled solve"
+	)
+	let secondaryReference: LayoutSplitReference = .init(
+		scope: .display(secondary),
+		splitID: secondarySplitID
+	)
+	let tiledRatio: Double = try unwrap(
+		tiled.effectiveRatios[secondaryReference],
+		"missing tiled Workspace ratio on the unfocused display"
+	)
+	let focusedRatio: Double = try unwrap(
+		focused.effectiveRatios[secondaryReference],
+		"focus dropped the Workspace ratio of another display"
+	)
+	// Same code path and same inputs, so this is bit-identical, not merely close.
+	try expect(
+		focusedRatio == tiledRatio,
+		"the unfocused display must keep its effective Workspace ratio"
+	)
+}
+
+/// One canvas is still the common case, and the per-display branch must leave it
+/// alone: with a single display there is no other display to tile, so focus
+/// solves the focused Workspace and nothing else.
+private func testSingleDisplayFocusIsUnchanged() throws {
+	var presentation: WorkspacePresentation = ShowcasePreset.presentation()
+	try presentation.focusWorkspace(ShowcasePreset.teaserWorkspaceID)
+	let displayFrame: LayoutRect = .init(x: 12, y: -40, width: 1_512, height: 900)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [ShowcasePreset.mainDisplayID: displayFrame]
+	)
+	try expect(
+		layout.workspaceFrames.count == 1,
+		"a single display leaves exactly the focused Workspace"
+	)
+	try expect(
+		layout.workspaceFrames[ShowcasePreset.teaserWorkspaceID] == displayFrame,
+		"the focused Workspace must fill its only display"
+	)
+	try expect(
+		layout.panelFrames.count == 3,
+		"only the focused Workspace's Panels are solved"
+	)
+	try expect(
+		layout.dividers.allSatisfy {
+			$0.scope == .workspace(ShowcasePreset.teaserWorkspaceID)
+		},
+		"a single-display focus exposes no Workspace dividers"
+	)
+}
+
 private func testCodableRoundTripsPresentationAndCustomKinds() throws {
 	let customKind: PanelKindDefinition = .init(
 		id: .init("custom.timeline"),
@@ -469,6 +647,8 @@ private func run() throws {
 	try testEdgeInsertionAndLongAxisSplit()
 	try testVirtualFocusSurvivesPresentationRoundTrip()
 	try testMultiDisplayAffinity()
+	try testFocusIsScopedToItsOwnDisplay()
+	try testSingleDisplayFocusIsUnchanged()
 	try testCodableRoundTripsPresentationAndCustomKinds()
 	try testUndersizedRegionAdaptsInsteadOfFailing()
 }

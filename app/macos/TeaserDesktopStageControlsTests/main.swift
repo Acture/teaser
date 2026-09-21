@@ -194,7 +194,7 @@ private func testMainMenuCarriesCopy() throws {
 	// macOS matches Command-C against a menu item's key equivalent. Without an
 	// Edit menu, selectable text highlights and never copies, which is how every
 	// error Teaser reports became unquotable.
-	let menu: NSMenu = TeaserMainMenu.make()
+	let menu: NSMenu = TeaserMainMenu.make().menu
 	guard let edit: NSMenu = menu.items.compactMap(\.submenu).first(where: {
 		$0.title == "Edit"
 	}) else {
@@ -217,6 +217,28 @@ private func testMainMenuCarriesCopy() throws {
 	try expect(
 		menu.items.compactMap(\.submenu).contains { $0.title == "Teaser" },
 		"the application menu must survive alongside Edit"
+	)
+	guard let file: NSMenu = menu.items.compactMap(\.submenu).first(where: {
+		$0.title == "File"
+	}) else {
+		throw TestFailure.assertion("the main menu must carry a File menu for canvas commands")
+	}
+	try expect(
+		file.items.contains { $0.keyEquivalent == "n" && $0.keyEquivalentModifierMask == .command },
+		"Command-N must open another canvas"
+	)
+	try expect(
+		file.items.contains { $0.action == #selector(NSWindow.performClose(_:)) },
+		"Close must go through the window, so a canvas can leave full screen before it closes"
+	)
+	guard let view: NSMenu = menu.items.compactMap(\.submenu).first(where: {
+		$0.title == "View"
+	}) else {
+		throw TestFailure.assertion("the main menu must carry a View menu")
+	}
+	try expect(
+		view.items.contains { $0.action == #selector(NSWindow.toggleFullScreen(_:)) },
+		"Enter Full Screen must reach the canvas window, which routes it through the transition gate"
 	)
 }
 

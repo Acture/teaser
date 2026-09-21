@@ -1,0 +1,1 @@
+../TeaserWindowAdoptionTests/Fixtures.swift

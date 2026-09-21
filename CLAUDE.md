@@ -34,12 +34,12 @@ to the upstream remote. Follow the explicit subtree update procedure.
 revisioned JSON commands/events and persists that state. Inherited terminal
 workspace/tab containers are not Teaser logical groups; TUI projection is pending.
 
-`app/macos/Teaser` and `Package.swift` contain the Swift/AppKit client and nine
+`app/macos/Teaser` and `Package.swift` contain the Swift/AppKit client and ten
 headless executable harnesses. Its Herdr connection is explicit, does not start
 a server or request Accessibility, and has no local organization fallback.
 Terminal bindings are metadata, not native interactive terminal rendering.
-Task providers and multiple native-fullscreen canvases remain implementation
-work. Do not infer real-window adoption from pure geometry tests. Preserve legacy
+Task providers remain implementation work, and restoring canvases across launches
+belongs to persistence. Do not infer real-window adoption from pure geometry tests. Preserve legacy
 presentation files and connection-scoped Notes archives; do not transplant local
 leases/content across connections using only a matching socket path or object ID.
 

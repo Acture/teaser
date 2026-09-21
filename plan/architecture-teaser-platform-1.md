@@ -149,6 +149,93 @@ The implementation reports partial coverage against P-613/P-621/P-623 rather
 than marking their broader exit contracts complete. Full runtime/native builds
 and the complete pre-push gate remain explicit user-run commands when long.
 
+### Native canvas host slice
+
+This slice implements the canvas host of TASK-030 (P-614) on the native
+integration slice. It does not deliver contours, Workspace fragments across
+canvases, focus routing, persistence/restore, or the multi-application demo.
+
+#### Canvas lifecycle
+
+- One app-wide `DesktopStageOrchestrator` keeps leases, the drag observer, and
+  one lease per exact window. Each open CanvasWindow has a stable canvas ID and
+  is one orchestrator display whose frame is the canvas content rectangle. A
+  canvas can show several Workspaces; it is not a Workspace.
+- File › New Canvas (⌘N), New Canvas in New Space (⇧⌘N), Close (⌘W) and Reopen
+  Closed Canvas (⇧⌘T); View › Enter Full Screen (⌃⌘F) and Fill Screen (⌃⌘↩);
+  Window lists the canvases, and going to one orders its window front. Launch
+  opens one blank canvas filling its screen rather than in macOS fullscreen: a
+  fullscreen Space admits no adopted window, so the state a person lands in is
+  the one that can hold their windows. Later canvases open windowed. Closing the
+  last canvas keeps the app running, and reopening with none open creates a
+  blank canvas. Only quit performs global release.
+- Fullscreen is a per-canvas state (`windowed`, `entering`, `fullScreen`,
+  `exiting`) driven by AppKit delegate callbacks. One app-wide gate admits a
+  single native transition; other requests keep a pending target and start on a
+  later run-loop turn. A failed or contrary callback ends in exactly one settled
+  state. Geometry during a transition is ignored; the settled frame is applied
+  once.
+- Canvas windows opt into `[.managed, .fullScreenPrimary,
+  .fullScreenDisallowsTiling]`. Windowed canvases stay transparent one level
+  below normal; fullscreen canvases are opaque at normal level. Closing a
+  fullscreen canvas exits fullscreen first and then closes the window; hiding a
+  fullscreen window is not closing it. Every open creates a fresh window.
+- macOS does not admit other applications' windows to a fullscreen Space
+  (REQ-008), and no private interface changes this: window managers that disable
+  SIP still leave fullscreen Spaces unmanaged. Native fullscreen therefore
+  carries Teaser-owned content only. Adopted windows keep their leases and are
+  re-solved on the desktop Space; a fullscreen canvas solves inside its frame
+  clipped to the screen's visible frame, so drawn and applied frames agree.
+  Teaser-owned Notes are views inside their canvas and appear in fullscreen.
+- A canvas therefore also has a Fill Screen state: opaque, covering its screen,
+  staying on its ordinary Space, where adopted windows tile above it with native
+  rendering and input. It is presented as filling the screen, never as macOS
+  fullscreen. Immersion comes from the opaque canvas plus the system settings
+  that hide the menu bar and Dock, not from imitating a fullscreen Space.
+- Canvases are Space-aware through public interfaces only. A canvas records the
+  Space it was opened on, read from `com.apple.spaces` (`ManagedSpaceID`,
+  `uuid`, desktop vs fullscreen type, and the current Space). Going to a canvas
+  orders its window front, which makes macOS switch Spaces; a canvas that is not
+  on the active Space says so instead of being silently re-solved into view.
+  Opening a canvas on a new Space drives the Dock's own Accessibility Spaces bar
+  to add a desktop and press it, and falls back to asking the person to add one
+  when the Dock no longer exposes those controls.
+
+#### Placement and isolation
+
+- Placement is client-owned and in memory: the session maps each Workspace to a
+  canvas, places new Workspaces on the last key canvas, and projects only
+  Workspaces on open canvases. Reconnect starts a new map; persistence and
+  restore belong to P-563.
+- Shared mode never runs display-topology rebalancing. Opening, moving,
+  resizing, entering fullscreen or closing one canvas does not move another
+  canvas's Workspaces, trees, ratios or windows.
+- Closing a canvas releases only the leases of Panels placed on it, without
+  aborting mid-release; failed restorations stay retained for that canvas. Its
+  Workspaces are hidden, not deleted. Reopen Closed Canvas restores the same
+  canvas ID with its layout trees for the rest of the session.
+- A drop resolves the frontmost visible canvas on the active Space under the
+  pointer first, then only that canvas's Panels. Overlapping or off-Space
+  canvases never detach a dragged window.
+- A focused Workspace fills only its own canvas; other canvases keep tiling.
+- A Workspace occupies one canvas in this slice. Dropping a leased window on
+  another canvas rebinds it there; Workspace fragments spanning canvases belong
+  to P-561/P-511.
+- Screen changes re-read canvas frames, never physical monitors, and Space
+  changes never stop the stage. The unreachable desktop overlay is removed.
+
+#### Evidence
+
+- `TeaserCanvasLifecycleTests` covers transition serialization and failure,
+  geometry gating, close during a transition, per-canvas release that leaves
+  other canvases' leases intact, two-canvas projection and reopen, focus
+  scoping, and drops across overlapping canvases. It shows no window, installs
+  no global monitor and requests no Accessibility.
+- Authorized native checks: green-button fullscreen at the backdrop level, two
+  canvases fullscreen at once, Notes in a fullscreen canvas, New Canvas from a
+  fullscreen Space, and adopted-window placement below the menu bar. Unrun
+  checks are reported as unrun.
+
 ## 3. Alternatives
 
 - **ALT-001**: Stock Herdr plus App/plugins cannot by itself implement the chosen
@@ -189,8 +276,9 @@ and the complete pre-push gate remain explicit user-run commands when long.
   keep them out of terminal parsing/rendering and preserve wire contracts.
 - **RISK-002**: Imported runtime names/update endpoints still address Herdr;
   do not install or launch this baseline against personal sessions.
-- **RISK-003**: Native fullscreen and real-window coexistence remain unsolved by
-  the source import; deliver their implementation and honest acceptance evidence.
+- **RISK-003**: Public macOS API cannot place another application's window on a
+  fullscreen Space. Adopted windows stay on the desktop Space while their canvas
+  is fullscreen; real-window coexistence still needs authorized native evidence.
 - **ASSUMPTION-001**: Keep the current GitHub repository/address and published
   history; changing its fork-network membership needs a separate hosting action.
 
