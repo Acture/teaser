@@ -161,11 +161,14 @@ canvases, focus routing, persistence/restore, or the multi-application demo.
   one lease per exact window. Each open CanvasWindow has a stable canvas ID and
   is one orchestrator display whose frame is the canvas content rectangle. A
   canvas can show several Workspaces; it is not a Workspace.
-- File › New Canvas (⌘N), Close (⌘W) and Reopen Closed Canvas (⇧⌘T); View ›
-  Enter Full Screen. Launch opens one blank canvas and requests native
-  fullscreen; later canvases open windowed. Closing the last canvas keeps the
-  app running, and reopening the app with none open creates a blank canvas.
-  Only quit performs global release.
+- File › New Canvas (⌘N), New Canvas in New Space (⇧⌘N), Close (⌘W) and Reopen
+  Closed Canvas (⇧⌘T); View › Enter Full Screen (⌃⌘F) and Fill Screen (⌃⌘↩);
+  Window lists the canvases, and going to one orders its window front. Launch
+  opens one blank canvas filling its screen rather than in macOS fullscreen: a
+  fullscreen Space admits no adopted window, so the state a person lands in is
+  the one that can hold their windows. Later canvases open windowed. Closing the
+  last canvas keeps the app running, and reopening with none open creates a
+  blank canvas. Only quit performs global release.
 - Fullscreen is a per-canvas state (`windowed`, `entering`, `fullScreen`,
   `exiting`) driven by AppKit delegate callbacks. One app-wide gate admits a
   single native transition; other requests keep a pending target and start on a

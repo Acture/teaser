@@ -15,6 +15,11 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	let id: CanvasID
 	let window: CanvasNSWindow
 	private let canvasView: DesktopOverlayView
+	/// The view whose coordinate space is the solver's display rectangle. The
+	/// window's content rectangle is larger whenever the canvas covers the
+	/// menu-bar or Dock strip, and drawing into that difference would place
+	/// every outline and Panel a strip away from the window it describes.
+	private let layoutView: NSView
 	/// Status and errors, as a label rather than drawn text, so a failure can be
 	/// selected and copied.
 	private let statusLabel: NSTextField = .init(wrappingLabelWithString: "")
@@ -46,7 +51,6 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 			snapshot: snapshot,
 			callbacks: callbacks
 		)
-		canvasView.autoresizingMask = [.width, .height]
 		canvasView.outlinesPanelsAlways = true
 		window = .init(
 			contentRect: contentRect,
@@ -55,6 +59,7 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 			defer: false
 		)
 		container = .init(frame: .init(origin: .zero, size: contentRect.size))
+		layoutView = .init(frame: .init(origin: .zero, size: contentRect.size))
 		super.init()
 		window.title = "Teaser — Canvas"
 		window.isReleasedWhenClosed = false
@@ -79,7 +84,8 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		window.hasShadow = false
 		window.titlebarAppearsTransparent = true
 		window.titleVisibility = .hidden
-		container.addSubview(canvasView)
+		layoutView.addSubview(canvasView)
+		container.addSubview(layoutView)
 		statusLabel.isSelectable = true
 		statusLabel.font = .systemFont(ofSize: 12)
 		// Readable over whatever sits behind a transparent canvas.
@@ -135,7 +141,22 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	}
 
 	func update(_ snapshot: DesktopOverlaySnapshot) {
+		syncLayoutFrame()
 		canvasView.update(snapshot)
+	}
+
+	/// Places the layout view at the rectangle the solver was given, expressed
+	/// in the window's own coordinates.
+	private func syncLayoutFrame() {
+		let content: NSRect = window.contentRect(forFrameRect: window.frame)
+		let layout: LayoutRect = canvasFrame
+		layoutView.frame = .init(
+			x: layout.minX - Double(content.minX),
+			y: layout.minY - Double(content.minY),
+			width: layout.size.width,
+			height: layout.size.height
+		)
+		canvasView.frame = layoutView.bounds
 	}
 
 	/// The content rectangle in AppKit screen coordinates. While the canvas
@@ -223,8 +244,9 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		if contentViews[panelID] !== view {
 			contentViews[panelID]?.removeFromSuperview()
 			contentViews[panelID] = view
-			container.addSubview(view, positioned: .above, relativeTo: canvasView)
+			layoutView.addSubview(view, positioned: .above, relativeTo: canvasView)
 		}
+		syncLayoutFrame()
 		view.frame = localRect(frame)
 		view.isHidden = false
 	}
@@ -240,20 +262,20 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 
 	var contentPanelIDs: Set<PanelID> { .init(contentViews.keys) }
 
-	/// Screen coordinates to the canvas's own, which is what the content views
-	/// and the drawn outlines share.
+	/// Screen coordinates to the layout view's, which is the same space the
+	/// solver and the drawn outlines use.
 	private func localRect(_ rect: LayoutRect) -> NSRect {
-		let origin: NSRect = window.contentRect(forFrameRect: window.frame)
+		let origin: LayoutRect = canvasFrame
 		return .init(
-			x: rect.minX - Double(origin.minX),
-			y: rect.minY - Double(origin.minY),
+			x: rect.minX - origin.minX,
+			y: rect.minY - origin.minY,
 			width: rect.size.width,
 			height: rect.size.height
 		)
 	}
 
 	private func contentPanel(at pointInWindow: NSPoint) -> PanelID? {
-		let point: NSPoint = container.convert(pointInWindow, from: nil)
+		let point: NSPoint = layoutView.convert(pointInWindow, from: nil)
 		return contentViews.first { _, view in view.frame.contains(point) }?.key
 	}
 

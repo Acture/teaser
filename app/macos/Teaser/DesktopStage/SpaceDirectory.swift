@@ -263,6 +263,9 @@ enum SpacesBarError: Error, Equatable, LocalizedError, Sendable {
 	case spacesBarEmpty
 	case foreignElement
 	case spaceButtonOutOfRange(index: Int, count: Int)
+	/// The button was pressed and macOS stayed where it was, which is what a bar
+	/// belonging to another display looks like from here.
+	case spaceDidNotActivate
 	case accessibilityOperationFailed(operation: String, code: AXError)
 
 	/// Every message ends the same way on purpose: when Teaser cannot drive the
@@ -291,6 +294,9 @@ enum SpacesBarError: Error, Equatable, LocalizedError, Sendable {
 		case .spaceButtonOutOfRange(let index, let count):
 			return "Mission Control's Spaces bar has \(count) Spaces, so position "
 				+ "\(index) does not exist. \(remedy)"
+		case .spaceDidNotActivate:
+			return "Mission Control did not switch to that Space, so its bar most "
+				+ "likely belongs to another display. \(remedy)"
 		case .accessibilityOperationFailed(let operation, let code):
 			return "Accessibility operation \(operation) failed with \(code). "
 				+ remedy
@@ -576,5 +582,11 @@ final class SpaceDirectory {
 			)
 		}
 		try controls.press(buttons[index])
+		// Matching counts does not prove the bar belongs to this monitor: two
+		// displays with the same number of Spaces would pass it. So the press is
+		// checked against what macOS says afterwards rather than assumed.
+		guard try currentSpace(ofDisplayIdentifier: monitor.displayIdentifier) == space else {
+			throw SpacesBarError.spaceDidNotActivate
+		}
 	}
 }

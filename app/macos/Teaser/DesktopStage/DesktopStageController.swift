@@ -370,7 +370,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		if case .opened(let id, _, _) = event { lastKeyCanvasID = id }
 		apply(lifecycle.handle(event))
 		restoreFillIfSettled(event)
-		guard case .windowClosed(let id) = event else { return }
+		// A canvas the controller no longer holds is one quit already released;
+		// re-projecting for it would run against a shut-down orchestrator.
+		guard case .windowClosed(let id) = event, canvases[id] != nil else { return }
 		// The window is gone, so the canvas stops being a display. Its adopted
 		// windows were already released by the preceding `releaseCanvas` effect;
 		// re-projecting now is what stops showing its Workspaces, and it must
@@ -556,9 +558,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		windowPickerWindow.close()
 		organizationControls.close()
 		removeAllNotesPanels()
-		// Quitting is the one global teardown: every canvas goes, in one pass.
-		for canvas: DesktopCanvasWindow in canvases.values { canvas.closeWindow() }
+		// Quitting is the one global teardown: every canvas goes, in one pass,
+		// and none of them re-projects on its way out.
+		let closing: [DesktopCanvasWindow] = .init(canvases.values)
 		canvases.removeAll()
+		for canvas: DesktopCanvasWindow in closing { canvas.closeWindow() }
 	}
 
 	func perform(_ command: DesktopStageCommand) {
