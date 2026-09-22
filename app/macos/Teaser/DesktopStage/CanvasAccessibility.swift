@@ -16,10 +16,16 @@ struct PanelAccessibility: Equatable, Sendable {
 	/// included: what is shown and what is spoken should be one string.
 	let title: String
 	/// `AXDescription`. The group, the fragment when the group has more than
-	/// one, and what the Panel is bound to. This is the channel that stops group
-	/// identity from being a colour and nothing else: a contour hue is invisible
-	/// to a person who cannot separate the hues, and inaudible to everyone.
+	/// one, where the group continues, and what the Panel is bound to. This is
+	/// the channel that stops group identity from being a colour and nothing
+	/// else: a contour hue is invisible to a person who cannot separate the
+	/// hues, and inaudible to everyone.
 	let description: String
+	/// `AXValue`. The group's stable identity, spelled out rather than spoken.
+	/// A title is a label the person chose and nothing stops two Workspaces
+	/// carrying one; an ID cannot collide, so partitioning Panels into their
+	/// groups belongs here rather than in a display string that may.
+	let workspaceID: String
 	/// `AXHelp`. How far below its minimum the canvas had to squeeze this Panel,
 	/// or nil when it fits. The solve never fails for a Panel it cannot satisfy,
 	/// so the shortfall has to be said somewhere.
@@ -47,13 +53,18 @@ struct CanvasAccessibility: Equatable, Sendable {
 extension DesktopOverlaySnapshot {
 	/// The accessibility projection of this canvas.
 	var accessibility: CanvasAccessibility {
-		.init(
+		let ambiguous: Set<String> = ambiguousWorkspaceTitles
+		return .init(
 			description: canvasAccessibilityDescription,
 			panels: panels.map { panel in
 				.init(
 					panelID: panel.id,
 					title: panel.title,
-					description: panelAccessibilityDescription(panel),
+					description: panelAccessibilityDescription(
+						panel,
+						titleIsAmbiguous: ambiguous.contains(panel.workspaceTitle)
+					),
+					workspaceID: panel.workspaceID.rawValue,
 					shortfall: panel.minimumSize.map {
 						CanvasAccessibilityWording.shortfall(
 							minimum: $0,
@@ -107,12 +118,32 @@ extension DesktopOverlaySnapshot {
 		return CanvasAccessibilityWording.sentences(sentences)
 	}
 
+	/// Titles carried by more than one Workspace on this canvas. Two groups may
+	/// share a label — nothing in the core forbids it — and when they do, the
+	/// spoken name alone puts telling them apart back on the contour colour,
+	/// which is the debt this exists to close.
+	private var ambiguousWorkspaceTitles: Set<String> {
+		var identities: [String: Set<WorkspaceID>] = [:]
+		for panel: DesktopOverlayPanel in panels {
+			identities[panel.workspaceTitle, default: []].insert(panel.workspaceID)
+		}
+		return Set(identities.filter { $0.value.count > 1 }.keys)
+	}
+
 	private func panelAccessibilityDescription(
-		_ panel: DesktopOverlayPanel
+		_ panel: DesktopOverlayPanel,
+		titleIsAmbiguous: Bool
 	) -> String {
 		var group: String = panel.workspaceTitle
+		if titleIsAmbiguous {
+			group += " (\(panel.workspaceID.rawValue))"
+		}
 		if let fragment: WorkspaceFragmentPosition = panel.fragment {
 			group += ", fragment \(fragment.ordinal) of \(fragment.total)"
+			if !fragment.otherCanvases.isEmpty {
+				group += ", continued on "
+					+ CanvasAccessibilityWording.canvases(fragment.otherCanvases)
+			}
 		}
 		return CanvasAccessibilityWording.sentences([
 			group,
@@ -126,6 +157,19 @@ extension DesktopOverlaySnapshot {
 enum CanvasAccessibilityWording {
 	static let canvasRoleDescription: String = "Teaser canvas"
 	static let panelRoleDescription: String = "Teaser Panel"
+
+	/// Where the rest of a group is. A canvas on another Space is marked,
+	/// because reaching it means switching Space and the tree is the only place
+	/// that says so — a canvas that is not on the active Space publishes no
+	/// window at all, so it cannot say it about itself.
+	static func canvases(_ placements: [CanvasPlacement]) -> String {
+		let named: [String] = placements.map {
+			$0.isOnActiveSpace ? $0.title : "\($0.title) (another Space)"
+		}
+		guard named.count > 1 else { return named.joined() }
+		return named.dropLast().joined(separator: ", ")
+			+ " and " + (named.last ?? "")
+	}
 
 	static func binding(_ binding: PanelBindingState) -> String {
 		switch binding {

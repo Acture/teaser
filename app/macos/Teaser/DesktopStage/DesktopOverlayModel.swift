@@ -20,11 +20,31 @@ enum PanelBindingState: Equatable, Sendable {
 	case teaserNotes
 }
 
+/// Where a canvas is, as far as anything reading the tree is concerned. A
+/// group can continue on another canvas, and "fragment 1 of 2" is a dangling
+/// reference unless the tree says where the other one is.
+struct CanvasPlacement: Equatable, Sendable {
+	let displayID: DisplayID
+	/// The canvas window's own title, which is the string the Window menu
+	/// lists, so the two surfaces name the same canvas the same way.
+	let title: String
+	/// Read live rather than from the Space recorded when the canvas opened: a
+	/// canvas can be moved afterwards, and a stale answer would send someone
+	/// looking on the wrong Space.
+	let isOnActiveSpace: Bool
+}
+
 /// Which fragment of its group a Panel sits in. 1-based and group-wide across
 /// every canvas, so a group split in two reads 1 of 2 here and 2 of 2 there.
 struct WorkspaceFragmentPosition: Equatable, Sendable {
 	let ordinal: Int
 	let total: Int
+	/// The other canvases this group continues on, in canvas order. Empty when
+	/// every fragment is on this canvas — a group interrupted by another
+	/// group's Panel is still two fragments, and both of them are here — and
+	/// empty for a canvas whose placement nothing knows, which is said by
+	/// omission rather than guessed at.
+	let otherCanvases: [CanvasPlacement]
 }
 
 struct DesktopOverlayPanel: Equatable, Identifiable, Sendable {
@@ -169,17 +189,31 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 	/// Panel the pass dropped — a degenerate rectangle never reaches the grid —
 	/// simply has no entry.
 	private static func fragmentPositions(
-		in layout: PresentationLayout
+		in layout: PresentationLayout,
+		on displayID: DisplayID,
+		canvases: [DisplayID: CanvasPlacement]
 	) -> [PanelID: WorkspaceFragmentPosition] {
 		var positions: [PanelID: WorkspaceFragmentPosition] = [:]
 		for contour: WorkspaceContour in layout.contours
 			where contour.fragments.count > 1
 		{
+			// Fragments arrive in canvas order, so the first appearance of each
+			// other canvas keeps that order. A fragment on this canvas is not
+			// somewhere else, and a canvas with no placement is left unsaid.
+			var elsewhere: [CanvasPlacement] = []
+			for fragmentDisplayID: DisplayID in contour.fragments.map(\.displayID)
+			where fragmentDisplayID != displayID {
+				guard let placement: CanvasPlacement = canvases[fragmentDisplayID],
+					!elsewhere.contains(where: { $0.displayID == fragmentDisplayID })
+				else { continue }
+				elsewhere.append(placement)
+			}
 			for fragment: WorkspaceContourFragment in contour.fragments {
 				for panelID: PanelID in fragment.panelIDs {
 					positions[panelID] = .init(
 						ordinal: fragment.ordinal,
-						total: contour.fragments.count
+						total: contour.fragments.count,
+						otherCanvases: elsewhere
 					)
 				}
 			}
@@ -197,13 +231,16 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 		presentation: WorkspacePresentation,
 		layout: PresentationLayout,
 		adoptedPanelIDs: Set<PanelID> = [],
+		canvases: [DisplayID: CanvasPlacement] = [:],
 		arrangeMode: Bool,
 		dragActive: Bool = false,
 		dropHighlight: DesktopOverlayDropHighlight? = nil,
 		status: String? = nil
 	) {
 		let fragments: [PanelID: WorkspaceFragmentPosition] = Self.fragmentPositions(
-			in: layout
+			in: layout,
+			on: displayID,
+			canvases: canvases
 		)
 		self.init(
 			displayID: displayID,

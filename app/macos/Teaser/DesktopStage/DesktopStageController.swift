@@ -755,6 +755,22 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
 		windowPickerModel.update(from: orchestrator)
+		// Where every open canvas is, so a Panel whose group continues on
+		// another one can say which, and whether reaching it means switching
+		// Space. Read here because it is live AppKit state, not geometry.
+		let placements: [DisplayID: CanvasPlacement] = .init(
+			uniqueKeysWithValues: canvases.map { id, canvas in
+				let displayID: DisplayID = .init(canvas: id)
+				return (
+					displayID,
+					CanvasPlacement(
+						displayID: displayID,
+						title: canvas.window.title,
+						isOnActiveSpace: canvas.isOnActiveSpace
+					)
+				)
+			}
+		)
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
 			let displayID: DisplayID = .init(canvas: id)
 			let canvasFrame: LayoutRect = lifecycle.state(of: id)?.settledFrame ?? canvas.canvasFrame
@@ -770,6 +786,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					// so out loud. A lease is runtime state, not geometry, and
 					// adoption is never inferred from a rectangle.
 					adoptedPanelIDs: .init(orchestrator.panelAssignments.keys),
+					canvases: placements,
 					arrangeMode: orchestrator.isArrangeModeEnabled,
 					dragActive: orchestrator.isDragging,
 					dropHighlight: dropHighlight(on: displayID),

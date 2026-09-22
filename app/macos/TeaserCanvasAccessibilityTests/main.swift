@@ -113,7 +113,8 @@ private func snapshot(
 	on displayID: DisplayID = canvasA,
 	frame: LayoutRect = canvasFrame,
 	frames: [DisplayID: LayoutRect] = [canvasA: canvasFrame],
-	adopted: Set<PanelID> = []
+	adopted: Set<PanelID> = [],
+	canvases: [DisplayID: CanvasPlacement] = [:]
 ) throws -> DesktopOverlaySnapshot {
 	.init(
 		displayID: displayID,
@@ -121,8 +122,17 @@ private func snapshot(
 		presentation: presentation,
 		layout: try solve(presentation, frames: frames),
 		adoptedPanelIDs: adopted,
+		canvases: canvases,
 		arrangeMode: false
 	)
+}
+
+private func placement(
+	_ displayID: DisplayID,
+	_ title: String,
+	onActiveSpace: Bool = true
+) -> CanvasPlacement {
+	.init(displayID: displayID, title: title, isOnActiveSpace: onActiveSpace)
 }
 
 private func accessiblePanel(
@@ -205,6 +215,150 @@ private func testASplitGroupNumbersItsFragments() throws {
 		try accessiblePanel("b1", in: first).description,
 		"Beta. No binding yet.",
 		"a group that is in one piece is not numbered 1 of 1"
+	)
+}
+
+/// A Workspace's title is a label the person chose, and nothing in the core
+/// stops two of them carrying one. When that happens the spoken name alone
+/// puts telling the two apart back on the contour colour — the debt this
+/// ticket exists to close — so the identity that cannot collide is said too.
+private func testTwoWorkspacesSharingATitleAreStillToldApart() throws {
+	var presentation: WorkspacePresentation = try twoGroupPresentation()
+	presentation.workspaces[.init("beta")] = .init(
+		id: .init("beta"), title: "Alpha", detail: ""
+	)
+	let tree: CanvasAccessibility = try snapshot(presentation).accessibility
+	try expectEqual(
+		try accessiblePanel("a1", in: tree).description,
+		"Alpha (alpha). No binding yet.",
+		"a colliding title is qualified by the identity that cannot collide"
+	)
+	try expectEqual(
+		try accessiblePanel("b1", in: tree).description,
+		"Alpha (beta). No binding yet.",
+		"the other group reads differently despite the identical label"
+	)
+	let first: String = try accessiblePanel("a1", in: tree).description
+	let second: String = try accessiblePanel("b1", in: tree).description
+	try expect(
+		first != second,
+		"two groups must never say the same thing about themselves"
+	)
+}
+
+/// The identity is published unconditionally, whether or not the label is
+/// ambiguous: an automated read partitions Panels into groups on this, not on
+/// a display string a person is free to edit.
+private func testEveryPanelPublishesItsWorkspaceIdentity() throws {
+	let tree: CanvasAccessibility = try snapshot(twoGroupPresentation())
+		.accessibility
+	try expectEqual(
+		try accessiblePanel("a1", in: tree).workspaceID,
+		"alpha",
+		"a Panel carries its group's identity, not only its label"
+	)
+	try expectEqual(
+		try accessiblePanel("b1", in: tree).workspaceID,
+		"beta",
+		"the second group's identity is its own"
+	)
+	let unambiguous: String = try accessiblePanel("a1", in: tree).description
+	try expect(
+		!unambiguous.contains("(alpha)"),
+		"an unambiguous label is not cluttered with the identity"
+	)
+}
+
+/// "Fragment 1 of 2" is a dangling reference unless the tree says where the
+/// other one is. A canvas not on the active Space publishes no window at all,
+/// so it cannot say so about itself — the canvas that can see it must.
+private func testASplitGroupSaysWhereItContinues() throws {
+	var presentation: WorkspacePresentation = try twoGroupPresentation()
+	presentation.canvases[canvasB] = .init(displayID: canvasB)
+	try presentation.seedPanel(
+		panel("a2", workspace: "alpha"), onCanvas: canvasB
+	)
+	let frames: [DisplayID: LayoutRect] = [
+		canvasA: canvasFrame,
+		canvasB: .init(x: 2_000, y: 200, width: 900, height: 600),
+	]
+	let elsewhere: [DisplayID: CanvasPlacement] = [
+		canvasA: placement(canvasA, "Teaser — Canvas 1"),
+		canvasB: placement(canvasB, "Teaser — Canvas 2", onActiveSpace: false),
+	]
+	let here: CanvasAccessibility = try snapshot(
+		presentation, frames: frames, canvases: elsewhere
+	).accessibility
+	try expectEqual(
+		try accessiblePanel("a1", in: here).description,
+		"Alpha, fragment 1 of 2, continued on Teaser — Canvas 2 (another "
+			+ "Space). No binding yet.",
+		"a group continuing on another Space says which canvas and that it is "
+			+ "on another Space"
+	)
+	try expectEqual(
+		try accessiblePanel("b1", in: here).description,
+		"Beta. No binding yet.",
+		"a group that is all here says nothing about other canvases"
+	)
+
+	// Seen from the other end, the continuation points back — and Canvas 1 is
+	// the canvas doing the reading, so no Space clause.
+	let there: CanvasAccessibility = try snapshot(
+		presentation,
+		on: canvasB,
+		frame: try unwrap(frames[canvasB], "canvas B must have a frame"),
+		frames: frames,
+		canvases: elsewhere
+	).accessibility
+	try expectEqual(
+		try accessiblePanel("a2", in: there).description,
+		"Alpha, fragment 2 of 2, continued on Teaser — Canvas 1. No binding yet.",
+		"the far fragment names the canvas it came from, without a Space clause"
+	)
+}
+
+/// A canvas nothing knows the placement of is said by omission. Inventing a
+/// destination would send someone looking for a canvas that may not be open.
+private func testAnUnknownCanvasIsLeftUnsaidRatherThanGuessed() throws {
+	var presentation: WorkspacePresentation = try twoGroupPresentation()
+	presentation.canvases[canvasB] = .init(displayID: canvasB)
+	try presentation.seedPanel(
+		panel("a2", workspace: "alpha"), onCanvas: canvasB
+	)
+	let frames: [DisplayID: LayoutRect] = [
+		canvasA: canvasFrame,
+		canvasB: .init(x: 2_000, y: 200, width: 900, height: 600),
+	]
+	try expectEqual(
+		try accessiblePanel(
+			"a1",
+			in: try snapshot(presentation, frames: frames).accessibility
+		).description,
+		"Alpha, fragment 1 of 2. No binding yet.",
+		"the fragment is still numbered; only the destination goes unsaid"
+	)
+}
+
+/// A group interrupted by another group's Panel is two fragments on one
+/// canvas. Both are already here, so there is nowhere to send anyone.
+private func testAFragmentOnThisCanvasIsNotSomewhereElse() throws {
+	var presentation: WorkspacePresentation = try twoGroupPresentation()
+	try presentation.insertPanel(
+		panel("a3", workspace: "alpha"),
+		onCanvas: canvasA,
+		at: .trailing,
+		of: .init("b1"),
+		splitID: .init("split-2")
+	)
+	let tree: CanvasAccessibility = try snapshot(
+		presentation,
+		canvases: [canvasA: placement(canvasA, "Teaser — Canvas 1")]
+	).accessibility
+	try expectEqual(
+		try accessiblePanel("a1", in: tree).description,
+		"Alpha, fragment 1 of 2. No binding yet.",
+		"a locally split group is numbered but sends nobody to another canvas"
 	)
 }
 
@@ -512,6 +666,11 @@ private func testTheViewPublishesOneGroupPerPanel() throws {
 		"Finder · a1",
 		"the element's AXTitle is the title the canvas draws"
 	)
+	try expectEqual(
+		first.accessibilityValue() as? String,
+		"alpha",
+		"the element carries its group's identity, not only its label"
+	)
 	try expect(
 		first.accessibilityHelp() == nil,
 		"a Panel that fits publishes no shortfall help"
@@ -648,6 +807,11 @@ private func run() throws {
 	try testAnUnlabelledGroupFallsBackToItsIdentifier()
 	try testASplitGroupNumbersItsFragments()
 	try testASingleGroupCanvasStillNamesItsGroup()
+	try testTwoWorkspacesSharingATitleAreStillToldApart()
+	try testEveryPanelPublishesItsWorkspaceIdentity()
+	try testASplitGroupSaysWhereItContinues()
+	try testAnUnknownCanvasIsLeftUnsaidRatherThanGuessed()
+	try testAFragmentOnThisCanvasIsNotSomewhereElse()
 	try testBindingStateIsReadable()
 	try testAProviderHintAloneIsNotAnAdoptedWindow()
 	try testVirtualFocusMarksExactlyOneElement()

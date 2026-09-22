@@ -347,10 +347,11 @@ No Rust, no wire format and no organization state changes.
   solved frame is an `AXGroup` under the canvas. `AXTitle` is the title the
   canvas draws, provider prefix included, so what is shown and what is spoken
   are one string. `AXDescription` names the group, numbers the fragment when
-  the group has more than one, and says what the Panel is bound to. `AXHelp`
-  carries an unsatisfied minimum size. The Panel's own identity is the
-  `AXIdentifier`, so an automated read addresses a Panel without matching on a
-  title a provider is free to change.
+  the group has more than one, where the group continues, and says what the
+  Panel is bound to. `AXValue` carries the Workspace's own identity and
+  `AXIdentifier` the Panel's, so an automated read partitions Panels into
+  groups and addresses one without matching on display text a person or a
+  provider is free to change. `AXHelp` carries an unsatisfied minimum size.
 - Group identity stops being a colour and nothing else. The contour's ten hues
   are spaced for normal colour vision, which is not everyone's, and a hue is
   inaudible to all of them; the element says "Alpha" where the contour only
@@ -358,6 +359,18 @@ No Rust, no wire format and no organization state changes.
   canvases reads 1 of 2 here and 2 of 2 there. A group in one piece is not
   numbered 1 of 1, and a canvas showing one group still names it: suppressing
   the contour is a drawing rule, not a naming rule.
+- A fragment ordinal on its own is a dangling reference, so a group that
+  continues elsewhere names the canvas it continues on, and marks that canvas
+  when it is not on the active Space. That mark can only come from here: a
+  canvas on another Space publishes no window at all, so it cannot say so about
+  itself, and the canvas that can see it is the one that must. A canvas whose
+  placement is unknown is left unsaid rather than guessed at, and fragments of
+  one group on this same canvas send nobody anywhere.
+- A Workspace title is a label the person chose and nothing in the core stops
+  two Workspaces carrying one. When two do, the spoken name is qualified with
+  the identity that cannot collide; when the label is already unambiguous it is
+  not cluttered with one. The identity is published either way, because
+  partitioning Panels into groups must not depend on display text.
 - Binding state is read from the live lease and from `nativeContent`, never
   from geometry: a provider hint the server holds is not an adopted window.
   A Panel below its minimum names the deficit on each axis that is actually
@@ -400,7 +413,10 @@ No Rust, no wire format and no organization state changes.
   element would give it two parents.
 - A canvas that is not on the active Space reports no window at all through
   Accessibility, so nothing under it can be read either. This slice delivers
-  "present but not frontmost"; reading across Spaces is not solved here.
+  "present but not frontmost". What it adds across Spaces is a pointer, not a
+  reading: a readable canvas names the off-Space canvas its group continues on,
+  so the rest of the group is reachable rather than merely implied. Reading
+  that canvas's own Panels still means going to its Space.
 
 #### Evidence
 
@@ -411,7 +427,9 @@ No Rust, no wire format and no organization state changes.
   canvas-relative frames inside the canvas, the canvas summary for a blank
   canvas and for both focus stages, the shortfall sentence on one axis, on both,
   and under a point, one published `AXGroup` per Panel with its role,
-  identifier, title, label, help, focus, parent and frame, element identity
+  identifier, title, label, value, help, focus, parent and frame, two
+  Workspaces sharing a title, where a split group continues and the unknown and
+  same-canvas cases that say nothing, element identity
   surviving a solve and leaving with its Panel, and an unchanged projection not
   being republished. It shows no window, installs no
   monitor and requests no Accessibility.

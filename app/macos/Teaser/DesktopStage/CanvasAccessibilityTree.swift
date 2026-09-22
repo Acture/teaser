@@ -49,6 +49,10 @@ final class CanvasAccessibilityTree {
 			elements[panel.panelID] = element
 			element.setAccessibilityTitle(panel.title)
 			element.setAccessibilityLabel(panel.description)
+			// Spelled out, not spoken: a group role carries no value a reader
+			// announces, which is exactly right for an identity an automated
+			// read needs and a person does not want recited.
+			element.setAccessibilityValue(panel.workspaceID)
 			element.setAccessibilityHelp(panel.shortfall)
 			element.setAccessibilityFocused(panel.isFocused)
 			element.setAccessibilityFrameInParentSpace(
