@@ -141,9 +141,10 @@ is valid and it remains at the frame last applied by Teaser.
 
 The retained code uses public AX/CG APIs plus the isolated read-only
 `_AXUIElementGetWindow` declaration for exact identity, following AeroSpace's
-approach. SplitView and KeyboardShortcuts remain pinned native dependencies.
-Neither embeds windows or solves native fullscreen coexistence. Swindler remains
-an optional probe, not a fork-migration dependency.
+approach. KeyboardShortcuts remains a pinned native dependency; SplitView went
+with the Layout Editor window it was the only user of. Neither embeds windows or
+solves native fullscreen coexistence. Swindler remains an optional probe, not a
+fork-migration dependency.
 
 Fullscreen transitions, Spaces, permissions, and real-window coexistence remain
 native implementation work. Do not promise arbitrary reparenting, forced

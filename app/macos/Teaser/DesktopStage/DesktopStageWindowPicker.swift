@@ -88,8 +88,13 @@ final class DesktopStageWindowPickerModel: ObservableObject {
 		var targets: [PanelChoice] = []
 		var occupiedPanelTitles: [PanelID: String] = [:]
 		// Panels are listed on their own now; a Workspace is only the label shown
-		// beside each one.
-		for descriptor: PanelDescriptor in orchestrator.presentation.panels.values
+		// beside each one. Only Panels an open canvas actually places are
+		// offered: `panels` also retains those whose canvas is shut, and
+		// adopting into one would put a window somewhere nobody can reach.
+		let placed: [PanelDescriptor] = orchestrator.presentation.canvases.keys
+			.flatMap { orchestrator.presentation.panelIDs(onCanvas: $0) }
+			.compactMap { orchestrator.presentation.panels[$0] }
+		for descriptor: PanelDescriptor in placed
 			.sorted(by: { $0.id.rawValue < $1.id.rawValue })
 		{
 			if orchestrator.isPanelOccupied(descriptor.id) {

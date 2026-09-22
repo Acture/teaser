@@ -1286,6 +1286,65 @@ private func testARefusedMinimizeIsReportedAndDoesNotAbort() throws {
 	)
 }
 
+/// Teaser minimized these windows; it has to give them back. After a release
+/// there is no lease left to ask, so a window left in the Dock here can never
+/// be recovered from inside Teaser.
+@MainActor
+private func testStoppingTheStageRestoresWhatItMinimized() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStageExplicitly()
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(other.isMinimized, "the exclusive stage must minimize it first")
+
+	harness.orchestrator.stopStage()
+	try expect(
+		!other.isMinimized,
+		"stopping the stage must hand back every window it minimized"
+	)
+}
+
+/// Same gap on the other exit: closing a canvas releases its leases, and a
+/// window minimized for focus would go with them.
+@MainActor
+private func testReleasingACanvasRestoresWhatItMinimized() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStageExplicitly()
+	defer { harness.orchestrator.stopStage() }
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(other.isMinimized, "the exclusive stage must minimize it first")
+
+	_ = harness.orchestrator.releaseWindows(onDisplay: testDisplayID)
+	try expect(
+		!other.isMinimized,
+		"releasing a canvas must hand back every window it minimized"
+	)
+}
+
+/// The explanation has to survive the transaction that follows it. It used to
+/// be overwritten by the transaction's own status line, so a refused focus was
+/// indistinguishable from one that worked.
+@MainActor
+private func testRefusedFocusExplainsItself() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try harness.orchestrator.startStageExplicitly()
+	defer { harness.orchestrator.stopStage() }
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: .init("absent-group"))
+	try expect(
+		harness.orchestrator.statusMessage?.contains("no Panel on this canvas") == true,
+		"a refused focus must say why: \(harness.orchestrator.statusMessage ?? "none")"
+	)
+}
+
 // MARK: - Split axis
 
 /// Halving the long side is the usual answer, but not for a Panel whose kind
@@ -1412,6 +1471,9 @@ func adoptionCases() -> [TestCase] {
 		.init("default run touches no desktop state", testDefaultRunTouchesNoDesktopState),
 		.init("an open canvas activates the stage", testAnOpenCanvasActivatesTheStage),
 		.init("split axis follows the preferred aspect", testSplitAxisFollowsThePreferredAspect),
+		.init("stopping the stage restores what it minimized", testStoppingTheStageRestoresWhatItMinimized),
+		.init("releasing a canvas restores what it minimized", testReleasingACanvasRestoresWhatItMinimized),
+		.init("a refused focus explains itself", testRefusedFocusExplainsItself),
 		.init("activation without Accessibility never prompts", testActivationWithoutAccessibilityNeverPrompts),
 		.init("an explicit Stop survives later activation", testAnExplicitStopSurvivesLaterActivation),
 		.init("no canvas means no stage", testNoCanvasMeansNoStage),

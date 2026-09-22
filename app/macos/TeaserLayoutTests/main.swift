@@ -578,6 +578,50 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 	)
 }
 
+/// An exclusive focus prunes the solve to one group. If the last member leaves
+/// the canvas and the focus stays set, that prune yields nothing and the whole
+/// canvas renders empty.
+private func testMovingTheFocusedGroupAwayClearsTheFocus() throws {
+	let canvasB: DisplayID = .init("canvas-b")
+	var presentation: WorkspacePresentation = try gapPresentation()
+	presentation.canvases[canvasB] = .init(displayID: canvasB)
+	presentation.focusWorkspace(
+		.init("beta"), onCanvas: weightedDisplayID, exclusive: true
+	)
+	// b1 is beta's only member here.
+	try presentation.movePanel(
+		.init("b1"), toCanvas: canvasB, at: nil, of: nil, splitID: .init("moved")
+	)
+	try expect(
+		presentation.canvases[weightedDisplayID]?.focus == nil,
+		"a focus whose group left the canvas must be cleared"
+	)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+			canvasB: .init(x: 1_000, y: 0, width: 1_000, height: 400),
+		]
+	)
+	try expect(
+		layout.panelFrames[.init("a1")] != nil && layout.panelFrames[.init("a2")] != nil,
+		"the Panels that stayed must still be placed, not pruned away"
+	)
+}
+
+/// Deleting the last member of the focused group has the same effect.
+private func testRemovingTheFocusedGroupClearsTheFocus() throws {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	presentation.focusWorkspace(
+		.init("beta"), onCanvas: weightedDisplayID, exclusive: true
+	)
+	try presentation.removePanel(.init("b1"))
+	try expect(
+		presentation.canvases[weightedDisplayID]?.focus == nil,
+		"a focus whose group was deleted must be cleared"
+	)
+}
+
 // MARK: - Contours in the solved layout
 
 /// The solver is the one place that sees every canvas, so it is where the
@@ -1482,6 +1526,8 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 
 private func run() throws {
 	try testASingleGroupDrawsNoContour()
+	try testMovingTheFocusedGroupAwayClearsTheFocus()
+	try testRemovingTheFocusedGroupClearsTheFocus()
 	try testSolvedLayoutCarriesContours()
 	try testSolvedContoursStayOutOfEveryPanel()
 	try testAdjacentMembersShareOneSolvedLoop()
