@@ -313,11 +313,13 @@ private func testNamesSpacesTheWayMissionControlDoes() throws {
 		) == "Desktop 2",
 		"a fullscreen Space in bar order must not consume a desktop number"
 	)
+	// A fullscreen Space has a ManagedSpaceID like any other, and saying only
+	// that it is fullscreen identifies nothing once two applications are.
 	try expect(
 		snapshot.name(
 			of: .init(managedID: 280, uuid: fullScreenUUID, isFullScreen: true)
-		) == "a full-screen Space",
-		"a fullscreen Space shows its application in the bar, not a number"
+		) == "full-screen Space 280",
+		"a fullscreen Space is named by its own ID, not merely as fullscreen"
 	)
 	try expect(
 		snapshot.name(
@@ -336,7 +338,7 @@ private func testSpaceNamingReadsTheLiveRecord() throws {
 	try expect(
 		snapshot.name(
 			of: .init(managedID: 280, uuid: fullScreenUUID, isFullScreen: false)
-		) == "a full-screen Space",
+		) == "full-screen Space 280",
 		"a stale fullscreen flag must not turn a fullscreen Space into a desktop"
 	)
 	try expect(

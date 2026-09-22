@@ -325,10 +325,11 @@ private func testASplitGroupSaysWhereItContinues() throws {
 	)
 }
 
-/// A canvas on another Space whose Space nothing could name still has to say
-/// that reaching it means leaving this one. Vague beats silent; it is naming a
-/// Space wrongly that would send someone to the wrong place.
-private func testAnUnnameableSpaceStillSaysItIsAnotherOne() throws {
+/// Every canvas anyone has seen carries the Space it was seen on, so an
+/// unnamed Space cannot mean "nobody established it". It means macOS published
+/// no readable Spaces preferences, and the tree says that rather than shrugging
+/// — a vague word would read as Teaser not having bothered.
+private func testAnUnnameableSpaceNamesTheReasonInstead() throws {
 	var presentation: WorkspacePresentation = try twoGroupPresentation()
 	presentation.canvases[canvasB] = .init(displayID: canvasB)
 	try presentation.seedPanel(
@@ -348,9 +349,9 @@ private func testAnUnnameableSpaceStillSaysItIsAnotherOne() throws {
 	).accessibility
 	try expectEqual(
 		try accessiblePanel("a1", in: tree).description,
-		"Alpha, fragment 1 of 2, continued on Teaser — Canvas 2 (another "
-			+ "Space). No binding yet.",
-		"an unnameable Space is still reported as another Space"
+		"Alpha, fragment 1 of 2, continued on Teaser — Canvas 2 (a Space macOS "
+			+ "did not name). No binding yet.",
+		"a Space macOS would not describe says so, rather than going vague"
 	)
 }
 
@@ -846,7 +847,7 @@ private func run() throws {
 	try testTwoWorkspacesSharingATitleAreStillToldApart()
 	try testEveryPanelPublishesItsWorkspaceIdentity()
 	try testASplitGroupSaysWhereItContinues()
-	try testAnUnnameableSpaceStillSaysItIsAnotherOne()
+	try testAnUnnameableSpaceNamesTheReasonInstead()
 	try testAnUnknownCanvasIsLeftUnsaidRatherThanGuessed()
 	try testAFragmentOnThisCanvasIsNotSomewhereElse()
 	try testBindingStateIsReadable()

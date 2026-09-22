@@ -57,6 +57,13 @@ struct SpaceSnapshot: Equatable, Sendable {
 	/// monitor and count only desktops: a fullscreen Space shows its
 	/// application's name in the bar and takes no desktop number.
 	///
+	/// A fullscreen Space is named by its own `ManagedSpaceID`, because "a
+	/// full-screen Space" stops identifying anything the moment two
+	/// applications are in full screen, and the application's name is only
+	/// readable through the Dock's Accessibility tree — a permission this path
+	/// must never reach for. The ID matches nothing on screen, but it is macOS's
+	/// own and it is unique.
+	///
 	/// The live record is re-read by `managedID` rather than trusting the
 	/// caller's copy, because a Space that has since become or stopped being
 	/// fullscreen keeps its ID while its type changes. A Space the preferences
@@ -67,7 +74,9 @@ struct SpaceSnapshot: Equatable, Sendable {
 				$0.managedID == space.managedID
 			})
 		else { return nil }
-		guard !live.isFullScreen else { return "a full-screen Space" }
+		guard !live.isFullScreen else {
+			return "full-screen Space \(live.managedID)"
+		}
 		guard let position: Int = monitor.spaces
 			.filter({ !$0.isFullScreen })
 			.firstIndex(where: { $0.managedID == live.managedID })

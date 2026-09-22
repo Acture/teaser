@@ -61,11 +61,13 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var isRunning: Bool = false
 	private var permissionTask: Task<Void, Never>?
 	private var newSpaceTask: Task<Void, Never>?
-	/// The Spaces bar as macOS last described it, cached because naming a Space
-	/// is a preferences read and the chrome refresh runs many times per drag.
-	/// It is a copy of the system's own state, refreshed when that state can
-	/// have changed, never a second record of anything Teaser owns.
+	/// The Spaces bar as macOS last described it, and which Space was current
+	/// when it was read. Cached because both are one preferences read and the
+	/// chrome refresh runs many times per drag. It is a copy of the system's
+	/// own state, refreshed when that state can have changed, never a second
+	/// record of anything Teaser owns.
 	private var spaceSnapshot: SpaceSnapshot?
+	private var currentSpaceIdentity: SpaceIdentity?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
@@ -176,7 +178,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		installSystemObservers()
 		// No Space switch has happened yet, so the bar is read once up front:
 		// the first canvas opens on whatever Space is already current.
-		spaceSnapshot = try? spaces.snapshot()
+		readSpaces()
 		// Launch opens an ordinary window. Filling the screen is immersive and
 		// covers everything the person might want to drag in, so it is something
 		// they ask for (View › Fill Screen) rather than what they land in.
@@ -218,7 +220,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		if let frame: LayoutRect = closed?.frame {
 			canvas.setFrame(frame)
 		}
-		canvas.show(space: currentSpace())
+		// Opening is the moment this canvas's Space is first established, and a
+		// rare enough one to re-read: a read that failed earlier must not leave
+		// every canvas of the session unplaced.
+		readSpaces()
+		canvas.show(space: currentSpaceIdentity)
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
 		// With no server connected there is nothing to project, so the canvas
@@ -753,19 +759,36 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	@objc
 	private func activeSpaceDidChange(_ notification: Notification) {
-		refreshSpaceIdentities()
+		readSpaces()
+		// `updateChrome` stamps what is now visible; re-reading first is what
+		// makes the stamp the new Space rather than the old one.
 		updateChrome()
 	}
 
-	/// Stamps every visible canvas with the Space that is current now, and
-	/// re-reads the Spaces bar so a canvas can be named by the position the
-	/// person sees in Mission Control. A canvas that is not on this Space keeps
-	/// whatever it was last seen on: macOS publishes no way to ask.
-	private func refreshSpaceIdentities() {
+	/// One read of `com.apple.spaces`: the bar, so a Space can be named by the
+	/// position the person sees in Mission Control, and which Space is current,
+	/// so a visible canvas can be stamped without reading again.
+	private func readSpaces() {
 		spaceSnapshot = try? spaces.snapshot()
-		guard let current: SpaceIdentity = currentSpace() else { return }
+		currentSpaceIdentity = currentSpace()
+	}
+
+	/// Whatever is on screen is on the current Space. That is the only way to
+	/// establish where a canvas is — macOS answers no such question about a
+	/// window — so it is done every time the chrome refreshes rather than only
+	/// when Spaces change: a canvas must never still be waiting to find out
+	/// where it is once somebody has seen it.
+	///
+	/// Cheap by construction: it reads the cached current Space and writes only
+	/// when the answer changed. Nothing here touches the preferences, which are
+	/// re-read at the moments they can have changed — launch, opening a canvas,
+	/// and a Space switch — rather than several times per drag frame. A canvas
+	/// that is not on this Space keeps what it was last seen on.
+	private func stampVisibleCanvases() {
+		guard let current: SpaceIdentity = currentSpaceIdentity else { return }
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases
-		where canvas.isVisible && canvas.isOnActiveSpace {
+		where canvas.isVisible && canvas.isOnActiveSpace
+			&& lifecycle.state(of: id)?.space != current {
 			_ = lifecycle.handle(.spaceChanged(id, current))
 		}
 	}
@@ -797,6 +820,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func updateChrome() {
 		guard isRunning else { return }
+		stampVisibleCanvases()
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
 		windowPickerModel.update(from: orchestrator)

@@ -165,9 +165,11 @@ enum CanvasAccessibilityWording {
 	static func canvases(_ placements: [CanvasPlacement]) -> String {
 		let named: [String] = placements.map {
 			guard !$0.isOnActiveSpace else { return $0.title }
-			// Name the Space when macOS has told us which one it is. "Another
-			// Space" is true but sends nobody anywhere in particular.
-			return "\($0.title) (\($0.spaceName ?? "another Space"))"
+			// Every canvas anyone has seen carries the Space it was seen on, so
+			// a missing name is not "we never checked" — it is macOS declining
+			// to describe its own Spaces. Say which of the two it is rather
+			// than shrugging at both with "another Space".
+			return "\($0.title) (\($0.spaceName ?? "a Space macOS did not name"))"
 		}
 		guard named.count > 1 else { return named.joined() }
 		return named.dropLast().joined(separator: ", ")

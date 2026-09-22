@@ -321,8 +321,9 @@ projection. The Rust core is unchanged.
   weighted ratios and user-ratio survival including a clamped solve, the gap
   hierarchy and the gutter rule, shortfall reporting, and both focus stages.
 - `TeaserCanvasLifecycleTests` covers Mission Control's own Space naming — a
-  fullscreen Space taking no desktop number, per-monitor numbering, the live
-  record beating a stale copy, and a Space the bar no longer describes — and
+  fullscreen Space taking no desktop number but carrying its own ID,
+  per-monitor numbering, the live record beating a stale copy, and a Space the
+  bar no longer describes — and
   seeing a canvas establishing which Space it is on without touching its frame
   or phase. It also covers per-canvas isolation on the flat model,
   the unconnected seed, seeding stopping once a projection owns the
@@ -366,20 +367,31 @@ No Rust, no wire format and no organization state changes.
 - A fragment ordinal on its own is a dangling reference, so a group that
   continues elsewhere names the canvas it continues on and the Space that
   canvas is on, the way Mission Control names it: "Desktop 2", or the Space's
-  own ID when the Spaces bar no longer describes it, or "another Space" when
-  nothing ever established which. That can only be said from here: a canvas on
-  another Space publishes no window at all, so it cannot say so about itself,
-  and the canvas that can see it is the one that must. A canvas whose placement
-  is unknown is left unsaid rather than guessed at, and fragments of one group
-  on this same canvas send nobody anywhere.
+  own `ManagedSpaceID` when it has no desktop number. That can only be said
+  from here: a canvas on another Space publishes no window at all, so it cannot
+  say so about itself, and the canvas that can see it is the one that must. A
+  canvas whose placement is unknown is left unsaid rather than guessed at, and
+  fragments of one group on this same canvas send nobody anywhere.
 - Desktops are numbered per monitor and count only desktops, because a
   fullscreen Space shows its application's name in the bar and takes no desktop
-  number. The live record decides: a Space keeps its ID while becoming or
-  ceasing to be fullscreen, so a caller's stale copy must not name it.
+  number. A fullscreen Space is named by that ID instead: saying only that it
+  is fullscreen identifies nothing once two applications are, and the
+  application's own name is readable only through the Dock's Accessibility
+  tree, which this path must never reach for. The live record decides: a Space
+  keeps its ID while becoming or ceasing to be fullscreen, so a caller's stale
+  copy must not name it.
 - macOS publishes no way to ask which Space a window is on, so a canvas is
-  stamped with the Space that is current whenever it is visible during a Space
-  switch. That is identity only — no frame, no phase, no transition — and a
-  canvas nobody has seen since it moved keeps the Space it was last seen on.
+  stamped with the Space that is current every time it is visible, not only
+  when Spaces change: a canvas anyone has seen must never still be waiting to
+  find out where it is. That is identity only — no frame, no phase, no
+  transition — and a canvas nobody has seen since it moved keeps the Space it
+  was last seen on. The preferences are re-read at launch, on opening a canvas
+  and on a Space switch, never on the chrome path, which runs several times per
+  drag frame.
+- A Space therefore goes unnamed only when macOS publishes no readable Spaces
+  preferences at all, and the tree says that rather than going vague: an
+  unqualified "another Space" would read as Teaser not having bothered, which
+  is the fallback this contract forbids everywhere else.
 - A Workspace title is a label the person chose and nothing in the core stops
   two Workspaces carrying one. When two do, the spoken name is qualified with
   the identity that cannot collide; when the label is already unambiguous it is

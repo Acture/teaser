@@ -33,9 +33,11 @@ struct CanvasPlacement: Equatable, Sendable {
 	/// looking on the wrong Space.
 	let isOnActiveSpace: Bool
 	/// What Mission Control calls the Space this canvas was last seen on —
-	/// "Desktop 2", or the Space's own ID when the preferences no longer
-	/// describe it. Nil when nothing has ever established which Space it is on;
-	/// macOS publishes no way to ask a window directly.
+	/// "Desktop 2", "full-screen Space 280", or the Space's own ID when the bar
+	/// no longer describes it. Every canvas that has been on screen has one,
+	/// because whatever is on screen is on the current Space; nil means macOS
+	/// published no readable Spaces preferences at all, never that nobody
+	/// bothered to look.
 	let spaceName: String?
 
 	init(
