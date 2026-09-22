@@ -32,6 +32,23 @@ struct CanvasPlacement: Equatable, Sendable {
 	/// canvas can be moved afterwards, and a stale answer would send someone
 	/// looking on the wrong Space.
 	let isOnActiveSpace: Bool
+	/// What Mission Control calls the Space this canvas was last seen on —
+	/// "Desktop 2", or the Space's own ID when the preferences no longer
+	/// describe it. Nil when nothing has ever established which Space it is on;
+	/// macOS publishes no way to ask a window directly.
+	let spaceName: String?
+
+	init(
+		displayID: DisplayID,
+		title: String,
+		isOnActiveSpace: Bool,
+		spaceName: String? = nil
+	) {
+		self.displayID = displayID
+		self.title = title
+		self.isOnActiveSpace = isOnActiveSpace
+		self.spaceName = spaceName
+	}
 }
 
 /// Which fragment of its group a Panel sits in. 1-based and group-wide across

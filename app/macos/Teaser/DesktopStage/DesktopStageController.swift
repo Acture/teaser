@@ -61,6 +61,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var isRunning: Bool = false
 	private var permissionTask: Task<Void, Never>?
 	private var newSpaceTask: Task<Void, Never>?
+	/// The Spaces bar as macOS last described it, cached because naming a Space
+	/// is a preferences read and the chrome refresh runs many times per drag.
+	/// It is a copy of the system's own state, refreshed when that state can
+	/// have changed, never a second record of anything Teaser owns.
+	private var spaceSnapshot: SpaceSnapshot?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
@@ -169,6 +174,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard !isRunning else { return }
 		isRunning = true
 		installSystemObservers()
+		// No Space switch has happened yet, so the bar is read once up front:
+		// the first canvas opens on whatever Space is already current.
+		spaceSnapshot = try? spaces.snapshot()
 		// Launch opens an ordinary window. Filling the screen is immersive and
 		// covers everything the person might want to drag in, so it is something
 		// they ask for (View › Fill Screen) rather than what they land in.
@@ -732,6 +740,43 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			name: NSApplication.didChangeScreenParametersNotification,
 			object: nil
 		)
+		// Switching Space is the one moment a canvas's Space can be established
+		// without asking macOS a question it does not answer: whatever is on
+		// screen afterwards is on the Space that is now current.
+		NSWorkspace.shared.notificationCenter.addObserver(
+			self,
+			selector: #selector(activeSpaceDidChange(_:)),
+			name: NSWorkspace.activeSpaceDidChangeNotification,
+			object: nil
+		)
+	}
+
+	@objc
+	private func activeSpaceDidChange(_ notification: Notification) {
+		refreshSpaceIdentities()
+		updateChrome()
+	}
+
+	/// Stamps every visible canvas with the Space that is current now, and
+	/// re-reads the Spaces bar so a canvas can be named by the position the
+	/// person sees in Mission Control. A canvas that is not on this Space keeps
+	/// whatever it was last seen on: macOS publishes no way to ask.
+	private func refreshSpaceIdentities() {
+		spaceSnapshot = try? spaces.snapshot()
+		guard let current: SpaceIdentity = currentSpace() else { return }
+		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases
+		where canvas.isVisible && canvas.isOnActiveSpace {
+			_ = lifecycle.handle(.spaceChanged(id, current))
+		}
+	}
+
+	/// What to call the Space a canvas was last seen on. The Spaces bar gives
+	/// the name the person recognises; a Space the preferences no longer
+	/// describe still has its own ID, which beats saying nothing.
+	private func spaceName(of canvas: CanvasID) -> String? {
+		guard let space: SpaceIdentity = lifecycle.state(of: canvas)?.space
+		else { return nil }
+		return spaceSnapshot?.name(of: space) ?? "Space \(space.managedID)"
 	}
 
 	private func removeSystemObservers() {
@@ -766,7 +811,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					CanvasPlacement(
 						displayID: displayID,
 						title: canvas.window.title,
-						isOnActiveSpace: canvas.isOnActiveSpace
+						isOnActiveSpace: canvas.isOnActiveSpace,
+						spaceName: self.spaceName(of: id)
 					)
 				)
 			}

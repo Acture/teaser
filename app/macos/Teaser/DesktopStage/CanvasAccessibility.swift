@@ -164,7 +164,10 @@ enum CanvasAccessibilityWording {
 	/// window at all, so it cannot say it about itself.
 	static func canvases(_ placements: [CanvasPlacement]) -> String {
 		let named: [String] = placements.map {
-			$0.isOnActiveSpace ? $0.title : "\($0.title) (another Space)"
+			guard !$0.isOnActiveSpace else { return $0.title }
+			// Name the Space when macOS has told us which one it is. "Another
+			// Space" is true but sends nobody anywhere in particular.
+			return "\($0.title) (\($0.spaceName ?? "another Space"))"
 		}
 		guard named.count > 1 else { return named.joined() }
 		return named.dropLast().joined(separator: ", ")

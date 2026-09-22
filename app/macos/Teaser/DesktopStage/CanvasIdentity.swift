@@ -81,6 +81,11 @@ enum CanvasEvent: Equatable, Sendable {
 	case didExitFullScreen(CanvasID, frame: LayoutRect)
 	case didFailToExitFullScreen(CanvasID, frame: LayoutRect)
 	case geometryChanged(CanvasID, frame: LayoutRect)
+	/// The canvas was seen on this Space. macOS publishes no way to ask which
+	/// Space a given window is on, so the one moment the answer is certain is
+	/// while the canvas is visible: whatever is on screen is on the current
+	/// Space. Without this a canvas keeps the Space it opened on forever.
+	case spaceChanged(CanvasID, SpaceIdentity)
 	case fillModeRequested(CanvasID, CanvasFillMode)
 	case closeRequested(CanvasID)
 	case windowClosed(CanvasID)

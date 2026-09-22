@@ -320,7 +320,11 @@ projection. The Rust core is unchanged.
   palette's distance from the focus blue and the stability of its hash, growth
   weighted ratios and user-ratio survival including a clamped solve, the gap
   hierarchy and the gutter rule, shortfall reporting, and both focus stages.
-- `TeaserCanvasLifecycleTests` covers per-canvas isolation on the flat model,
+- `TeaserCanvasLifecycleTests` covers Mission Control's own Space naming — a
+  fullscreen Space taking no desktop number, per-monitor numbering, the live
+  record beating a stale copy, and a Space the bar no longer describes — and
+  seeing a canvas establishing which Space it is on without touching its frame
+  or phase. It also covers per-canvas isolation on the flat model,
   the unconnected seed, seeding stopping once a projection owns the
   presentation, and the adjacency preference together with its refusal to tidy a
   scattered layout.
@@ -360,12 +364,22 @@ No Rust, no wire format and no organization state changes.
   numbered 1 of 1, and a canvas showing one group still names it: suppressing
   the contour is a drawing rule, not a naming rule.
 - A fragment ordinal on its own is a dangling reference, so a group that
-  continues elsewhere names the canvas it continues on, and marks that canvas
-  when it is not on the active Space. That mark can only come from here: a
-  canvas on another Space publishes no window at all, so it cannot say so about
-  itself, and the canvas that can see it is the one that must. A canvas whose
-  placement is unknown is left unsaid rather than guessed at, and fragments of
-  one group on this same canvas send nobody anywhere.
+  continues elsewhere names the canvas it continues on and the Space that
+  canvas is on, the way Mission Control names it: "Desktop 2", or the Space's
+  own ID when the Spaces bar no longer describes it, or "another Space" when
+  nothing ever established which. That can only be said from here: a canvas on
+  another Space publishes no window at all, so it cannot say so about itself,
+  and the canvas that can see it is the one that must. A canvas whose placement
+  is unknown is left unsaid rather than guessed at, and fragments of one group
+  on this same canvas send nobody anywhere.
+- Desktops are numbered per monitor and count only desktops, because a
+  fullscreen Space shows its application's name in the bar and takes no desktop
+  number. The live record decides: a Space keeps its ID while becoming or
+  ceasing to be fullscreen, so a caller's stale copy must not name it.
+- macOS publishes no way to ask which Space a window is on, so a canvas is
+  stamped with the Space that is current whenever it is visible during a Space
+  switch. That is identity only — no frame, no phase, no transition — and a
+  canvas nobody has seen since it moved keeps the Space it was last seen on.
 - A Workspace title is a label the person chose and nothing in the core stops
   two Workspaces carrying one. When two do, the spoken name is qualified with
   the identity that cannot collide; when the label is already unambiguous it is
@@ -428,8 +442,8 @@ No Rust, no wire format and no organization state changes.
   canvas and for both focus stages, the shortfall sentence on one axis, on both,
   and under a point, one published `AXGroup` per Panel with its role,
   identifier, title, label, value, help, focus, parent and frame, two
-  Workspaces sharing a title, where a split group continues and the unknown and
-  same-canvas cases that say nothing, element identity
+  Workspaces sharing a title, where a split group continues including the named
+  Space and the unnameable, unknown and same-canvas cases, element identity
   surviving a solve and leaving with its Panel, and an unchanged projection not
   being republished. It shows no window, installs no
   monitor and requests no Accessibility.

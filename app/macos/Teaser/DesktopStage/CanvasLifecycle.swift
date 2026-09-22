@@ -100,6 +100,11 @@ final class CanvasLifecycle {
 			return settle(canvas, phase: .fullScreen, frame: frame)
 		case .geometryChanged(let canvas, let frame):
 			return geometryChanged(canvas, frame: frame)
+		case .spaceChanged(let canvas, let space):
+			// Identity only: which Space a canvas sits on changes no frame, no
+			// phase and no transition, so it drives no effect.
+			states[canvas]?.space = space
+			return []
 		case .fillModeRequested(let canvas, let fill):
 			return setFillMode(canvas, fill)
 		case .closeRequested(let canvas):

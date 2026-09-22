@@ -52,6 +52,29 @@ struct SpaceSnapshot: Equatable, Sendable {
 		monitor(hosting: space)?.index(of: space)
 	}
 
+	/// What Mission Control calls this Space, so anything naming a Space names
+	/// it the way the person will see it there. Desktops are numbered per
+	/// monitor and count only desktops: a fullscreen Space shows its
+	/// application's name in the bar and takes no desktop number.
+	///
+	/// The live record is re-read by `managedID` rather than trusting the
+	/// caller's copy, because a Space that has since become or stopped being
+	/// fullscreen keeps its ID while its type changes. A Space the preferences
+	/// no longer describe resolves to nothing rather than to a wrong number.
+	func name(of space: SpaceIdentity) -> String? {
+		guard let monitor: SpaceMonitor = monitor(hosting: space),
+			let live: SpaceIdentity = monitor.spaces.first(where: {
+				$0.managedID == space.managedID
+			})
+		else { return nil }
+		guard !live.isFullScreen else { return "a full-screen Space" }
+		guard let position: Int = monitor.spaces
+			.filter({ !$0.isFullScreen })
+			.firstIndex(where: { $0.managedID == live.managedID })
+		else { return nil }
+		return "Desktop \(position + 1)"
+	}
+
 	/// macOS leaves the first desktop of every monitor without a UUID, so an
 	/// empty one identifies no single Space and resolves to nothing.
 	func space(uuid: String) -> SpaceIdentity? {
