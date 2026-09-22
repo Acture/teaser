@@ -126,6 +126,9 @@ final class DesktopStageOrchestrator {
 	private(set) var panelAssignments: [PanelID: ExternalWindowIdentity] = [:]
 	private(set) var statusMessage: String?
 	private(set) var isStageActive: Bool = false
+	/// Set by an explicit Stop, so focusing a canvas afterwards does not start
+	/// the stage again. Cleared by an explicit Start.
+	private(set) var stageStoppedExplicitly: Bool = false
 	private(set) var isArrangeModeEnabled: Bool = false
 	private(set) var dropHighlight: DesktopOverlayDropHighlight?
 	private(set) var isSharedOrganization: Bool = false
@@ -300,6 +303,46 @@ final class DesktopStageOrchestrator {
 		} catch {
 			setStatus(error.localizedDescription)
 		}
+	}
+
+	/// Brings the stage up because a canvas is open. Opening one is the consent:
+	/// there is no separate Start step, and no connection is required — a canvas
+	/// with no server behind it holds its own Panels.
+	///
+	/// Deliberately not keyed to focus. The canvas sits below ordinary windows,
+	/// and the gesture it exists for is dragging *another* application's window
+	/// onto it — during which Teaser never becomes key. Waiting for focus would
+	/// mean the drag only worked after clicking the backdrop first.
+	///
+	/// It never prompts. An app macOS has not authorized stays inactive and says
+	/// so, rather than throwing a system dialog at someone who only opened a
+	/// window. Returns whether the stage came up, so the host knows whether to
+	/// start its observers.
+	@discardableResult
+	func activateForOpenCanvas() -> Bool {
+		guard !isStageActive, !stageStoppedExplicitly, !displays.isEmpty,
+			permissionStatus(prompt: false) == .authorized
+		else { return false }
+		do {
+			try startStage()
+			return true
+		} catch {
+			stopStage()
+			setStatus(error.localizedDescription)
+			return false
+		}
+	}
+
+	/// Stop Layout. Remembered, so the next canvas click does not undo it.
+	func stopStageExplicitly() {
+		stageStoppedExplicitly = true
+		stopStage()
+	}
+
+	/// Start Layout. Clears an earlier explicit Stop.
+	func startStageExplicitly() throws {
+		stageStoppedExplicitly = false
+		try startStage()
 	}
 
 	func startStage() throws {

@@ -62,9 +62,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var permissionTask: Task<Void, Never>?
 	private var newSpaceTask: Task<Void, Never>?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
-	/// Set by Stop Layout, so focusing a canvas afterwards does not immediately
-	/// start it again. Cleared by an explicit Start.
-	private var stageStoppedExplicitly: Bool = false
 	private var lastLoggedStatusMessage: String?
 
 	private lazy var windowPickerModel: DesktopStageWindowPickerModel = .init(
@@ -228,32 +225,19 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	/// Canvas commands and new Workspaces follow the canvas the person is in,
 	/// which is the key window rather than whichever canvas opened last.
 	private func canvasBecameKey(_ id: CanvasID) {
-		guard canvases[id] != nil else { return }
-		// Working in a canvas is the consent. There is no separate Start step.
-		activateStageIfPossible()
-		guard lastKeyCanvasID != id else { return }
+		guard canvases[id] != nil, lastKeyCanvasID != id else { return }
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
 	}
 
-	/// Brings the stage up when the person is working in a canvas and macOS has
-	/// already granted Accessibility. It never prompts: an unauthorized app
-	/// stays inactive and says so, rather than throwing a system dialog at
-	/// someone who only clicked their own window. An explicit Stop Layout wins
-	/// until the next explicit Start, so this cannot undo that choice.
+	/// AppKit plumbing only. Whether the stage may come up is the orchestrator's
+	/// decision, where it can be tested against a substituted Accessibility
+	/// service instead of a real one.
 	private func activateStageIfPossible() {
-		guard !orchestrator.isStageActive, !stageStoppedExplicitly,
-			orchestrator.permissionStatus(prompt: false) == .authorized
-		else { return }
 		orchestrator.setDisplays(canvasDisplays())
-		do {
-			try orchestrator.startStage()
-			try managedWindowFocusObserver.start()
-			shortcutMonitor.start()
-		} catch {
-			orchestrator.stopStage()
-			orchestrator.setStatus(error.localizedDescription)
-		}
+		guard orchestrator.activateForOpenCanvas() else { return }
+		try? managedWindowFocusObserver.start()
+		shortcutMonitor.start()
 		updateChrome()
 	}
 
@@ -472,6 +456,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		// setDisplays does not solve, so the projection can drop a closed
 		// canvas's Workspaces before anything tries to lay them out.
 		orchestrator.setDisplays(canvasDisplays())
+		// An open canvas is the consent to run. Doing this here rather than on
+		// focus is what makes dragging a window in work without clicking the
+		// backdrop first: that drag never makes Teaser key.
+		activateStageIfPossible()
 		do {
 			try organization.canvasesDidChange()
 		} catch {
@@ -657,11 +645,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func toggleStage() {
 		if orchestrator.isStageActive {
-			stageStoppedExplicitly = true
-			orchestrator.stopStage()
+			orchestrator.stopStageExplicitly()
 			return
 		}
-		stageStoppedExplicitly = false
 		// No connection gate: a canvas with no server behind it holds its own
 		// Panels, and laying those out touches nobody's organization.
 		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
@@ -670,7 +656,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		}
 		orchestrator.setDisplays(canvasDisplays())
 		do {
-			try orchestrator.startStage()
+			try orchestrator.startStageExplicitly()
 			try managedWindowFocusObserver.start()
 			shortcutMonitor.start()
 			orchestrator.setStatus("Drag a window onto a canvas to adopt it")

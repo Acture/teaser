@@ -1286,10 +1286,83 @@ private func testARefusedMinimizeIsReportedAndDoesNotAbort() throws {
 	)
 }
 
+// MARK: - Stage activation
+
+/// An open canvas is the consent to run. There is no Start step to find, and
+/// crucially no connection required: this harness has no server at all.
+@MainActor
+private func testAnOpenCanvasActivatesTheStage() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try expect(!harness.orchestrator.isStageActive, "nothing is active before asking")
+	try expect(
+		harness.orchestrator.activateForOpenCanvas(),
+		"an authorized app with an open canvas must come up"
+	)
+	try expect(harness.orchestrator.isStageActive, "the stage must be active")
+	try expect(
+		harness.service.promptCount == 0,
+		"activation must never raise the Accessibility dialog"
+	)
+}
+
+/// Without Accessibility the app stays inactive and silent. Throwing a system
+/// dialog at someone who only opened a window is not consent.
+@MainActor
+private func testActivationWithoutAccessibilityNeverPrompts() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	harness.service.permission = .notAuthorized
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an unauthorized app must not come up"
+	)
+	try expect(!harness.orchestrator.isStageActive, "the stage must stay inactive")
+	try expect(
+		harness.service.promptCount == 0,
+		"an unauthorized activation must not prompt either"
+	)
+}
+
+/// Stop Layout has to stick, or every later canvas event would undo it.
+@MainActor
+private func testAnExplicitStopSurvivesLaterActivation() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try harness.orchestrator.startStageExplicitly()
+	harness.orchestrator.stopStageExplicitly()
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an explicit Stop must not be undone by an open canvas"
+	)
+	try expect(!harness.orchestrator.isStageActive, "the stage must stay stopped")
+
+	// An explicit Start is how the person takes it back.
+	try harness.orchestrator.startStageExplicitly()
+	try expect(harness.orchestrator.isStageActive, "an explicit Start must win")
+	harness.orchestrator.stopStage()
+	try expect(
+		harness.orchestrator.activateForOpenCanvas(),
+		"a non-explicit stop must not leave the stage latched off"
+	)
+}
+
+/// With no canvas open there is nothing to lay out, so nothing comes up.
+@MainActor
+private func testNoCanvasMeansNoStage() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	harness.orchestrator.setDisplays([])
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an app with no canvas open must not start a stage"
+	)
+}
+
 @MainActor
 func adoptionCases() -> [TestCase] {
 	[
 		.init("default run touches no desktop state", testDefaultRunTouchesNoDesktopState),
+		.init("an open canvas activates the stage", testAnOpenCanvasActivatesTheStage),
+		.init("activation without Accessibility never prompts", testActivationWithoutAccessibilityNeverPrompts),
+		.init("an explicit Stop survives later activation", testAnExplicitStopSurvivesLaterActivation),
+		.init("no canvas means no stage", testNoCanvasMeansNoStage),
 		.init("two-stage focus minimizes only the second time", testTwoStageFocusMinimizesOnlyTheSecondTime),
 		.init("focus restores only what Teaser minimized", testFocusRestoresOnlyWhatTeaserMinimized),
 		.init("a refused minimize is reported and does not abort", testARefusedMinimizeIsReportedAndDoesNotAbort),
