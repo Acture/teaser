@@ -1,5 +1,5 @@
 {
-  "originHash" : "50b5ca92e033dc4a79a0c0d58de817426efdbe39c5c8d16a04efad09dc3caa66",
+  "originHash" : "baa960bf9f73f9266603f8fc50cc23834e1d7006defdd6f365006a316637d7c9",
   "pins" : [
     {
       "identity" : "keyboardshortcuts",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "772133d9dbe800fdac0473226822994c5c162c58",
         "version" : "3.1.0"
-      }
-    },
-    {
-      "identity" : "splitview",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/stevengharris/SplitView.git",
-      "state" : {
-        "revision" : "7737a80740919c2fa94a6e64f870d37ef77b9b5f",
-        "version" : "3.5.3"
       }
     }
   ],

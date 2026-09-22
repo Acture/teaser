@@ -64,15 +64,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
-	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
-		presentation: orchestrator.presentation,
-		onResize: { [weak self] reference, ratio in
-			self?.orchestrator.setDividerRatio(ratio, canvasID: reference.displayID, splitID: reference.splitID)
-		},
-		onUndo: { [weak self] in self?.orchestrator.undoLastLayoutChange() }
-	)
-	private lazy var layoutEditorWindow: DesktopStageLayoutEditorWindow = .init(model: layoutEditorModel)
-
 	private lazy var windowPickerModel: DesktopStageWindowPickerModel = .init(
 		onList: { [weak self] in self?.orchestrator.adoptableWindows() ?? [] },
 		onAdopt: { [weak self] identity, panelID in
@@ -132,8 +123,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				self?.organizationControls.show()
 			},
 			onToggleStage: { [weak self] in self?.toggleStage() },
-			onAdoptWindow: { [weak self] in self?.showWindowPicker() },
-			onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
+			onAdoptWindow: { [weak self] in self?.showWindowPicker() }
 		)
 	)
 
@@ -550,7 +540,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		shortcutMonitor.stop()
 		panelTypeChooser.close()
 		statusController.close()
-		layoutEditorWindow.close()
 		windowPickerWindow.close()
 		organizationControls.close()
 		removeAllNotesPanels()
@@ -724,7 +713,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard isRunning else { return }
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
-		layoutEditorModel.update(from: orchestrator)
 		windowPickerModel.update(from: orchestrator)
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
 			let displayID: DisplayID = .init(canvas: id)
