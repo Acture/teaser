@@ -205,6 +205,10 @@ enum NativePanelContent: Codable, Equatable, Hashable, Sendable {
 struct PanelDescriptor: Codable, Equatable, Hashable, Identifiable, Sendable {
 	let id: PanelID
 	var title: String
+	/// Membership, and its one client-side home, mirroring `Panel.workspace_id`
+	/// in `crates/teaser-core`. Moving a Panel between canvases never touches
+	/// it; only an explicit regroup does.
+	var workspaceID: WorkspaceID
 	var kindID: PanelKindID
 	var providerHint: PanelProviderHint?
 	var profileOverride: LayoutProfile?

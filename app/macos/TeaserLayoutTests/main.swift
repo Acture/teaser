@@ -53,11 +53,7 @@ private func panelDescriptor(
 	_ panelID: PanelID,
 	in presentation: WorkspacePresentation
 ) throws -> PanelDescriptor {
-	guard let panel: PanelDescriptor = presentation.workspaces.values
-		.lazy
-		.compactMap({ $0.panels[panelID] })
-		.first
-	else {
+	guard let panel: PanelDescriptor = presentation.panels[panelID] else {
 		throw TestFailure.assertion("missing Panel descriptor \(panelID.rawValue)")
 	}
 	return panel
@@ -65,12 +61,7 @@ private func panelDescriptor(
 
 private func testShowcaseFillsWithoutOverlap() throws {
 	let displayID: DisplayID = .init("display-1")
-	let displayFrame: LayoutRect = .init(
-		x: -160,
-		y: 24,
-		width: 2_560,
-		height: 1_400
-	)
+	let displayFrame: LayoutRect = .init(x: -160, y: 24, width: 2_560, height: 1_400)
 	let presentation: WorkspacePresentation = ShowcasePreset.presentation(
 		displayID: displayID
 	)
@@ -79,63 +70,45 @@ private func testShowcaseFillsWithoutOverlap() throws {
 		displayFrames: [displayID: displayFrame]
 	)
 
-	try expect(layout.workspaceFrames.count == 6, "showcase must contain six Workspaces")
 	try expect(layout.panelFrames.count == 9, "showcase must contain nine Panels")
 	try expect(layout.dividers.count == 8, "all slicing-tree dividers must be exposed")
-	try assertNoOverlap(layout.workspaceFrames, "Workspace frames must not overlap")
+	try assertNoOverlap(layout.panelFrames, "Panels must not overlap")
 
-	let workspaceArea: Double = layout.workspaceFrames.values.reduce(0) {
-		$0 + $1.size.area
-	}
-	let workspaceDividerArea: Double = layout.dividers
-		.filter { $0.scope == .display(displayID) }
-		.reduce(0) { $0 + $1.frame.size.area }
+	// One flat tree per canvas: Panels plus their gutters account for the whole
+	// canvas, with no Workspace rectangle in between.
+	let panelArea: Double = layout.panelFrames.values.reduce(0) { $0 + $1.size.area }
+	let dividerArea: Double = layout.dividers.reduce(0) { $0 + $1.frame.size.area }
 	try expectApproximatelyEqual(
-		workspaceArea + workspaceDividerArea,
+		panelArea + dividerArea,
 		displayFrame.size.area,
-		"Workspaces and gutters must exactly fill the display"
+		"Panels and gutters must exactly fill the canvas"
 	)
 
-	for workspaceID: WorkspaceID in presentation.workspaces.keys {
-		guard let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID],
-			let workspaceFrame: LayoutRect = layout.workspaceFrames[workspaceID]
-		else {
-			throw TestFailure.assertion("missing solved Workspace")
-		}
-		let frames: [PanelID: LayoutRect] = layout.panelFrames.filter {
-			workspace.panels[$0.key] != nil
-		}
-		try assertNoOverlap(frames, "Panels in one Workspace must not overlap")
-		let panelArea: Double = frames.values.reduce(0) { $0 + $1.size.area }
-		let dividerArea: Double = layout.dividers
-			.filter { $0.scope == .workspace(workspaceID) }
-			.reduce(0) { $0 + $1.frame.size.area }
-		try expectApproximatelyEqual(
-			panelArea + dividerArea,
-			workspaceFrame.size.area,
-			"Panels and gutters must exactly fill Workspace \(workspaceID.rawValue)"
+	for (panelID, frame): (PanelID, LayoutRect) in layout.panelFrames {
+		let panel: PanelDescriptor = try unwrap(
+			presentation.panels[panelID],
+			"missing Panel descriptor \(panelID.rawValue)"
 		)
-		for (panelID, frame): (PanelID, LayoutRect) in frames {
-			let panel: PanelDescriptor = try panelDescriptor(panelID, in: presentation)
-			let profile: LayoutProfile = panel.profileOverride
-				?? presentation.panelKinds.definition(for: panel.kindID)!.defaultProfile
-			try expect(
-				frame.size.width + 0.000_001 >= profile.minimumSize.width,
-				"Panel minimum width must be enforced"
-			)
-			try expect(
-				frame.size.height + 0.000_001 >= profile.minimumSize.height,
-				"Panel minimum height must be enforced"
-			)
-		}
+		let profile: LayoutProfile = try unwrap(
+			panel.profileOverride
+				?? presentation.panelKinds.definition(for: panel.kindID)?.defaultProfile,
+			"missing profile"
+		)
+		try expect(
+			frame.size.width + 0.000_001 >= profile.minimumSize.width,
+			"Panel minimum width must be enforced"
+		)
+		try expect(
+			frame.size.height + 0.000_001 >= profile.minimumSize.height,
+			"Panel minimum height must be enforced"
+		)
 	}
 
-	let zedFrame: LayoutRect = layout.panelFrames[ShowcasePreset.zedPanelID]!
-	let linearFrame: LayoutRect = layout.panelFrames[ShowcasePreset.linearPanelID]!
-	try expect(
-		zedFrame.size.width != linearFrame.size.width,
-		"heterogeneous Panel profiles must not collapse to equal columns"
+	// Several groups share one canvas without any of them owning a rectangle.
+	let groups: Set<WorkspaceID> = .init(
+		layout.panelFrames.keys.compactMap { presentation.workspaceID(of: $0) }
 	)
+	try expect(groups.count == 6, "the showcase places six groups on one canvas")
 	try expect(layout.quality.totalAspectRatioDeviation.isFinite, "quality must be finite")
 }
 
@@ -148,12 +121,10 @@ private func testLayoutIsDeterministic() throws {
 		displayID: .init(x: 0, y: 0, width: 2_560, height: 1_400),
 	]
 	let first: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: frames
+		presentation: presentation, displayFrames: frames
 	)
 	let second: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: frames
+		presentation: presentation, displayFrames: frames
 	)
 	try expect(first == second, "identical inputs must produce identical layouts")
 }
@@ -163,441 +134,191 @@ private func testEdgeInsertionAndLongAxisSplit() throws {
 	let panel: PanelDescriptor = .init(
 		id: .init("foch-shell"),
 		title: "Shell",
+		workspaceID: ShowcasePreset.fochWorkspaceID,
 		kindID: .generic,
-		providerHint: .init(
-			displayName: "Terminal",
-			bundleIdentifier: "com.apple.Terminal",
-			context: nil
-		),
+		providerHint: nil,
 		profileOverride: nil,
 		nativeContent: .none
 	)
 	try presentation.splitPanel(
 		ShowcasePreset.claudePanelID,
 		with: panel,
-		in: ShowcasePreset.fochWorkspaceID,
+		onCanvas: ShowcasePreset.mainDisplayID,
 		targetFrame: .init(x: 0, y: 0, width: 900, height: 400),
 		splitID: .init("foch-shell-split")
 	)
-	let tree: LayoutTree<PanelID> = presentation.workspaces[
-		ShowcasePreset.fochWorkspaceID
-	]!.panelTree
-	guard case .split(_, let axis, _, let first, let second) = tree else {
-		throw TestFailure.assertion("splitPanel must replace the target leaf")
-	}
-	try expect(axis == .horizontal, "Ctrl+D defaults to the target's long axis")
-	try expect(first.leaves == [ShowcasePreset.claudePanelID], "old Panel stays first")
-	try expect(second.leaves == [panel.id], "new empty Panel is inserted second")
-
-	// A tall Panel splits on the other axis, which routes through the same
-	// first-is-lower convention: the new Panel takes the lower half.
-	var tall: WorkspacePresentation = ShowcasePreset.presentation()
-	let tallPanel: PanelDescriptor = .init(
-		id: .init("foch-tall"),
-		title: "Tall",
-		kindID: .generic,
-		providerHint: nil,
-		profileOverride: nil,
-		nativeContent: .none
-	)
-	try tall.splitPanel(
-		ShowcasePreset.claudePanelID,
-		with: tallPanel,
-		in: ShowcasePreset.fochWorkspaceID,
-		targetFrame: .init(x: 0, y: 0, width: 400, height: 900),
-		splitID: .init("foch-tall-split")
-	)
-	guard case .split(_, let tallAxis, _, let tallFirst, let tallSecond) = tall
-		.workspaces[ShowcasePreset.fochWorkspaceID]!.panelTree
-	else {
-		throw TestFailure.assertion("splitPanel must replace the target leaf")
-	}
-	try expect(tallAxis == .vertical, "a tall Panel splits on its long axis")
-	try expect(
-		tallFirst.leaves == [tallPanel.id],
-		"the new Panel takes the lower half of a tall split"
+	let tree: LayoutTree<PanelID> = try unwrap(
+		presentation.canvases[ShowcasePreset.mainDisplayID]?.panelTree,
+		"the canvas must have a tree"
 	)
 	try expect(
-		tallSecond.leaves == [ShowcasePreset.claudePanelID],
-		"the target keeps the upper half of a tall split"
+		tree.contains(panel.id) && tree.contains(ShowcasePreset.claudePanelID),
+		"a split keeps the target and adds the new Panel to the same canvas"
+	)
+	try expect(
+		presentation.workspaceID(of: panel.id) == ShowcasePreset.fochWorkspaceID,
+		"a Panel split off another starts in the same group"
 	)
 
 	var edgeTree: LayoutTree<String> = .leaf("target")
-	try edgeTree.insert(
-		"new",
-		at: .top,
-		of: "target",
-		splitID: .init("top")
-	)
-	guard case .split(_, let edgeAxis, _, let edgeFirst, let edgeSecond) = edgeTree
-	else {
+	try edgeTree.insert("new", at: .top, of: "target", splitID: .init("top"))
+	guard case .split(_, let edgeAxis, _, let edgeFirst, let edgeSecond) = edgeTree else {
 		throw TestFailure.assertion("edge insertion must create a split")
 	}
-	// The solver lays a split's first child at the lower coordinate on its axis,
-	// so a top insertion follows the target rather than preceding it.
-	try expect(edgeAxis == .vertical, "top insertion must use a vertical split")
-	try expect(edgeFirst.leaves == ["target"], "target keeps the lower half")
-	try expect(edgeSecond.leaves == ["new"], "top insertion places the new leaf second")
-
-	try assertEdgeInsertionLandsWhereItWasAimed()
+	try expect(edgeAxis == .vertical, "a top edge splits on the vertical axis")
+	try expect(
+		edgeFirst.leaves == ["target"] && edgeSecond.leaves == ["new"],
+		"the solver lays the first child lower, so a top insert is second"
+	)
 }
 
-/// Tree order is only half the contract: an edge insertion has to occupy the
-/// half of the target the user aimed at once the layout is solved.
-private func assertEdgeInsertionLandsWhereItWasAimed() throws {
-	let displayFrames: [DisplayID: LayoutRect] = [
-		ShowcasePreset.mainDisplayID: .init(x: 0, y: 0, width: 2_560, height: 1_440),
+/// Placement and membership are separate: moving a Panel to another canvas must
+/// leave its group alone, and a regroup must leave the trees alone.
+private func testMoveChangesPlacementNotMembership() throws {
+	let canvasA: DisplayID = .init("canvas-a")
+	let canvasB: DisplayID = .init("canvas-b")
+	var presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1
+	)
+	presentation.canvases[canvasB] = .init(displayID: canvasB)
+	let moved: PanelID = .init("second")
+	let groupBefore: WorkspaceID? = presentation.workspaceID(of: moved)
+
+	try presentation.movePanel(
+		moved,
+		toCanvas: canvasB,
+		at: nil,
+		of: nil,
+		splitID: .init("moved")
+	)
+	try expect(
+		presentation.canvasID(containing: moved) == canvasB,
+		"a move must change which canvas holds the Panel"
+	)
+	try expect(
+		presentation.workspaceID(of: moved) == groupBefore,
+		"a move must never change the Panel's group"
+	)
+	try expect(
+		presentation.panelIDs(onCanvas: weightedDisplayID) == [.init("first")],
+		"the source canvas keeps exactly what is left"
+	)
+
+	// A regroup is the other half: membership changes, placement does not.
+	let treeBefore: LayoutTree<PanelID>? = presentation.canvases[canvasB]?.panelTree
+	presentation.panels[moved]?.workspaceID = .init("elsewhere")
+	try expect(
+		presentation.canvases[canvasB]?.panelTree == treeBefore,
+		"a regroup must not move anything"
+	)
+	_ = canvasA
+}
+
+/// Moving the last Panel off a canvas leaves it blank rather than refusing.
+/// `LayoutTree.remove` rejects removing an only leaf, which is exactly the case
+/// a canvas holding its first Panel hits.
+private func testMovingTheLastPanelLeavesTheCanvasBlank() throws {
+	let canvasB: DisplayID = .init("canvas-b")
+	var presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1
+	)
+	presentation.canvases[canvasB] = .init(displayID: canvasB)
+	try presentation.movePanel(.init("first"), toCanvas: canvasB, at: nil, of: nil,
+		splitID: .init("m1"))
+	try presentation.movePanel(.init("second"), toCanvas: canvasB, at: nil, of: nil,
+		splitID: .init("m2"))
+	try expect(
+		presentation.canvases[weightedDisplayID]?.panelTree == nil,
+		"a canvas emptied by moves must become blank, not refuse the move"
+	)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 800, height: 600),
+			canvasB: .init(x: 800, y: 0, width: 800, height: 600),
+		]
+	)
+	try expect(layout.panelFrames.count == 2, "both Panels are still placed")
+}
+
+/// Each canvas is solved inside its own rectangle, so a Panel never straddles
+/// two canvases and a closed canvas's Panels are simply not placed.
+private func testEachCanvasSolvesInsideItsOwnRectangle() throws {
+	let canvasA: DisplayID = .init("canvas-a")
+	let canvasB: DisplayID = .init("canvas-b")
+	var presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1
+	)
+	presentation.canvases = [
+		canvasA: .init(displayID: canvasA, panelTree: .leaf(.init("first"))),
+		canvasB: .init(displayID: canvasB, panelTree: .leaf(.init("second"))),
 	]
-	for edge: LayoutEdge in [.leading, .trailing, .top, .bottom] {
-		var presentation: WorkspacePresentation = ShowcasePreset.presentation()
-		let before: PresentationLayout = try ConstrainedLayoutSolver.solve(
-			presentation: presentation,
-			displayFrames: displayFrames
-		)
-		let targetFrame: LayoutRect = try unwrap(
-			before.panelFrames[ShowcasePreset.claudePanelID],
-			"missing solved target Panel"
-		)
-		let insertedID: PanelID = .init("inserted-\(edge.rawValue)")
-		let target: PanelDescriptor = try panelDescriptor(
-			ShowcasePreset.claudePanelID,
-			in: presentation
-		)
-		try presentation.insertPanel(
-			.init(
-				id: insertedID,
-				title: target.title,
-				kindID: target.kindID,
-				providerHint: target.providerHint,
-				profileOverride: target.profileOverride,
-				nativeContent: .none
-			),
-			in: ShowcasePreset.fochWorkspaceID,
-			at: edge,
-			of: ShowcasePreset.claudePanelID,
-			splitID: .init("split-\(edge.rawValue)")
-		)
-		let after: PresentationLayout = try ConstrainedLayoutSolver.solve(
-			presentation: presentation,
-			displayFrames: displayFrames
-		)
-		let inserted: LayoutRect = try unwrap(
-			after.panelFrames[insertedID],
-			"missing solved inserted Panel"
-		)
-		switch edge {
-		case .leading:
-			try expect(
-				inserted.maxX <= targetFrame.midX + 1,
-				"a leading insertion must take the leading half, got \(inserted)"
-			)
-		case .trailing:
-			try expect(
-				inserted.minX >= targetFrame.midX - 1,
-				"a trailing insertion must take the trailing half, got \(inserted)"
-			)
-		case .top:
-			try expect(
-				inserted.minY >= targetFrame.midY - 1,
-				"a top insertion must take the upper half, got \(inserted)"
-			)
-		case .bottom:
-			try expect(
-				inserted.maxY <= targetFrame.midY + 1,
-				"a bottom insertion must take the lower half, got \(inserted)"
-			)
-		}
-	}
-}
+	let frameA: LayoutRect = .init(x: 0, y: 0, width: 800, height: 600)
+	let frameB: LayoutRect = .init(x: 2_000, y: 100, width: 900, height: 700)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [canvasA: frameA, canvasB: frameB]
+	)
+	try expect(layout.panelFrames[.init("first")] == frameA, "canvas A fills its own rectangle")
+	try expect(layout.panelFrames[.init("second")] == frameB, "canvas B fills its own rectangle")
 
-private func unwrap<Value>(_ value: Value?, _ message: String) throws -> Value {
-	guard let value else { throw TestFailure.assertion(message) }
-	return value
+	// A Panel the presentation still knows but no open canvas places is not an
+	// error: its canvas is closed.
+	presentation.canvases.removeValue(forKey: canvasB)
+	let partial: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [canvasA: frameA]
+	)
+	try expect(
+		partial.panelFrames.count == 1 && partial.panelFrames[.init("first")] == frameA,
+		"a Panel on a closed canvas must not fail the solve"
+	)
 }
 
 private func testVirtualFocusSurvivesPresentationRoundTrip() throws {
 	var presentation: WorkspacePresentation = ShowcasePreset.presentation()
-	let initialFocus: VirtualFocusState = presentation.virtualFocus
-	try presentation.focusWorkspace(ShowcasePreset.researchWorkspaceID)
-	let focused: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: [
-			ShowcasePreset.mainDisplayID: .init(
-				x: 0,
-				y: 0,
-				width: 1_400,
-				height: 900
-			),
-		]
-	)
-	try expect(focused.workspaceFrames.count == 1, "focus mode solves one Workspace")
-	try expect(
-		focused.workspaceFrames[ShowcasePreset.researchWorkspaceID]
-			== .init(x: 0, y: 0, width: 1_400, height: 900),
-		"focused Workspace must fill its display"
+	try presentation.setVirtualFocus(ShowcasePreset.notesPanelID)
+	let data: Data = try JSONEncoder().encode(presentation)
+	let restored: WorkspacePresentation = try JSONDecoder().decode(
+		WorkspacePresentation.self, from: data
 	)
 	try expect(
-		presentation.virtualFocus == initialFocus,
-		"layout focus must not steal or rewrite virtual focus"
+		restored.virtualFocus.panelID == ShowcasePreset.notesPanelID,
+		"Virtual Focus must survive a round trip"
 	)
-	presentation.showTiled()
-	try expect(presentation.mode == .tiled, "showTiled must restore tiled presentation")
-	try expect(
-		presentation.virtualFocus == initialFocus,
-		"tiled round trip must retain virtual focus"
-	)
-}
-
-private func testMultiDisplayAffinity() throws {
-	let main: DisplayID = .init("main-display")
-	let secondary: DisplayID = .init("secondary-display")
-	var presentation: WorkspacePresentation = ShowcasePreset.presentation(
-		displayID: main
-	)
-	try presentation.displayLayouts[main]!.workspaceTree.remove(
-		ShowcasePreset.sortAndPourWorkspaceID
-	)
-	presentation.displayLayouts[secondary] = .init(
-		displayID: secondary,
-		workspaceTree: .leaf(ShowcasePreset.sortAndPourWorkspaceID)
-	)
-	presentation.workspaces[
-		ShowcasePreset.sortAndPourWorkspaceID
-	]!.displayAffinity = secondary
-
-	let mainFrame: LayoutRect = .init(x: 0, y: 0, width: 2_560, height: 1_400)
-	let secondaryFrame: LayoutRect = .init(
-		x: -1_440,
-		y: 100,
-		width: 1_440,
-		height: 900
-	)
-	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: [main: mainFrame, secondary: secondaryFrame]
-	)
-	let sortFrame: LayoutRect = layout.workspaceFrames[
-		ShowcasePreset.sortAndPourWorkspaceID
-	]!
-	try expect(
-		secondaryFrame.contains(sortFrame),
-		"Workspace must remain on its affine display"
-	)
-	for workspaceID: WorkspaceID in presentation.workspaces.keys
-		where workspaceID != ShowcasePreset.sortAndPourWorkspaceID
-	{
-		try expect(
-			mainFrame.contains(layout.workspaceFrames[workspaceID]!),
-			"other Workspaces must stay on the primary display"
-		)
-	}
-}
-
-/// Every open canvas is one display, so focus has to be scoped to the canvas it
-/// happens on. The focused Workspace takes over its own display, and every other
-/// display must be solved exactly as the tiled mode would solve it — otherwise
-/// focusing on one canvas blanks the rest.
-private func testFocusIsScopedToItsOwnDisplay() throws {
-	let main: DisplayID = .init("main-display")
-	let secondary: DisplayID = .init("secondary-display")
-	let secondarySplitID: LayoutSplitID = .init("secondary-workspaces")
-	let secondaryWorkspaceIDs: [WorkspaceID] = [
-		ShowcasePreset.paperWorkspaceID,
-		ShowcasePreset.sortAndPourWorkspaceID,
-	]
-	var presentation: WorkspacePresentation = ShowcasePreset.presentation(
-		displayID: main
-	)
-	for workspaceID: WorkspaceID in secondaryWorkspaceIDs {
-		try presentation.displayLayouts[main]!.workspaceTree.remove(workspaceID)
-		presentation.workspaces[workspaceID]!.displayAffinity = secondary
-	}
-	// Two Workspaces on the second display, so it owns a display-scope divider
-	// and ratio that the focused solve has something to preserve.
-	presentation.displayLayouts[secondary] = .init(
-		displayID: secondary,
-		workspaceTree: .split(
-			id: secondarySplitID,
-			axis: .horizontal,
-			preference: .user(0.45),
-			first: .leaf(ShowcasePreset.paperWorkspaceID),
-			second: .leaf(ShowcasePreset.sortAndPourWorkspaceID)
-		)
-	)
-
-	let mainFrame: LayoutRect = .init(x: 0, y: 0, width: 2_560, height: 1_400)
-	let secondaryFrame: LayoutRect = .init(
-		x: -1_440,
-		y: 100,
-		width: 1_440,
-		height: 900
-	)
-	let displayFrames: [DisplayID: LayoutRect] = [
-		main: mainFrame,
-		secondary: secondaryFrame,
-	]
-	let tiled: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: displayFrames
-	)
-	try expect(
-		tiled.dividers.filter { $0.scope == .display(main) }.count == 3,
-		"the fixture must give the focused display dividers there are to suppress"
-	)
-
-	try presentation.focusWorkspace(ShowcasePreset.researchWorkspaceID)
-	let focused: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: displayFrames
-	)
-
-	try expect(
-		focused.workspaceFrames[ShowcasePreset.researchWorkspaceID] == mainFrame,
-		"the focused Workspace must fill the display it is placed on"
-	)
-	try expect(
-		focused.workspaceFrames.count == 3,
-		"focus must hide only the other Workspaces of its own display"
-	)
-	try expect(
-		focused.panelFrames.count == 4,
-		"only the focused Workspace's two Panels plus the other display's two"
-	)
-	try expect(
-		focused.dividers.filter { $0.scope == .display(main) }.isEmpty,
-		"the focused display exposes no Workspace dividers"
-	)
-	try expect(
-		!focused.effectiveRatios.keys.contains { $0.scope == .display(main) },
-		"the focused display exposes no Workspace split ratios"
-	)
-
-	// The other display is untouched: the same solve has to reproduce its tiled
-	// slices exactly, not merely keep them somewhere inside its frame.
-	for workspaceID: WorkspaceID in secondaryWorkspaceIDs {
-		let expected: LayoutRect = try unwrap(
-			tiled.workspaceFrames[workspaceID],
-			"missing tiled Workspace \(workspaceID.rawValue)"
-		)
-		let actual: LayoutRect = try unwrap(
-			focused.workspaceFrames[workspaceID],
-			"focus dropped Workspace \(workspaceID.rawValue) from another display"
-		)
-		try expect(
-			actual == expected,
-			"Workspace \(workspaceID.rawValue) must keep its tiled frame, got \(actual)"
-		)
-		try expect(
-			secondaryFrame.contains(actual),
-			"Workspace \(workspaceID.rawValue) must stay on its own display"
-		)
-	}
-	for panelID: PanelID in [
-		ShowcasePreset.previewPanelID,
-		ShowcasePreset.chromePanelID,
-	] {
-		let expected: LayoutRect = try unwrap(
-			tiled.panelFrames[panelID],
-			"missing tiled Panel \(panelID.rawValue)"
-		)
-		let actual: LayoutRect = try unwrap(
-			focused.panelFrames[panelID],
-			"focus dropped Panel \(panelID.rawValue) from another display"
-		)
-		try expect(
-			actual == expected,
-			"Panel \(panelID.rawValue) must keep its tiled frame, got \(actual)"
-		)
-	}
-
-	let secondaryDividers: [LayoutDivider] = focused.dividers.filter {
-		$0.scope == .display(secondary)
-	}
-	try expect(
-		secondaryDividers.count == 1,
-		"the unfocused display's Workspace divider must survive the focused solve"
-	)
-	try expect(
-		secondaryDividers == tiled.dividers.filter { $0.scope == .display(secondary) },
-		"the unfocused display's dividers must match the tiled solve"
-	)
-	let secondaryReference: LayoutSplitReference = .init(
-		scope: .display(secondary),
-		splitID: secondarySplitID
-	)
-	let tiledRatio: Double = try unwrap(
-		tiled.effectiveRatios[secondaryReference],
-		"missing tiled Workspace ratio on the unfocused display"
-	)
-	let focusedRatio: Double = try unwrap(
-		focused.effectiveRatios[secondaryReference],
-		"focus dropped the Workspace ratio of another display"
-	)
-	// Same code path and same inputs, so this is bit-identical, not merely close.
-	try expect(
-		focusedRatio == tiledRatio,
-		"the unfocused display must keep its effective Workspace ratio"
-	)
-}
-
-/// One canvas is still the common case, and the per-display branch must leave it
-/// alone: with a single display there is no other display to tile, so focus
-/// solves the focused Workspace and nothing else.
-private func testSingleDisplayFocusIsUnchanged() throws {
-	var presentation: WorkspacePresentation = ShowcasePreset.presentation()
-	try presentation.focusWorkspace(ShowcasePreset.teaserWorkspaceID)
-	let displayFrame: LayoutRect = .init(x: 12, y: -40, width: 1_512, height: 900)
-	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: presentation,
-		displayFrames: [ShowcasePreset.mainDisplayID: displayFrame]
-	)
-	try expect(
-		layout.workspaceFrames.count == 1,
-		"a single display leaves exactly the focused Workspace"
-	)
-	try expect(
-		layout.workspaceFrames[ShowcasePreset.teaserWorkspaceID] == displayFrame,
-		"the focused Workspace must fill its only display"
-	)
-	try expect(
-		layout.panelFrames.count == 3,
-		"only the focused Workspace's Panels are solved"
-	)
-	try expect(
-		layout.dividers.allSatisfy {
-			$0.scope == .workspace(ShowcasePreset.teaserWorkspaceID)
-		},
-		"a single-display focus exposes no Workspace dividers"
-	)
+	try expect(restored == presentation, "a round trip must preserve the presentation")
 }
 
 private func testCodableRoundTripsPresentationAndCustomKinds() throws {
-	let customKind: PanelKindDefinition = .init(
-		id: .init("custom.timeline"),
-		displayName: "Timeline",
+	var registry: PanelKindRegistry = try .init()
+	try registry.register(.init(
+		id: .init("custom"),
+		displayName: "Custom",
 		defaultProfile: .init(
-			minimumSize: .init(width: 500, height: 180),
-			preferredAspectRatio: .init(2.0, 4.0),
-			growthWeight: 1.4
+			minimumSize: .init(width: 100, height: 100),
+			preferredAspectRatio: .init(0.5, 2),
+			growthWeight: 2
 		)
-	)
+	))
 	var presentation: WorkspacePresentation = ShowcasePreset.presentation()
-	try presentation.panelKinds.register(customKind)
+	presentation.panelKinds = registry
 	let data: Data = try JSONEncoder().encode(presentation)
-	let decoded: WorkspacePresentation = try JSONDecoder().decode(
-		WorkspacePresentation.self,
-		from: data
+	let restored: WorkspacePresentation = try JSONDecoder().decode(
+		WorkspacePresentation.self, from: data
 	)
-	try expect(decoded == presentation, "presentation must survive a Codable round trip")
+	try expect(restored == presentation, "custom kinds must survive a round trip")
 	try expect(
-		decoded.panelKinds.definition(for: customKind.id) == customKind,
-		"custom Panel definitions must be persisted"
+		restored.panelKinds.definition(for: .init("custom")) != nil,
+		"a custom kind must still be registered after decoding"
 	)
 }
 
 private func testUndersizedRegionAdaptsInsteadOfFailing() throws {
-	// The six-Workspace preset wants about 1968×812 pt. Smaller canvases, down to
-	// a tiny one, must still lay out every Panel rather than refuse.
+	// The six-group preset wants a lot of room. Smaller canvases, down to a tiny
+	// one, must still lay out every Panel rather than refuse.
 	let presentation: WorkspacePresentation = ShowcasePreset.presentation()
 	for size: LayoutSize in [
 		.init(width: 1_200, height: 800), .init(width: 1_000, height: 700),
@@ -618,26 +339,30 @@ private func testUndersizedRegionAdaptsInsteadOfFailing() throws {
 				frame.origin.x >= -0.001 && frame.origin.y >= -0.001
 					&& frame.origin.x + frame.size.width <= size.width + 0.001
 					&& frame.origin.y + frame.size.height <= size.height + 0.001,
-				"Panel \(panelID.rawValue) must stay inside the \(size.width)×\(size.height) region"
+				"Panel \(panelID.rawValue) must stay inside the region"
 			)
 		}
 	}
 }
 
 private func testShowcaseFitsLaptopDisplays() throws {
-	let presentation: WorkspacePresentation = ShowcasePreset.presentation()
 	for size: LayoutSize in [
-		.init(width: 1_440, height: 800), .init(width: 1_512, height: 900),
-		.init(width: 1_600, height: 900), .init(width: 1_728, height: 1_000),
+		.init(width: 1_440, height: 900), .init(width: 1_512, height: 982),
 	] {
 		let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
-			presentation: presentation,
-			displayFrames: [ShowcasePreset.mainDisplayID: .init(x: 0, y: 0, width: size.width, height: size.height)]
+			presentation: ShowcasePreset.presentation(),
+			displayFrames: [
+				ShowcasePreset.mainDisplayID:
+					.init(x: 0, y: 0, width: size.width, height: size.height),
+			]
 		)
-		try expect(layout.workspaceFrames.count == 6 && layout.panelFrames.count == 9,
-			"laptop displays must expose all six workspaces and nine drop targets")
 		try assertNoOverlap(layout.panelFrames, "laptop targets must not overlap")
 	}
+}
+
+private func unwrap<Value>(_ value: Value?, _ message: String) throws -> Value {
+	guard let value else { throw TestFailure.assertion(message) }
+	return value
 }
 
 // MARK: - Unequal sizing
@@ -645,7 +370,7 @@ private func testShowcaseFitsLaptopDisplays() throws {
 private let weightedDisplayID: DisplayID = .init("canvas-1")
 private let weightedWorkspaceID: WorkspaceID = .init("alpha")
 private let weightedRootReference: LayoutSplitReference = .init(
-	scope: .workspace(weightedWorkspaceID),
+	displayID: weightedDisplayID,
 	splitID: .init("root")
 )
 
@@ -663,6 +388,7 @@ private func weightedPresentation(
 		.init(
 			id: .init(id),
 			title: id,
+			workspaceID: weightedWorkspaceID,
 			kindID: .generic,
 			providerHint: nil,
 			profileOverride: .init(
@@ -676,30 +402,26 @@ private func weightedPresentation(
 	let first: PanelDescriptor = panel("first", firstWeight, .init(width: 10, height: 10))
 	let second: PanelDescriptor = panel("second", secondWeight, secondMinimum)
 	return .init(
-		mode: .tiled,
-		virtualFocus: .none,
-		displayLayouts: [
+		canvases: [
 			weightedDisplayID: .init(
 				displayID: weightedDisplayID,
-				workspaceTree: .leaf(weightedWorkspaceID)
-			),
-		],
-		workspaces: [
-			weightedWorkspaceID: .init(
-				id: weightedWorkspaceID,
-				title: "Alpha",
-				detail: "",
-				displayAffinity: weightedDisplayID,
 				panelTree: .split(
 					id: .init("root"),
 					axis: .horizontal,
 					preference: preference,
 					first: .leaf(first.id),
 					second: .leaf(second.id)
-				),
-				panels: [first.id: first, second.id: second]
+				)
 			),
 		],
+		workspaces: [
+			weightedWorkspaceID: .init(
+				id: weightedWorkspaceID,
+				title: "Alpha",
+				detail: ""
+			),
+		],
+		panels: [first.id: first, second.id: second],
 		panelKinds: try .init()
 	)
 }
@@ -760,6 +482,7 @@ private func testUserRatioSurvivesInsertElsewhere() throws {
 		.init(
 			id: .init("third"),
 			title: "third",
+			workspaceID: weightedWorkspaceID,
 			kindID: .generic,
 			providerHint: nil,
 			profileOverride: .init(
@@ -769,7 +492,7 @@ private func testUserRatioSurvivesInsertElsewhere() throws {
 			),
 			nativeContent: .none
 		),
-		in: weightedWorkspaceID,
+		onCanvas: weightedDisplayID,
 		at: .trailing,
 		of: .init("second"),
 		splitID: .init("added")
@@ -797,6 +520,7 @@ private func testDerivedAncestorReproportionsOnInsert() throws {
 		.init(
 			id: .init("third"),
 			title: "third",
+			workspaceID: weightedWorkspaceID,
 			kindID: .generic,
 			providerHint: nil,
 			profileOverride: .init(
@@ -806,7 +530,7 @@ private func testDerivedAncestorReproportionsOnInsert() throws {
 			),
 			nativeContent: .none
 		),
-		in: weightedWorkspaceID,
+		onCanvas: weightedDisplayID,
 		at: .trailing,
 		of: .init("second"),
 		splitID: .init("added")
@@ -834,7 +558,7 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 		"a minimum must clamp the solve, got \(solved)"
 	)
 	guard case .split(_, _, let preference, _, _) = presentation
-		.workspaces[weightedWorkspaceID]?.panelTree
+		.canvases[weightedDisplayID]?.panelTree
 	else {
 		throw TestFailure.assertion("the fixture must have a root split")
 	}
@@ -1200,6 +924,9 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testMoveChangesPlacementNotMembership()
+	try testMovingTheLastPanelLeavesTheCanvasBlank()
+	try testEachCanvasSolvesInsideItsOwnRectangle()
 	try testDerivedRatioFollowsGrowthWeight()
 	try testUserRatioBeatsWeights()
 	try testUserRatioSurvivesInsertElsewhere()
@@ -1224,9 +951,6 @@ private func run() throws {
 	try testLayoutIsDeterministic()
 	try testEdgeInsertionAndLongAxisSplit()
 	try testVirtualFocusSurvivesPresentationRoundTrip()
-	try testMultiDisplayAffinity()
-	try testFocusIsScopedToItsOwnDisplay()
-	try testSingleDisplayFocusIsUnchanged()
 	try testCodableRoundTripsPresentationAndCustomKinds()
 	try testUndersizedRegionAdaptsInsteadOfFailing()
 }

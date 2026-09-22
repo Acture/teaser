@@ -3,25 +3,21 @@ import AppKit
 @MainActor
 struct DesktopOverlayCallbacks {
 	let onVirtualFocusChange: @MainActor (VirtualFocusState) -> Void
-	let onWorkspaceFocusRequest: @MainActor (WorkspaceID) -> Void
 	let onPanelInputFocusRequest: @MainActor (PanelID) -> Void
 	let onUndoRequest: @MainActor () -> Void
 	let onDividerRatioChange:
-		@MainActor (LayoutScope, LayoutSplitID, Double) -> Void
+		@MainActor (DisplayID, LayoutSplitID, Double) -> Void
 
 	init(
 		onVirtualFocusChange:
 			@escaping @MainActor (VirtualFocusState) -> Void,
-		onWorkspaceFocusRequest:
-			@escaping @MainActor (WorkspaceID) -> Void,
 		onPanelInputFocusRequest:
 			@escaping @MainActor (PanelID) -> Void = { _ in },
 		onUndoRequest: @escaping @MainActor () -> Void = {},
 		onDividerRatioChange:
-			@escaping @MainActor (LayoutScope, LayoutSplitID, Double) -> Void
+			@escaping @MainActor (DisplayID, LayoutSplitID, Double) -> Void
 	) {
 		self.onVirtualFocusChange = onVirtualFocusChange
-		self.onWorkspaceFocusRequest = onWorkspaceFocusRequest
 		self.onPanelInputFocusRequest = onPanelInputFocusRequest
 		self.onUndoRequest = onUndoRequest
 		self.onDividerRatioChange = onDividerRatioChange
@@ -33,11 +29,6 @@ struct DesktopOverlayCallbacks {
 /// overlay, or Teaser's own canvas window. Every rectangle it draws is placed
 /// relative to `snapshot.screenFrame`, so the host decides what that frame means.
 final class DesktopOverlayView: NSView {
-	/// Draw a thin highlight around every Panel even outside Arrange and drags.
-	/// The canvas turns this on; the desktop overlay leaves it off.
-	var outlinesPanelsAlways: Bool = false {
-		didSet { needsDisplay = true }
-	}
 	private struct DividerDrag {
 		let divider: LayoutDivider
 		let pointerOffset: Double
@@ -74,14 +65,10 @@ final class DesktopOverlayView: NSView {
 	override func draw(_ dirtyRect: NSRect) {
 		super.draw(dirtyRect)
 
-		drawWorkspaceOutlines()
 		drawDividers()
 		if snapshot.arrangeMode || snapshot.dragActive {
 			drawPanelOutlinesAndLabels()
-		} else if outlinesPanelsAlways {
-			drawPanelHighlights()
 		}
-		drawWorkspaceLabels()
 		drawVirtualFocus()
 		drawDropHighlight()
 		drawStatus()
@@ -129,24 +116,8 @@ final class DesktopOverlayView: NSView {
 			return
 		}
 
-		if let workspace: DesktopOverlayWorkspace = workspaceLabel(
-			at: localPoint
-		) {
-			select(workspace: workspace, panel: nil, event: event)
-			return
-		}
-
-		if let panel: DesktopOverlayPanel = panel(at: localPoint),
-			let workspace: DesktopOverlayWorkspace = snapshot.workspaces.first(
-				where: { $0.id == panel.workspaceID }
-			)
-		{
-			select(workspace: workspace, panel: panel, event: event)
-			return
-		}
-
-		if let workspace: DesktopOverlayWorkspace = workspace(at: localPoint) {
-			select(workspace: workspace, panel: nil, event: event)
+		if let panel: DesktopOverlayPanel = panel(at: localPoint) {
+			select(panel: panel, event: event)
 		}
 	}
 
@@ -177,7 +148,7 @@ final class DesktopOverlayView: NSView {
 				/ availableLength
 		).clamped(to: 0.001 ... 0.999)
 		callbacks.onDividerRatioChange(
-			divider.scope,
+			divider.displayID,
 			divider.splitID,
 			ratio
 		)
@@ -187,55 +158,19 @@ final class DesktopOverlayView: NSView {
 		dividerDrag = nil
 	}
 
-	private func select(
-		workspace: DesktopOverlayWorkspace,
-		panel: DesktopOverlayPanel?,
-		event: NSEvent
-	) {
-		callbacks.onVirtualFocusChange(
-			.init(workspaceID: workspace.id, panelID: panel?.id)
-		)
+	private func select(panel: DesktopOverlayPanel, event: NSEvent) {
+		callbacks.onVirtualFocusChange(.init(panelID: panel.id))
 		if event.clickCount >= 2 {
-			if let panel {
-				callbacks.onPanelInputFocusRequest(panel.id)
-			} else {
-				callbacks.onWorkspaceFocusRequest(workspace.id)
-			}
+			callbacks.onPanelInputFocusRequest(panel.id)
 		}
 	}
 
-	private func drawWorkspaceOutlines() {
-		let pixel: CGFloat = backingPixel
-		NSColor.separatorColor.withAlphaComponent(
-			snapshot.arrangeMode ? 0.72 : 0.38
-		).setStroke()
-
-		for workspace: DesktopOverlayWorkspace in snapshot.workspaces {
-			let rect: NSRect = localRect(workspace.frame).insetBy(
-				dx: pixel / 2,
-				dy: pixel / 2
-			)
-			guard rect.width > pixel, rect.height > pixel else { continue }
-			let path: NSBezierPath = .init(rect: rect)
-			path.lineWidth = pixel
-			path.stroke()
-		}
-	}
 
 	private func drawDividers() {
 		let pixel: CGFloat = backingPixel
 		for divider: LayoutDivider in snapshot.dividers {
 			let rect: NSRect = localRect(divider.frame)
-			let isWorkspaceDivider: Bool
-			switch divider.scope {
-			case .display:
-				isWorkspaceDivider = true
-			case .workspace:
-				isWorkspaceDivider = false
-			}
-			NSColor.separatorColor.withAlphaComponent(
-				isWorkspaceDivider ? 0.75 : 0.48
-			).setFill()
+			NSColor.separatorColor.withAlphaComponent(0.48).setFill()
 
 			let line: NSRect
 			switch divider.axis {
@@ -258,19 +193,6 @@ final class DesktopOverlayView: NSView {
 		}
 	}
 
-	/// The canvas's resting state: a thin highlight around each Panel and nothing
-	/// else, so the Workspace's structure shows without covering any window.
-	private func drawPanelHighlights() {
-		NSColor.controlAccentColor.withAlphaComponent(0.55).setStroke()
-		let width: CGFloat = max(backingPixel, 1.5)
-		for panel: DesktopOverlayPanel in snapshot.panels {
-			let rect: NSRect = localRect(panel.frame).insetBy(dx: width / 2, dy: width / 2)
-			guard rect.width > width, rect.height > width else { continue }
-			let path: NSBezierPath = .init(rect: rect)
-			path.lineWidth = width
-			path.stroke()
-		}
-	}
 
 	private func drawPanelOutlinesAndLabels() {
 		let pixel: CGFloat = backingPixel
@@ -298,19 +220,6 @@ final class DesktopOverlayView: NSView {
 		}
 	}
 
-	private func drawWorkspaceLabels() {
-		for workspace: DesktopOverlayWorkspace in snapshot.workspaces {
-			let labelRect: NSRect = workspaceLabelRect(workspace)
-			guard labelRect.width > 0 else { continue }
-			drawPlaque(
-				workspace.title,
-				in: labelRect,
-				font: .systemFont(ofSize: 11, weight: .semibold),
-				foreground: .labelColor,
-				background: NSColor.windowBackgroundColor.withAlphaComponent(0.92)
-			)
-		}
-	}
 
 	private func drawVirtualFocus() {
 		let focusColor: NSColor = .systemBlue
@@ -320,16 +229,8 @@ final class DesktopOverlayView: NSView {
 			)
 		{
 			drawFocusRing(around: localRect(panel.frame), color: focusColor)
-			return
 		}
 
-		if let workspaceID: WorkspaceID = snapshot.virtualFocus.workspaceID,
-			let workspace: DesktopOverlayWorkspace = snapshot.workspaces.first(
-				where: { $0.id == workspaceID }
-			)
-		{
-			drawFocusRing(around: localRect(workspace.frame), color: focusColor)
-		}
 	}
 
 	private func drawFocusRing(around rect: NSRect, color: NSColor) {
@@ -485,22 +386,6 @@ final class DesktopOverlayView: NSView {
 		)
 	}
 
-	private func workspaceLabelRect(
-		_ workspace: DesktopOverlayWorkspace
-	) -> NSRect {
-		let workspaceRect: NSRect = localRect(workspace.frame)
-		let availableWidth: CGFloat = max(0, min(180, workspaceRect.width - 14))
-		guard availableWidth >= 30 else { return .zero }
-		let font: NSFont = .systemFont(ofSize: 11, weight: .semibold)
-		let title: String = abbreviated(workspace.title, maximumCharacters: 30)
-		let size: NSSize = (title as NSString).size(withAttributes: [.font: font])
-		return .init(
-			x: workspaceRect.minX + 7,
-			y: workspaceRect.maxY - ceil(size.height) - 14,
-			width: min(availableWidth, ceil(size.width) + 16),
-			height: ceil(size.height) + 7
-		)
-	}
 
 	private func divider(at point: NSPoint) -> LayoutDivider? {
 		snapshot.dividers.first {
@@ -518,13 +403,6 @@ final class DesktopOverlayView: NSView {
 		}
 	}
 
-	private func workspaceLabel(
-		at point: NSPoint
-	) -> DesktopOverlayWorkspace? {
-		snapshot.workspaces.first {
-			workspaceLabelRect($0).contains(point)
-		}
-	}
 
 	private func panel(at point: NSPoint) -> DesktopOverlayPanel? {
 		snapshot.panels
@@ -532,19 +410,11 @@ final class DesktopOverlayView: NSView {
 			.first { localRect($0.frame).contains(point) }
 	}
 
-	private func workspace(at point: NSPoint) -> DesktopOverlayWorkspace? {
-		snapshot.workspaces
-			.sorted(by: { workspaceArea($0) < workspaceArea($1) })
-			.first { localRect($0.frame).contains(point) }
-	}
 
 	private func panelArea(_ panel: DesktopOverlayPanel) -> Double {
 		panel.frame.size.area
 	}
 
-	private func workspaceArea(_ workspace: DesktopOverlayWorkspace) -> Double {
-		workspace.frame.size.area
-	}
 
 	private func localRect(_ rect: LayoutRect) -> NSRect {
 		.init(

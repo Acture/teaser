@@ -87,21 +87,20 @@ final class DesktopStageWindowPickerModel: ObservableObject {
 	func update(from orchestrator: DesktopStageOrchestrator) {
 		var targets: [PanelChoice] = []
 		var occupiedPanelTitles: [PanelID: String] = [:]
-		let workspaces: [WorkspaceDescriptor] = orchestrator.presentation.workspaces.values
-			.sorted { $0.id.rawValue < $1.id.rawValue }
-		for workspace: WorkspaceDescriptor in workspaces {
-			for descriptor: PanelDescriptor in workspace.panels.values
-				.sorted(by: { $0.id.rawValue < $1.id.rawValue })
-			{
-				if orchestrator.isPanelOccupied(descriptor.id) {
-					occupiedPanelTitles[descriptor.id] = descriptor.title
-				} else {
-					targets.append(.init(
-						id: descriptor.id,
-						title: descriptor.title,
-						workspaceTitle: workspace.title
-					))
-				}
+		// Panels are listed on their own now; a Workspace is only the label shown
+		// beside each one.
+		for descriptor: PanelDescriptor in orchestrator.presentation.panels.values
+			.sorted(by: { $0.id.rawValue < $1.id.rawValue })
+		{
+			if orchestrator.isPanelOccupied(descriptor.id) {
+				occupiedPanelTitles[descriptor.id] = descriptor.title
+			} else {
+				targets.append(.init(
+					id: descriptor.id,
+					title: descriptor.title,
+					workspaceTitle: orchestrator.presentation
+						.workspaces[descriptor.workspaceID]?.title ?? ""
+				))
 			}
 		}
 		let next: State = .init(

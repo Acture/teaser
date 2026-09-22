@@ -1,12 +1,14 @@
 import Foundation
 
+/// A split, addressed by the canvas whose tree holds it. There is one tree per
+/// canvas now, so the canvas plus the split ID is the whole address.
 struct LayoutSplitReference: Codable, Equatable, Hashable, Sendable {
-	let scope: LayoutScope
+	let displayID: DisplayID
 	let splitID: LayoutSplitID
 }
 
 struct LayoutDivider: Codable, Equatable, Hashable, Sendable {
-	let scope: LayoutScope
+	let displayID: DisplayID
 	let splitID: LayoutSplitID
 	let axis: LayoutAxis
 	let containerFrame: LayoutRect
@@ -19,7 +21,6 @@ struct LayoutQuality: Codable, Equatable, Sendable {
 }
 
 struct PresentationLayout: Codable, Equatable, Sendable {
-	let workspaceFrames: [WorkspaceID: LayoutRect]
 	let panelFrames: [PanelID: LayoutRect]
 	let dividers: [LayoutDivider]
 	let effectiveRatios: [LayoutSplitReference: Double]
@@ -29,66 +30,36 @@ struct PresentationLayout: Codable, Equatable, Sendable {
 enum ConstrainedLayoutError: Error, Equatable, LocalizedError, Sendable {
 	case invalidDisplayFrame(DisplayID)
 	case missingDisplayFrame(DisplayID)
-	case missingWorkspace(WorkspaceID)
 	case missingPanel(PanelID)
 	case missingPanelKind(PanelKindID)
-	case duplicateWorkspaceReference(WorkspaceID)
 	case duplicatePanelReference(PanelID)
 	case duplicateSplitReference(LayoutSplitReference)
-	case unplacedWorkspace(WorkspaceID)
-	case unplacedPanel(PanelID)
-	case displayAffinityMismatch(WorkspaceID)
-	case infeasible(LayoutScope, LayoutSplitID?, LayoutSize, LayoutSize)
 
 	var errorDescription: String? {
 		switch self {
 		case .invalidDisplayFrame(let displayID):
-			return "Display \(displayID.rawValue) reported an unusable frame."
+			return "Canvas \(displayID.rawValue) reported an unusable frame."
 		case .missingDisplayFrame(let displayID):
-			return "Display \(displayID.rawValue) has no frame in this layout."
-		case .missingWorkspace(let workspaceID):
-			return "Workspace \(workspaceID.rawValue) is missing from the presentation."
+			return "Canvas \(displayID.rawValue) has no frame in this layout."
 		case .missingPanel(let panelID):
-			return "Panel \(panelID.rawValue) is missing from its Workspace."
+			return "Panel \(panelID.rawValue) is placed but has no descriptor."
 		case .missingPanelKind(let panelKindID):
 			return "Panel kind \(panelKindID.rawValue) is not registered."
-		case .duplicateWorkspaceReference(let workspaceID):
-			return "Workspace \(workspaceID.rawValue) appears more than once in the layout."
 		case .duplicatePanelReference(let panelID):
-			return "Panel \(panelID.rawValue) appears more than once in its Workspace."
+			return "Panel \(panelID.rawValue) is placed on more than one canvas."
 		case .duplicateSplitReference(let reference):
-			return "Split \(reference.splitID.rawValue) appears more than once in \(reference.scope.layoutDescription)."
-		case .unplacedWorkspace(let workspaceID):
-			return "Workspace \(workspaceID.rawValue) is not placed on any display."
-		case .unplacedPanel(let panelID):
-			return "Panel \(panelID.rawValue) is not placed in any Workspace."
-		case .displayAffinityMismatch(let workspaceID):
-			return "Workspace \(workspaceID.rawValue) is laid out on a display other than its own."
-		case .infeasible(let scope, let splitID, let required, let available):
-			let place: String = splitID.map { "split \($0.rawValue) of \(scope.layoutDescription)" }
-				?? scope.layoutDescription
 			return """
-				\(place) does not fit: it needs at least \
-				\(required.layoutDescription), and \(available.layoutDescription) is available. \
-				Make the region larger, or close or merge a Panel inside it.
+				Split \(reference.splitID.rawValue) appears more than once on canvas \
+				\(reference.displayID.rawValue).
 				"""
-		}
-	}
-}
-
-extension LayoutScope {
-	var layoutDescription: String {
-		switch self {
-		case .display(let displayID): return "display \(displayID.rawValue)"
-		case .workspace(let workspaceID): return "Workspace \(workspaceID.rawValue)"
 		}
 	}
 }
 
 extension LayoutSize {
 	var layoutDescription: String {
-		// One `infeasible` case reports a non-finite requirement, and `Int(_:)`
-		// traps on those and on values past its range.
+		// A non-finite requirement would trap `Int(_:)`, as would one past its
+		// range.
 		guard width.isFinite, height.isFinite,
 			width.magnitude < 1e9, height.magnitude < 1e9
 		else { return "\(width)×\(height) pt" }
@@ -96,13 +67,14 @@ extension LayoutSize {
 	}
 }
 
+/// Solves each canvas's flat Panel tree inside that canvas's rectangle. A
+/// Workspace is not a layout container: it never gets a rectangle here, and the
+/// contour pass derives its outline from the Panel frames afterwards.
 struct ConstrainedLayoutSolver: Sendable {
-	let workspaceGap: Double
 	let panelGap: Double
 
-	init(workspaceGap: Double = 8, panelGap: Double = 4) {
-		precondition(workspaceGap >= 0 && panelGap >= 0)
-		self.workspaceGap = workspaceGap
+	init(panelGap: Double = 4) {
+		precondition(panelGap >= 0)
 		self.panelGap = panelGap
 	}
 
@@ -110,10 +82,7 @@ struct ConstrainedLayoutSolver: Sendable {
 		presentation: WorkspacePresentation,
 		displayFrames: [DisplayID: LayoutRect]
 	) throws -> PresentationLayout {
-		try Self().solve(
-			presentation: presentation,
-			displayFrames: displayFrames
-		)
+		try Self().solve(presentation: presentation, displayFrames: displayFrames)
 	}
 
 	func solve(
@@ -122,240 +91,102 @@ struct ConstrainedLayoutSolver: Sendable {
 	) throws -> PresentationLayout {
 		try validate(presentation: presentation, displayFrames: displayFrames)
 
-		var workspaceFrames: [WorkspaceID: LayoutRect] = [:]
 		var panelFrames: [PanelID: LayoutRect] = [:]
 		var dividers: [LayoutDivider] = []
 		var effectiveRatios: [LayoutSplitReference: Double] = [:]
 
-		let displayOrder: [DisplayID] = presentation.displayLayouts.keys.sorted(
-			by: { $0.rawValue < $1.rawValue }
-		)
-		switch presentation.mode {
-		case .tiled:
-			try tileDisplays(
-				displayOrder,
-				presentation: presentation,
-				displayFrames: displayFrames,
-				workspaceFrames: &workspaceFrames,
-				dividers: &dividers,
-				effectiveRatios: &effectiveRatios
-			)
-		case .focused(let workspaceID):
-			guard let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
-			else {
-				throw ConstrainedLayoutError.missingWorkspace(workspaceID)
-			}
-			guard let displayFrame: LayoutRect = displayFrames[workspace.displayAffinity]
-			else {
-				throw ConstrainedLayoutError.missingDisplayFrame(workspace.displayAffinity)
-			}
-			// Focus belongs to one canvas. The focused Workspace takes over the
-			// display it is placed on, and every other display keeps the tiling it
-			// would have had, so focusing on one canvas never blanks the others.
-			workspaceFrames[workspaceID] = displayFrame
-			try tileDisplays(
-				displayOrder.filter { $0 != workspace.displayAffinity },
-				presentation: presentation,
-				displayFrames: displayFrames,
-				workspaceFrames: &workspaceFrames,
-				dividers: &dividers,
-				effectiveRatios: &effectiveRatios
-			)
-		}
-
-		for workspaceID: WorkspaceID in workspaceFrames.keys.sorted(
+		for displayID: DisplayID in presentation.canvases.keys.sorted(
 			by: { $0.rawValue < $1.rawValue }
 		) {
-			guard let workspaceFrame: LayoutRect = workspaceFrames[workspaceID],
-				let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
-			else {
-				throw ConstrainedLayoutError.missingWorkspace(workspaceID)
+			// A blank canvas places nothing and is not an error: it is what every
+			// canvas starts as.
+			guard let tree: LayoutTree<PanelID> = presentation.canvases[displayID]?
+				.panelTree
+			else { continue }
+			guard let displayFrame: LayoutRect = displayFrames[displayID] else {
+				throw ConstrainedLayoutError.missingDisplayFrame(displayID)
 			}
-			let scope: LayoutScope = .workspace(workspaceID)
-			let solution: TreeSolution<PanelID> = try solveTree(
-				workspace.panelTree,
-				in: workspaceFrame,
-				gap: panelGap,
-				scope: scope
-			) { panelID in
-				try panelMetrics(
-					panelID,
-					workspace: workspace,
-					registry: presentation.panelKinds
-				)
-			}
-			panelFrames.merge(solution.leafFrames) { _, _ in
-				preconditionFailure("Validated panel IDs must be unique")
-			}
-			try merge(
-				solution: solution,
-				intoDividers: &dividers,
-				effectiveRatios: &effectiveRatios
+			let solution: TreeSolution = try solveTreeNode(
+				tree,
+				in: displayFrame,
+				displayID: displayID,
+				presentation: presentation
 			)
+			panelFrames.merge(solution.leafFrames) { _, _ in
+				preconditionFailure("Validated Panel IDs must be unique")
+			}
+			dividers.append(contentsOf: solution.dividers)
+			for (reference, ratio): (LayoutSplitReference, Double)
+				in solution.effectiveRatios
+			{
+				guard effectiveRatios[reference] == nil else {
+					throw ConstrainedLayoutError.duplicateSplitReference(reference)
+				}
+				effectiveRatios[reference] = ratio
+			}
 		}
 
-		let quality: LayoutQuality = try layoutQuality(
-			panelFrames: panelFrames,
-			presentation: presentation
-		)
 		return .init(
-			workspaceFrames: workspaceFrames,
 			panelFrames: panelFrames,
 			dividers: dividers.sorted(by: dividerSort),
 			effectiveRatios: effectiveRatios,
-			quality: quality
+			quality: try layoutQuality(
+				panelFrames: panelFrames,
+				presentation: presentation
+			)
 		)
 	}
 
-	/// Tiles the given displays into the accumulating layout. Both presentation
-	/// modes share it: focus only replaces the tiling of the display it is on,
-	/// so the remaining displays are solved here either way.
-	private func tileDisplays(
-		_ displayIDs: [DisplayID],
-		presentation: WorkspacePresentation,
-		displayFrames: [DisplayID: LayoutRect],
-		workspaceFrames: inout [WorkspaceID: LayoutRect],
-		dividers: inout [LayoutDivider],
-		effectiveRatios: inout [LayoutSplitReference: Double]
-	) throws {
-		for displayID: DisplayID in displayIDs {
-			guard let displayLayout: DisplayWorkspaceLayout =
-				presentation.displayLayouts[displayID],
-				let displayFrame: LayoutRect = displayFrames[displayID]
-			else {
-				throw ConstrainedLayoutError.missingDisplayFrame(displayID)
-			}
-			let scope: LayoutScope = .display(displayID)
-			let solution: TreeSolution<WorkspaceID> = try solveTree(
-				displayLayout.workspaceTree,
-				in: displayFrame,
-				gap: workspaceGap,
-				scope: scope
-			) { workspaceID in
-				try workspaceMetrics(
-					workspaceID,
-					presentation: presentation
-				)
-			}
-			workspaceFrames.merge(solution.leafFrames) { _, _ in
-				preconditionFailure("Validated workspace IDs must be unique")
-			}
-			try merge(
-				solution: solution,
-				intoDividers: &dividers,
-				effectiveRatios: &effectiveRatios
-			)
-		}
-	}
+	// MARK: - Validation
 
 	private func validate(
 		presentation: WorkspacePresentation,
 		displayFrames: [DisplayID: LayoutRect]
 	) throws {
 		for (displayID, frame): (DisplayID, LayoutRect) in displayFrames {
-			guard frame.origin.x.isFinite,
-				frame.origin.y.isFinite,
-				frame.size.width.isFinite,
-				frame.size.height.isFinite,
-				frame.size.width > 0,
-				frame.size.height > 0
+			guard frame.origin.x.isFinite, frame.origin.y.isFinite,
+				frame.size.width.isFinite, frame.size.height.isFinite,
+				frame.size.width > 0, frame.size.height > 0
 			else {
 				throw ConstrainedLayoutError.invalidDisplayFrame(displayID)
 			}
 		}
 
-		var placedWorkspaces: Set<WorkspaceID> = []
-		var placedPanels: Set<PanelID> = []
-		for (displayID, layout): (DisplayID, DisplayWorkspaceLayout) in presentation.displayLayouts {
+		// A Panel the presentation knows but no open canvas places is normal: its
+		// canvas is closed. Only a placed Panel has to be solvable, so there is
+		// deliberately no "unplaced Panel" error here.
+		var placed: Set<PanelID> = []
+		for (displayID, canvas): (DisplayID, CanvasLayout) in presentation.canvases {
+			guard let tree: LayoutTree<PanelID> = canvas.panelTree else { continue }
 			guard displayFrames[displayID] != nil else {
 				throw ConstrainedLayoutError.missingDisplayFrame(displayID)
 			}
-			try validateUniqueSplits(
-				layout.workspaceTree.splitIDs,
-				scope: .display(displayID)
-			)
-			for workspaceID: WorkspaceID in layout.workspaceTree.leaves {
-				guard placedWorkspaces.insert(workspaceID).inserted else {
-					throw ConstrainedLayoutError.duplicateWorkspaceReference(workspaceID)
-				}
-				guard let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
-				else {
-					throw ConstrainedLayoutError.missingWorkspace(workspaceID)
-				}
-				guard workspace.displayAffinity == displayID else {
-					throw ConstrainedLayoutError.displayAffinityMismatch(workspaceID)
-				}
-				try validateUniqueSplits(
-					workspace.panelTree.splitIDs,
-					scope: .workspace(workspaceID)
-				)
-				var localPanels: Set<PanelID> = []
-				for panelID: PanelID in workspace.panelTree.leaves {
-					guard localPanels.insert(panelID).inserted,
-						placedPanels.insert(panelID).inserted
-					else {
-						throw ConstrainedLayoutError.duplicatePanelReference(panelID)
-					}
-					guard workspace.panels[panelID] != nil else {
-						throw ConstrainedLayoutError.missingPanel(panelID)
-					}
-				}
-				if let unplacedPanelID: PanelID = workspace.panels.keys.first(
-					where: { !localPanels.contains($0) }
-				) {
-					throw ConstrainedLayoutError.unplacedPanel(unplacedPanelID)
+			var seenSplits: Set<LayoutSplitID> = []
+			for splitID: LayoutSplitID in tree.splitIDs {
+				guard seenSplits.insert(splitID).inserted else {
+					throw ConstrainedLayoutError.duplicateSplitReference(
+						.init(displayID: displayID, splitID: splitID)
+					)
 				}
 			}
-		}
-		if let unplacedWorkspaceID: WorkspaceID = presentation.workspaces.keys.first(
-			where: { !placedWorkspaces.contains($0) }
-		) {
-			throw ConstrainedLayoutError.unplacedWorkspace(unplacedWorkspaceID)
-		}
-	}
-
-	private func validateUniqueSplits(
-		_ splitIDs: [LayoutSplitID],
-		scope: LayoutScope
-	) throws {
-		var seen: Set<LayoutSplitID> = []
-		for splitID: LayoutSplitID in splitIDs {
-			guard seen.insert(splitID).inserted else {
-				throw ConstrainedLayoutError.duplicateSplitReference(
-					.init(scope: scope, splitID: splitID)
-				)
+			for panelID: PanelID in tree.leaves {
+				guard placed.insert(panelID).inserted else {
+					throw ConstrainedLayoutError.duplicatePanelReference(panelID)
+				}
+				guard presentation.panels[panelID] != nil else {
+					throw ConstrainedLayoutError.missingPanel(panelID)
+				}
 			}
 		}
 	}
 
-	private func workspaceMetrics(
-		_ workspaceID: WorkspaceID,
-		presentation: WorkspacePresentation
-	) throws -> LeafLayoutMetrics {
-		guard let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
-		else {
-			throw ConstrainedLayoutError.missingWorkspace(workspaceID)
-		}
-		let metrics: TreeLayoutMetrics = try treeMetrics(
-			workspace.panelTree,
-			gap: panelGap,
-			scope: .workspace(workspaceID)
-		) { panelID in
-			try panelMetrics(
-				panelID,
-				workspace: workspace,
-				registry: presentation.panelKinds
-			)
-		}
-		return .init(minimumSize: metrics.minimumSize, growthWeight: metrics.growthWeight)
-	}
+	// MARK: - Metrics
 
 	private func panelMetrics(
 		_ panelID: PanelID,
-		workspace: WorkspaceDescriptor,
-		registry: PanelKindRegistry
+		presentation: WorkspacePresentation
 	) throws -> LeafLayoutMetrics {
-		guard let panel: PanelDescriptor = workspace.panels[panelID] else {
+		guard let panel: PanelDescriptor = presentation.panels[panelID] else {
 			throw ConstrainedLayoutError.missingPanel(panelID)
 		}
 		if let profile: LayoutProfile = panel.profileOverride {
@@ -364,7 +195,8 @@ struct ConstrainedLayoutSolver: Sendable {
 				growthWeight: profile.growthWeight
 			)
 		}
-		guard let definition: PanelKindDefinition = registry.definition(for: panel.kindID)
+		guard let definition: PanelKindDefinition = presentation.panelKinds
+			.definition(for: panel.kindID)
 		else {
 			throw ConstrainedLayoutError.missingPanelKind(panel.kindID)
 		}
@@ -374,69 +206,77 @@ struct ConstrainedLayoutSolver: Sendable {
 		)
 	}
 
-	private func solveTree<Leaf>(
-		_ tree: LayoutTree<Leaf>,
-		in frame: LayoutRect,
-		gap: Double,
-		scope: LayoutScope,
-		leafMetrics: (Leaf) throws -> LeafLayoutMetrics
-	) throws -> TreeSolution<Leaf>
-	where Leaf: Codable & Hashable & Sendable {
-		// Minimum sizes are preferences, not a precondition: a region smaller than
-		// its minimums still lays out, shrinking in proportion, instead of refusing.
-		// The walk still runs so malformed trees and unknown Panel kinds fail here.
-		_ = try treeMetrics(
-			tree,
-			gap: gap,
-			scope: scope,
-			leafMetrics: leafMetrics
-		)
-		return try solveTreeNode(
-			tree,
-			in: frame,
-			gap: gap,
-			scope: scope,
-			leafMetrics: leafMetrics
-		)
+	private func treeMetrics(
+		_ tree: LayoutTree<PanelID>,
+		presentation: WorkspacePresentation
+	) throws -> LeafLayoutMetrics {
+		switch tree {
+		case .leaf(let panelID):
+			return try panelMetrics(panelID, presentation: presentation)
+		case .split(_, let axis, _, let first, let second):
+			let firstMetrics: LeafLayoutMetrics = try treeMetrics(
+				first,
+				presentation: presentation
+			)
+			let secondMetrics: LeafLayoutMetrics = try treeMetrics(
+				second,
+				presentation: presentation
+			)
+			let size: LayoutSize
+			switch axis {
+			case .horizontal:
+				size = .init(
+					width: firstMetrics.minimumSize.width + panelGap
+						+ secondMetrics.minimumSize.width,
+					height: max(
+						firstMetrics.minimumSize.height,
+						secondMetrics.minimumSize.height
+					)
+				)
+			case .vertical:
+				size = .init(
+					width: max(
+						firstMetrics.minimumSize.width,
+						secondMetrics.minimumSize.width
+					),
+					height: firstMetrics.minimumSize.height + panelGap
+						+ secondMetrics.minimumSize.height
+				)
+			}
+			return .init(
+				minimumSize: size,
+				growthWeight: firstMetrics.growthWeight + secondMetrics.growthWeight
+			)
+		}
 	}
 
-	private func solveTreeNode<Leaf>(
-		_ tree: LayoutTree<Leaf>,
+	// MARK: - Placement
+
+	private func solveTreeNode(
+		_ tree: LayoutTree<PanelID>,
 		in frame: LayoutRect,
-		gap: Double,
-		scope: LayoutScope,
-		leafMetrics: (Leaf) throws -> LeafLayoutMetrics
-	) throws -> TreeSolution<Leaf>
-	where Leaf: Codable & Hashable & Sendable {
+		displayID: DisplayID,
+		presentation: WorkspacePresentation
+	) throws -> TreeSolution {
 		switch tree {
-		case .leaf(let leaf):
+		case .leaf(let panelID):
 			return .init(
-				leafFrames: [leaf: frame],
+				leafFrames: [panelID: frame],
 				dividers: [],
 				effectiveRatios: [:]
 			)
-		case .split(
-			let splitID,
-			let axis,
-			let preference,
-			let first,
-			let second
-		):
-			let firstMetrics: TreeLayoutMetrics = try treeMetrics(
+		case .split(let splitID, let axis, let preference, let first, let second):
+			let firstMetrics: LeafLayoutMetrics = try treeMetrics(
 				first,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
+				presentation: presentation
 			)
-			let secondMetrics: TreeLayoutMetrics = try treeMetrics(
+			let secondMetrics: LeafLayoutMetrics = try treeMetrics(
 				second,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
+				presentation: presentation
 			)
 			let available: Double = axis == .horizontal
-				? frame.size.width - gap
-				: frame.size.height - gap
+				? frame.size.width - panelGap
+				: frame.size.height - panelGap
 			let firstMinimum: Double = axis == .horizontal
 				? firstMetrics.minimumSize.width
 				: firstMetrics.minimumSize.height
@@ -444,10 +284,11 @@ struct ConstrainedLayoutSolver: Sendable {
 				? secondMetrics.minimumSize.width
 				: secondMetrics.minimumSize.height
 			// A region too narrow for its gap drops the gap rather than failing.
-			let splitGap: Double = available > 0 ? gap : 0
+			let splitGap: Double = available > 0 ? panelGap : 0
 			let usable: Double = available > 0
 				? available
 				: (axis == .horizontal ? frame.size.width : frame.size.height)
+
 			// A divider the person has dragged keeps their proportion. One they
 			// have not follows the Panels inside it: a subtree holding more
 			// Panels, or Panels whose kind asks to grow, takes proportionally
@@ -461,6 +302,7 @@ struct ConstrainedLayoutSolver: Sendable {
 			let desired: Double = preference.userRatio.flatMap {
 				$0.isFinite ? $0 : nil
 			} ?? derived
+
 			let ratio: Double
 			if usable > 0, firstMinimum + secondMinimum <= usable {
 				// Room for both minimums: honour the requested ratio within them.
@@ -468,128 +310,58 @@ struct ConstrainedLayoutSolver: Sendable {
 					to: (firstMinimum / usable) ... (1 - secondMinimum / usable)
 				)
 			} else if firstMinimum + secondMinimum > 0 {
-				// Not enough room: both sides shrink in proportion to what they need,
-				// so the layout adapts to the space it has instead of refusing it.
+				// Not enough room: both sides shrink in proportion to what they
+				// need, so the layout adapts to the space it has rather than
+				// refusing it.
 				ratio = (firstMinimum / (firstMinimum + secondMinimum))
 					.clamped(to: 0.01 ... 0.99)
 			} else {
 				ratio = desired
 			}
+
 			let frames: SplitFrames = split(
 				frame,
 				axis: axis,
 				ratio: ratio,
 				gap: splitGap
 			)
-			let firstSolution: TreeSolution<Leaf> = try solveTreeNode(
+			let firstSolution: TreeSolution = try solveTreeNode(
 				first,
 				in: frames.first,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
+				displayID: displayID,
+				presentation: presentation
 			)
-			let secondSolution: TreeSolution<Leaf> = try solveTreeNode(
+			let secondSolution: TreeSolution = try solveTreeNode(
 				second,
 				in: frames.second,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
+				displayID: displayID,
+				presentation: presentation
 			)
-			var leafFrames: [Leaf: LayoutRect] = firstSolution.leafFrames
+			var leafFrames: [PanelID: LayoutRect] = firstSolution.leafFrames
 			leafFrames.merge(secondSolution.leafFrames) { _, _ in
 				preconditionFailure("Validated tree leaves must be unique")
 			}
-			var ratios: [LayoutSplitReference: Double] =
-				firstSolution.effectiveRatios
+			var ratios: [LayoutSplitReference: Double] = firstSolution.effectiveRatios
 			ratios.merge(secondSolution.effectiveRatios) { _, _ in
 				preconditionFailure("Validated split IDs must be unique")
 			}
 			let reference: LayoutSplitReference = .init(
-				scope: scope,
+				displayID: displayID,
 				splitID: splitID
 			)
 			ratios[reference] = ratio
-			let divider: LayoutDivider = .init(
-				scope: scope,
-				splitID: splitID,
-				axis: axis,
-				containerFrame: frame,
-				frame: frames.divider
-			)
 			return .init(
 				leafFrames: leafFrames,
-				dividers: [divider]
-					+ firstSolution.dividers
-					+ secondSolution.dividers,
+				dividers: [
+					.init(
+						displayID: displayID,
+						splitID: splitID,
+						axis: axis,
+						containerFrame: frame,
+						frame: frames.divider
+					),
+				] + firstSolution.dividers + secondSolution.dividers,
 				effectiveRatios: ratios
-			)
-		}
-	}
-
-	private func treeMetrics<Leaf>(
-		_ tree: LayoutTree<Leaf>,
-		gap: Double,
-		scope: LayoutScope,
-		leafMetrics: (Leaf) throws -> LeafLayoutMetrics
-	) throws -> TreeLayoutMetrics
-	where Leaf: Codable & Hashable & Sendable {
-		switch tree {
-		case .leaf(let leaf):
-			let metrics: LeafLayoutMetrics = try leafMetrics(leaf)
-			return .init(
-				minimumSize: metrics.minimumSize,
-				growthWeight: metrics.growthWeight
-			)
-		case .split(let splitID, let axis, _, let first, let second):
-			let firstMetrics: TreeLayoutMetrics = try treeMetrics(
-				first,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
-			)
-			let secondMetrics: TreeLayoutMetrics = try treeMetrics(
-				second,
-				gap: gap,
-				scope: scope,
-				leafMetrics: leafMetrics
-			)
-			let size: LayoutSize = minimumSize(
-				axis: axis,
-				gap: gap,
-				first: firstMetrics.minimumSize,
-				second: secondMetrics.minimumSize
-			)
-			guard size.width.isFinite, size.height.isFinite else {
-				throw ConstrainedLayoutError.infeasible(
-					scope,
-					splitID,
-					size,
-					.zero
-				)
-			}
-			return .init(
-				minimumSize: size,
-				growthWeight: firstMetrics.growthWeight + secondMetrics.growthWeight
-			)
-		}
-	}
-
-	private func minimumSize(
-		axis: LayoutAxis,
-		gap: Double,
-		first: LayoutSize,
-		second: LayoutSize
-	) -> LayoutSize {
-		switch axis {
-		case .horizontal:
-			return .init(
-				width: first.width + gap + second.width,
-				height: max(first.height, second.height)
-			)
-		case .vertical:
-			return .init(
-				width: max(first.width, second.width),
-				height: first.height + gap + second.height
 			)
 		}
 	}
@@ -648,21 +420,7 @@ struct ConstrainedLayoutSolver: Sendable {
 		}
 	}
 
-	private func merge<Leaf>(
-		solution: TreeSolution<Leaf>,
-		intoDividers dividers: inout [LayoutDivider],
-		effectiveRatios: inout [LayoutSplitReference: Double]
-	) throws where Leaf: Hashable {
-		dividers.append(contentsOf: solution.dividers)
-		for (reference, ratio): (LayoutSplitReference, Double) in
-			solution.effectiveRatios
-		{
-			guard effectiveRatios[reference] == nil else {
-				throw ConstrainedLayoutError.duplicateSplitReference(reference)
-			}
-			effectiveRatios[reference] = ratio
-		}
-	}
+	// MARK: - Quality
 
 	private func layoutQuality(
 		panelFrames: [PanelID: LayoutRect],
@@ -671,26 +429,21 @@ struct ConstrainedLayoutSolver: Sendable {
 		var maximumDeviation: Double = 0
 		var totalDeviation: Double = 0
 		for (panelID, frame): (PanelID, LayoutRect) in panelFrames {
-			guard let panel: PanelDescriptor = presentation.workspaces.values
-				.lazy
-				.compactMap({ $0.panels[panelID] })
-				.first
-			else {
+			guard let panel: PanelDescriptor = presentation.panels[panelID] else {
 				throw ConstrainedLayoutError.missingPanel(panelID)
 			}
 			let profile: LayoutProfile
 			if let override: LayoutProfile = panel.profileOverride {
 				profile = override
-			} else if let definition: PanelKindDefinition =
-				presentation.panelKinds.definition(for: panel.kindID)
+			} else if let definition: PanelKindDefinition = presentation.panelKinds
+				.definition(for: panel.kindID)
 			{
 				profile = definition.defaultProfile
 			} else {
 				throw ConstrainedLayoutError.missingPanelKind(panel.kindID)
 			}
-			let aspectRatio: Double = frame.size.width / frame.size.height
 			let deviation: Double = profile.preferredAspectRatio.distance(
-				to: aspectRatio
+				to: frame.size.width / frame.size.height
 			)
 			maximumDeviation = max(maximumDeviation, deviation)
 			totalDeviation += deviation
@@ -702,21 +455,10 @@ struct ConstrainedLayoutSolver: Sendable {
 	}
 
 	private func dividerSort(_ lhs: LayoutDivider, _ rhs: LayoutDivider) -> Bool {
-		let lhsScope: String = scopeSortKey(lhs.scope)
-		let rhsScope: String = scopeSortKey(rhs.scope)
-		if lhsScope != rhsScope {
-			return lhsScope < rhsScope
+		if lhs.displayID.rawValue != rhs.displayID.rawValue {
+			return lhs.displayID.rawValue < rhs.displayID.rawValue
 		}
 		return lhs.splitID.rawValue < rhs.splitID.rawValue
-	}
-
-	private func scopeSortKey(_ scope: LayoutScope) -> String {
-		switch scope {
-		case .display(let displayID):
-			return "0:\(displayID.rawValue)"
-		case .workspace(let workspaceID):
-			return "1:\(workspaceID.rawValue)"
-		}
 	}
 }
 
@@ -725,13 +467,8 @@ private struct LeafLayoutMetrics {
 	let growthWeight: Double
 }
 
-private struct TreeLayoutMetrics {
-	let minimumSize: LayoutSize
-	let growthWeight: Double
-}
-
-private struct TreeSolution<Leaf> where Leaf: Hashable {
-	let leafFrames: [Leaf: LayoutRect]
+private struct TreeSolution {
+	let leafFrames: [PanelID: LayoutRect]
 	let dividers: [LayoutDivider]
 	let effectiveRatios: [LayoutSplitReference: Double]
 }

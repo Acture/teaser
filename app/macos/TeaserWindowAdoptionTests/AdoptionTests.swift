@@ -1408,7 +1408,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	try harness.adopt(window, into: rightPanelID)
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: rightPanelID),
+			== .init(panelID: rightPanelID),
 		"an adoption must focus the Panel the window landed in"
 	)
 
@@ -1422,7 +1422,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	let adoptedPanelID: PanelID = .init("adopted-1")
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: adoptedPanelID),
+			== .init(panelID: adoptedPanelID),
 		"a split must focus the Panel it created"
 	)
 
@@ -1435,7 +1435,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	harness.dropWindow(third, at: try harness.center(of: adoptedPanelID))
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: adoptedPanelID),
+			== .init(panelID: adoptedPanelID),
 		"a rejected drop must not move Virtual Focus"
 	)
 }
@@ -1450,8 +1450,8 @@ private func testWindowMovedAcrossWorkspacesFollowsItsFocus() throws {
 	let destination: CGPoint = try harness.center(of: betaPanelID)
 	harness.beginDrag(window, to: destination)
 	try expect(
-		harness.orchestrator.dropHighlight?.workspaceID == betaWorkspaceID,
-		"a highlight in another Workspace must name that Workspace"
+		harness.orchestrator.dropHighlight?.panelID == betaPanelID,
+		"a highlight over another group's Panel must name that Panel"
 	)
 	harness.releasePointer(at: destination)
 
@@ -1461,8 +1461,8 @@ private func testWindowMovedAcrossWorkspacesFollowsItsFocus() throws {
 	)
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: betaWorkspaceID, panelID: betaPanelID),
-		"moving across Workspaces must move Workspace focus with the window"
+			== .init(panelID: betaPanelID),
+		"moving across groups must move Virtual Focus with the window"
 	)
 	try expect(
 		harness.log.bindCount(for: window.identity) == 1

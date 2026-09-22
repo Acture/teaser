@@ -7,14 +7,14 @@ private func makeEditor(_ harness: Harness) -> DesktopStageLayoutEditorModel {
 	// The same callbacks and state feed as DesktopStageController, with a fake host.
 	let model: DesktopStageLayoutEditorModel = .init(presentation: harness.orchestrator.presentation, onResize: { [weak harness] reference, ratio in
 		guard let harness else { return }
-		harness.orchestrator.setDividerRatio(ratio, scope: reference.scope, splitID: reference.splitID)
+		harness.orchestrator.setDividerRatio(ratio, canvasID: reference.displayID, splitID: reference.splitID)
 	}, onUndo: { [weak harness] in harness?.orchestrator.undoLastLayoutChange() })
 	model.update(from: harness.orchestrator)
 	return model
 }
 
 private func rootPreference(_ presentation: WorkspacePresentation) throws -> SplitPreference {
-	guard case .split(_, _, let preference, _, _) = presentation.workspaces[testWorkspaceID]?.panelTree
+	guard case .split(_, _, let preference, _, _) = presentation.canvases[testDisplayID]?.panelTree
 	else { throw TestFailure.assertion("missing split") }
 	return preference
 }
@@ -25,7 +25,7 @@ private func rootPreference(_ harness: Harness) throws -> SplitPreference {
 }
 
 private let rootReference: LayoutSplitReference = .init(
-	scope: .workspace(testWorkspaceID), splitID: .init("alpha-root")
+	displayID: testDisplayID, splitID: .init("alpha-root")
 )
 
 @MainActor
@@ -163,7 +163,7 @@ private func testEditorIgnoresEditsWhileReleaseIsRetained() throws {
 private func testStoppedEditorRefreshesAfterDisplayChange() throws {
 	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
 	let model: DesktopStageLayoutEditorModel = makeEditor(harness)
-	let stale: FractionHolder = model.fractionHolder(for: .init(scope: .display(testDisplayID),
+	let stale: FractionHolder = model.fractionHolder(for: .init(displayID: testDisplayID,
 		splitID: .init("display-root")), axis: .horizontal, preference: .user(0.5))
 	stale.value = 0.6
 	try expect(harness.orchestrator.canUndo, "the offline edit before the display change is undoable")
@@ -191,13 +191,13 @@ private func testEditorDisplayAndVerticalResize() throws {
 	try displayHarness.adopt(displayWindow, into: leftPanelID)
 	let oldWidth: CGFloat = displayWindow.appKitScreenFrame.width
 	let displayEditor: DesktopStageLayoutEditorModel = makeEditor(displayHarness)
-	displayEditor.fractionHolder(for: .init(scope: .display(testDisplayID), splitID: .init("display-root")),
+	displayEditor.fractionHolder(for: .init(displayID: testDisplayID, splitID: .init("display-root")),
 		axis: .horizontal, preference: .user(0.5)).value = 0.65
 	try expect(displayWindow.appKitScreenFrame.width > oldWidth,
-		"display-scoped edits must resize Workspaces and their actual provider panels")
+		"a root divider must resize the Panels under it, across group boundaries")
 
 	var presentation: WorkspacePresentation = try testPresentation()
-	presentation.workspaces[testWorkspaceID]?.panelTree = .split(id: .init("alpha-root"), axis: .vertical,
+	presentation.canvases[testDisplayID]?.panelTree = .split(id: .init("alpha-root"), axis: .vertical,
 		preference: .user(0.5), first: .leaf(leftPanelID), second: .leaf(rightPanelID))
 	let verticalHarness: Harness = .init(presentation: presentation)
 	try verticalHarness.orchestrator.startStage()

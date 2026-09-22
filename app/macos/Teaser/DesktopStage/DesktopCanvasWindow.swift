@@ -51,7 +51,6 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 			snapshot: snapshot,
 			callbacks: callbacks
 		)
-		canvasView.outlinesPanelsAlways = true
 		window = .init(
 			contentRect: contentRect,
 			styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

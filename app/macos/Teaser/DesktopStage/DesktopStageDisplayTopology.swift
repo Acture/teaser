@@ -40,57 +40,48 @@ enum DesktopStageDisplayTopology {
 		}
 	}
 
+	/// Keeps the presentation addressing canvases that still exist. A canvas is
+	/// a window, not a monitor, so there is nothing to rebalance across physical
+	/// displays here: the only real case is a canvas whose ID is gone, whose
+	/// Panels would otherwise be stranded in a tree nothing solves.
 	static func adapt(
 		_ presentation: WorkspacePresentation,
 		to displays: [DesktopStageDisplay]
 	) -> (presentation: WorkspacePresentation, changed: Bool) {
 		let displays: [DesktopStageDisplay] = uniqueDisplays(displays)
-		guard !displays.isEmpty else {
-			return (presentation, false)
-		}
-		guard !isCurrent(presentation, for: displays) else {
-			return (presentation, false)
-		}
+		guard !displays.isEmpty else { return (presentation, false) }
+		let connected: Set<DisplayID> = .init(displays.map(\.id))
+		let dropped: [DisplayID] = presentation.canvases.keys
+			.filter { !connected.contains($0) }
+			.sorted { $0.rawValue < $1.rawValue }
+		guard !dropped.isEmpty else { return (presentation, false) }
 
-		let workspaceIDs: [WorkspaceID] = orderedWorkspaceIDs(
-			in: presentation,
-			connectedDisplayIDs: displays.map(\.id)
-		)
+		// The lowest-sorting connected canvas takes them, so the result does not
+		// depend on dictionary order.
+		guard let hostID: DisplayID = connected.sorted(by: {
+			$0.rawValue < $1.rawValue
+		}).first else { return (presentation, false) }
+
 		var adapted: WorkspacePresentation = presentation
-		adapted.displayLayouts = [:]
-
-		guard !workspaceIDs.isEmpty else {
-			return (adapted, adapted != presentation)
-		}
-
-		let usedDisplayCount: Int = min(displays.count, workspaceIDs.count)
-		let minimumCount: Int = workspaceIDs.count / usedDisplayCount
-		let remainder: Int = workspaceIDs.count % usedDisplayCount
-		var workspaceOffset: Int = 0
-
-		for index: Int in 0..<usedDisplayCount {
-			let display: DesktopStageDisplay = displays[index]
-			let count: Int = minimumCount + (index < remainder ? 1 : 0)
-			let nextOffset: Int = workspaceOffset + count
-			let assignedIDs: [WorkspaceID] = Array(
-				workspaceIDs[workspaceOffset..<nextOffset]
-			)
-			let tree: LayoutTree<WorkspaceID> = balancedTree(
-				assignedIDs,
-				display: display,
-				path: "root",
-				depth: 0
-			)
-			adapted.displayLayouts[display.id] = .init(
-				displayID: display.id,
-				workspaceTree: tree
-			)
-			for workspaceID: WorkspaceID in assignedIDs {
-				adapted.workspaces[workspaceID]?.displayAffinity = display.id
+		var host: CanvasLayout = adapted.canvases[hostID] ?? .init(displayID: hostID)
+		for displayID: DisplayID in dropped {
+			let orphans: [PanelID] = adapted.canvases[displayID]?.panelTree?.leaves ?? []
+			adapted.canvases.removeValue(forKey: displayID)
+			for panelID: PanelID in orphans {
+				if let tree: LayoutTree<PanelID> = host.panelTree {
+					host.panelTree = .split(
+						id: .init("display-topology.\(hostID.rawValue).\(panelID.rawValue)"),
+						axis: .horizontal,
+						preference: .derived,
+						first: tree,
+						second: .leaf(panelID)
+					)
+				} else {
+					host.panelTree = .leaf(panelID)
+				}
 			}
-			workspaceOffset = nextOffset
 		}
-
+		adapted.canvases[hostID] = host
 		return (adapted, adapted != presentation)
 	}
 
@@ -128,127 +119,5 @@ enum DesktopStageDisplayTopology {
 	) -> [DesktopStageDisplay] {
 		var seen: Set<DisplayID> = []
 		return displays.filter { seen.insert($0.id).inserted }
-	}
-
-	private static func isCurrent(
-		_ presentation: WorkspacePresentation,
-		for displays: [DesktopStageDisplay]
-	) -> Bool {
-		let usedDisplayCount: Int = min(
-			displays.count,
-			presentation.workspaces.count
-		)
-		let expectedDisplayIDs: Set<DisplayID> = .init(
-			displays.prefix(usedDisplayCount).map(\.id)
-		)
-		guard Set(presentation.displayLayouts.keys) == expectedDisplayIDs else {
-			return false
-		}
-
-		var placedWorkspaceIDs: Set<WorkspaceID> = []
-		for displayID: DisplayID in expectedDisplayIDs {
-			guard let layout: DisplayWorkspaceLayout =
-				presentation.displayLayouts[displayID],
-				layout.displayID == displayID,
-				Set(layout.workspaceTree.splitIDs).count
-					== layout.workspaceTree.splitIDs.count
-			else {
-				return false
-			}
-			for workspaceID: WorkspaceID in layout.workspaceTree.leaves {
-				guard let workspace: WorkspaceDescriptor =
-					presentation.workspaces[workspaceID],
-					workspace.displayAffinity == displayID,
-					placedWorkspaceIDs.insert(workspaceID).inserted
-				else {
-					return false
-				}
-			}
-		}
-
-		return placedWorkspaceIDs == Set(presentation.workspaces.keys)
-	}
-
-	private static func orderedWorkspaceIDs(
-		in presentation: WorkspacePresentation,
-		connectedDisplayIDs: [DisplayID]
-	) -> [WorkspaceID] {
-		let connectedDisplayIDSet: Set<DisplayID> = .init(connectedDisplayIDs)
-		let disconnectedDisplayIDs: [DisplayID] = presentation.displayLayouts.keys
-			.filter { !connectedDisplayIDSet.contains($0) }
-			.sorted { $0.rawValue < $1.rawValue }
-		let savedDisplayOrder: [DisplayID] = connectedDisplayIDs.filter {
-			presentation.displayLayouts[$0] != nil
-		} + disconnectedDisplayIDs
-
-		var seen: Set<WorkspaceID> = []
-		var ordered: [WorkspaceID] = []
-		for displayID: DisplayID in savedDisplayOrder {
-			guard let tree: LayoutTree<WorkspaceID> = presentation
-				.displayLayouts[displayID]?.workspaceTree
-			else {
-				continue
-			}
-			for workspaceID: WorkspaceID in tree.leaves
-				where presentation.workspaces[workspaceID] != nil
-					&& seen.insert(workspaceID).inserted
-			{
-				ordered.append(workspaceID)
-			}
-		}
-
-		let missing: [WorkspaceID] = presentation.workspaces.keys
-			.filter { !seen.contains($0) }
-			.sorted { $0.rawValue < $1.rawValue }
-		return ordered + missing
-	}
-
-	private static func balancedTree(
-		_ workspaceIDs: [WorkspaceID],
-		display: DesktopStageDisplay,
-		path: String,
-		depth: Int
-	) -> LayoutTree<WorkspaceID> {
-		precondition(!workspaceIDs.isEmpty)
-		guard workspaceIDs.count > 1 else {
-			return .leaf(workspaceIDs[0])
-		}
-
-		let midpoint: Int = workspaceIDs.count / 2
-		let firstIDs: [WorkspaceID] = Array(workspaceIDs[..<midpoint])
-		let secondIDs: [WorkspaceID] = Array(workspaceIDs[midpoint...])
-		let primaryAxis: LayoutAxis = display.frame.size.width
-			>= display.frame.size.height ? .horizontal : .vertical
-		let axis: LayoutAxis = depth.isMultiple(of: 2)
-			? primaryAxis
-			: opposite(primaryAxis)
-		return .split(
-			id: .init("display-topology.\(display.id.rawValue).\(path)"),
-			axis: axis,
-			preference: .init(
-				userRatio: Double(firstIDs.count) / Double(workspaceIDs.count)
-			),
-			first: balancedTree(
-				firstIDs,
-				display: display,
-				path: "\(path).0",
-				depth: depth + 1
-			),
-			second: balancedTree(
-				secondIDs,
-				display: display,
-				path: "\(path).1",
-				depth: depth + 1
-			)
-		)
-	}
-
-	private static func opposite(_ axis: LayoutAxis) -> LayoutAxis {
-		switch axis {
-		case .horizontal:
-			return .vertical
-		case .vertical:
-			return .horizontal
-		}
 	}
 }

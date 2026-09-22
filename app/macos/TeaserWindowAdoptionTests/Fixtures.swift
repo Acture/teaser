@@ -708,10 +708,15 @@ let secondProviderPID: pid_t = 4_243
 let thirdProviderPID: pid_t = 4_244
 let testDisplayFrame: CGRect = .init(x: 0, y: 0, width: 2_000, height: 1_000)
 
-func fixturePanel(_ id: PanelID, _ title: String) -> PanelDescriptor {
+func fixturePanel(
+	_ id: PanelID,
+	_ title: String,
+	_ workspaceID: WorkspaceID = testWorkspaceID
+) -> PanelDescriptor {
 	.init(
 		id: id,
 		title: title,
+		workspaceID: workspaceID,
 		kindID: .generic,
 		providerHint: nil,
 		profileOverride: nil,
@@ -720,30 +725,31 @@ func fixturePanel(_ id: PanelID, _ title: String) -> PanelDescriptor {
 }
 
 func testPresentation() throws -> WorkspacePresentation {
-	let workspace: WorkspaceDescriptor = .init(
-		id: testWorkspaceID,
-		title: "Alpha",
-		detail: "Deterministic adoption fixture",
-		displayAffinity: testDisplayID,
-		panelTree: .split(
-			id: .init("alpha-root"),
-			axis: .horizontal,
-			preference: .user(0.5),
-			first: .leaf(leftPanelID),
-			second: .leaf(rightPanelID)
-		),
+	.init(
+		virtualFocus: .init(panelID: leftPanelID),
+		canvases: [
+			testDisplayID: .init(
+				displayID: testDisplayID,
+				panelTree: .split(
+					id: .init("alpha-root"),
+					axis: .horizontal,
+					preference: .user(0.5),
+					first: .leaf(leftPanelID),
+					second: .leaf(rightPanelID)
+				)
+			),
+		],
+		workspaces: [
+			testWorkspaceID: .init(
+				id: testWorkspaceID,
+				title: "Alpha",
+				detail: "Deterministic adoption fixture"
+			),
+		],
 		panels: [
 			leftPanelID: fixturePanel(leftPanelID, "Left"),
 			rightPanelID: fixturePanel(rightPanelID, "Right"),
-		]
-	)
-	return .init(
-		mode: .tiled,
-		virtualFocus: .init(workspaceID: testWorkspaceID, panelID: leftPanelID),
-		displayLayouts: [
-			testDisplayID: .init(displayID: testDisplayID, workspaceTree: .leaf(testWorkspaceID)),
 		],
-		workspaces: [testWorkspaceID: workspace],
 		panelKinds: try .init()
 	)
 }
@@ -758,40 +764,43 @@ let betaPanelID: PanelID = .init("beta-panel")
 /// adoptable slot, which is how the shipped showcase pairs Notes with providers.
 func testPresentationWithContentPanel() throws -> WorkspacePresentation {
 	var presentation: WorkspacePresentation = try testPresentation()
-	var workspace: WorkspaceDescriptor = try unwrap(
-		presentation.workspaces[testWorkspaceID],
-		"fixture Workspace is missing"
-	)
 	var panel: PanelDescriptor = try unwrap(
-		workspace.panels[rightPanelID],
+		presentation.panels[rightPanelID],
 		"fixture Panel is missing"
 	)
 	panel.nativeContent = .notes
-	workspace.panels[rightPanelID] = panel
-	presentation.workspaces[testWorkspaceID] = workspace
+	presentation.panels[rightPanelID] = panel
 	return presentation
 }
 
-/// Two tiled Workspaces on one display, so a drop can cross a Workspace border.
+/// Two groups interleaved in one canvas tree, so a drop can cross a group
+/// border without either group owning a rectangle.
 func testPresentationWithTwoWorkspaces() throws -> WorkspacePresentation {
 	var presentation: WorkspacePresentation = try testPresentation()
-	let beta: WorkspaceDescriptor = .init(
+	presentation.workspaces[betaWorkspaceID] = .init(
 		id: betaWorkspaceID,
 		title: "Beta",
-		detail: "Second Workspace",
-		displayAffinity: testDisplayID,
-		panelTree: .leaf(betaPanelID),
-		panels: [betaPanelID: fixturePanel(betaPanelID, "Beta Panel")]
+		detail: "Second Workspace"
 	)
-	presentation.workspaces[betaWorkspaceID] = beta
-	presentation.displayLayouts[testDisplayID] = .init(
+	presentation.panels[betaPanelID] = fixturePanel(
+		betaPanelID,
+		"Beta Panel",
+		betaWorkspaceID
+	)
+	presentation.canvases[testDisplayID] = .init(
 		displayID: testDisplayID,
-		workspaceTree: .split(
+		panelTree: .split(
 			id: .init("display-root"),
 			axis: .horizontal,
 			preference: .user(0.5),
-			first: .leaf(testWorkspaceID),
-			second: .leaf(betaWorkspaceID)
+			first: .split(
+				id: .init("alpha-root"),
+				axis: .horizontal,
+				preference: .user(0.5),
+				first: .leaf(leftPanelID),
+				second: .leaf(rightPanelID)
+			),
+			second: .leaf(betaPanelID)
 		)
 	)
 	return presentation

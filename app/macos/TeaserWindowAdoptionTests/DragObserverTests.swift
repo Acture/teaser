@@ -697,8 +697,7 @@ private func testSplitPanelDescribesTheWindowThatCreatedIt() throws {
 	harness.dropWindow(second, at: .init(x: panel.maxX - 12, y: panel.midY))
 
 	let descriptor: PanelDescriptor = try unwrap(
-		harness.orchestrator.presentation.workspaces[testWorkspaceID]?
-			.panels[.init("adopted-1")],
+		harness.orchestrator.presentation.panels[.init("adopted-1")],
 		"an edge drop must record a Panel descriptor"
 	)
 	try expect(

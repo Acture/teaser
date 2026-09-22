@@ -67,7 +67,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
 		presentation: orchestrator.presentation,
 		onResize: { [weak self] reference, ratio in
-			self?.orchestrator.setDividerRatio(ratio, scope: reference.scope, splitID: reference.splitID)
+			self?.orchestrator.setDividerRatio(ratio, canvasID: reference.displayID, splitID: reference.splitID)
 		},
 		onUndo: { [weak self] in self?.orchestrator.undoLastLayoutChange() }
 	)
@@ -88,9 +88,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onVirtualFocusChange: { [weak self] focus in
 			self?.orchestrator.setVirtualFocus(focus)
 		},
-		onWorkspaceFocusRequest: { [weak self] workspaceID in
-			self?.orchestrator.toggleWorkspaceFocus(workspaceID: workspaceID)
-		},
 		onPanelInputFocusRequest: { [weak self] panelID in
 			self?.orchestrator.setVirtualPanel(panelID)
 			self?.orchestrator.handInputToVirtualPanel()
@@ -98,8 +95,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onUndoRequest: { [weak self] in
 			self?.orchestrator.undoLastLayoutChange()
 		},
-		onDividerRatioChange: { [weak self] scope, splitID, ratio in
-			self?.orchestrator.setDividerRatio(ratio, scope: scope, splitID: splitID)
+		onDividerRatioChange: { [weak self] canvasID, splitID, ratio in
+			self?.orchestrator.setDividerRatio(ratio, canvasID: canvasID, splitID: splitID)
 		}
 	)
 
@@ -243,7 +240,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			snapshot: .init(
 				displayID: .init(canvas: id),
 				screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
-				workspaces: [],
 				panels: [],
 				dividers: [],
 				virtualFocus: orchestrator.presentation.virtualFocus,
@@ -750,7 +746,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				canvas.update(.init(
 					displayID: displayID,
 					screenFrame: canvasFrame,
-					workspaces: [],
 					panels: [],
 					dividers: [],
 					virtualFocus: presentation.virtualFocus,
@@ -771,13 +766,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		statusController.update(
 			.init(
 				arrangeModeEnabled: orchestrator.isArrangeModeEnabled,
-				workspaceFocused: {
-					if case .focused = presentation.mode { return true }
-					return false
-				}(),
+				workspaceFocused: presentation.canvases.values.contains {
+					$0.focus != nil
+				},
 				hasVirtualPanel: virtualPanelID != nil,
 				canSplit: organization.client.canApply && virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
-				canCycleWorkspaces: orchestrator.workspaceOrder().count > 1,
+				canCycleWorkspaces: presentation.canvases.keys.contains {
+					presentation.workspaceOrder(onCanvas: $0).count > 1
+				},
 				canHandInputToPanel: canHandInput,
 				canUndo: orchestrator.canUndo,
 				accessibility: accessibility,
@@ -787,11 +783,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 	}
 
-	/// A highlight belongs to the canvas whose Workspace it points at, so a drag
-	/// never lights up a Panel outline on a canvas it cannot land on.
+	/// A highlight belongs to the canvas holding the Panel it points at, so a
+	/// drag never lights up a Panel outline on a canvas it cannot land on.
 	private func dropHighlight(on displayID: DisplayID) -> DesktopOverlayDropHighlight? {
 		guard let highlight: DesktopOverlayDropHighlight = orchestrator.dropHighlight,
-			orchestrator.presentation.workspaces[highlight.workspaceID]?.displayAffinity == displayID
+			orchestrator.presentation.canvasID(containing: highlight.panelID) == displayID
 		else { return nil }
 		return highlight
 	}
@@ -810,12 +806,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	}
 
 	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
-		var result: Set<PanelID> = []
-		for workspace: WorkspaceDescriptor in orchestrator.presentation.workspaces.values
-		where workspace.displayAffinity == displayID {
-			result.formUnion(workspace.panels.keys)
-		}
-		return result
+		.init(orchestrator.presentation.panelIDs(onCanvas: displayID))
 	}
 
 	// MARK: - Teaser-owned Panel content
@@ -825,17 +816,20 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private func updateNotesPanels(using layout: PresentationLayout) {
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		var hosted: [CanvasID: Set<PanelID>] = [:]
-		for workspace: WorkspaceDescriptor in presentation.workspaces.values {
-			guard let canvasID: CanvasID = canvasID(forDisplay: workspace.displayAffinity),
+		for displayID: DisplayID in presentation.canvases.keys {
+			guard let canvasID: CanvasID = canvasID(forDisplay: displayID),
 				let canvas: DesktopCanvasWindow = canvases[canvasID]
 			else { continue }
-			for panel: PanelDescriptor in workspace.panels.values
-			where panel.nativeContent == .notes {
-				guard let frame: LayoutRect = layout.panelFrames[panel.id] else { continue }
-				let controller: NotesPanelController = notesPanels[panel.id] ?? makeNotesPanel(for: panel)
-				notesPanels[panel.id] = controller
-				canvas.setContent(controller.view, for: panel.id, frame: frame)
-				hosted[canvasID, default: []].insert(panel.id)
+			for panelID: PanelID in presentation.panelIDs(onCanvas: displayID) {
+				guard let panel: PanelDescriptor = presentation.panels[panelID],
+					panel.nativeContent == .notes,
+					let frame: LayoutRect = layout.panelFrames[panelID]
+				else { continue }
+				let controller: NotesPanelController = notesPanels[panelID]
+					?? makeNotesPanel(for: panel)
+				notesPanels[panelID] = controller
+				canvas.setContent(controller.view, for: panelID, frame: frame)
+				hosted[canvasID, default: []].insert(panelID)
 			}
 		}
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
@@ -904,8 +898,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private static func loadInitialState() -> InitialState {
 		// The legacy file remains untouched. It is never imported into the server
 		// graph or overwritten with an empty shared projection.
-		let presentation: WorkspacePresentation = .init(mode: .tiled, virtualFocus: .none,
-			displayLayouts: [:], workspaces: [:], panelKinds: try! .init())
+		let presentation: WorkspacePresentation = .init(panelKinds: try! .init())
 		do {
 			return .init(presentation: presentation, notes: [:], store: try PresentationStore.live(),
 				statusMessage: "Connect to an explicit Herdr socket in Connection & Organization.")

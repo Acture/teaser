@@ -1,17 +1,14 @@
 import Foundation
 
-// Immutable per-display overlay input. These values carry no window, view, or
+// Immutable per-canvas overlay input. These values carry no window, view, or
 // AppKit state, so the orchestration that produces them stays testable without a
 // desktop.
 
-struct DesktopOverlayWorkspace: Equatable, Identifiable, Sendable {
-	let id: WorkspaceID
-	let title: String
-	let frame: LayoutRect
-}
-
 struct DesktopOverlayPanel: Equatable, Identifiable, Sendable {
 	let id: PanelID
+	/// Which group this Panel belongs to. It is carried per Panel rather than
+	/// per rectangle because a Workspace has no rectangle: its outline is
+	/// derived from whichever of its Panels happen to be adjacent.
 	let workspaceID: WorkspaceID
 	let title: String
 	let kindID: PanelKindID
@@ -19,20 +16,17 @@ struct DesktopOverlayPanel: Equatable, Identifiable, Sendable {
 }
 
 struct DesktopOverlayDropHighlight: Equatable, Sendable {
-	let workspaceID: WorkspaceID
 	let panelID: PanelID
 	let edge: LayoutEdge?
 	let frame: LayoutRect
 	let label: String?
 
 	init(
-		workspaceID: WorkspaceID,
 		panelID: PanelID,
 		edge: LayoutEdge? = nil,
 		frame: LayoutRect,
 		label: String? = nil
 	) {
-		self.workspaceID = workspaceID
 		self.panelID = panelID
 		self.edge = edge
 		self.frame = frame
@@ -43,7 +37,6 @@ struct DesktopOverlayDropHighlight: Equatable, Sendable {
 struct DesktopOverlaySnapshot: Equatable, Sendable {
 	let displayID: DisplayID
 	let screenFrame: LayoutRect
-	let workspaces: [DesktopOverlayWorkspace]
 	let panels: [DesktopOverlayPanel]
 	let dividers: [LayoutDivider]
 	let virtualFocus: VirtualFocusState
@@ -55,7 +48,6 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 	init(
 		displayID: DisplayID,
 		screenFrame: LayoutRect,
-		workspaces: [DesktopOverlayWorkspace],
 		panels: [DesktopOverlayPanel],
 		dividers: [LayoutDivider],
 		virtualFocus: VirtualFocusState,
@@ -66,7 +58,6 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 	) {
 		self.displayID = displayID
 		self.screenFrame = screenFrame
-		self.workspaces = workspaces
 		self.panels = panels
 		self.dividers = dividers
 		self.virtualFocus = virtualFocus
@@ -86,56 +77,25 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 		dropHighlight: DesktopOverlayDropHighlight? = nil,
 		status: String? = nil
 	) {
-		let displayWorkspaces: [WorkspaceDescriptor] = presentation.workspaces
-			.values
-			.filter {
-				$0.displayAffinity == displayID
-					&& layout.workspaceFrames[$0.id] != nil
-			}
-			.sorted { $0.id.rawValue < $1.id.rawValue }
-		let workspaceIDs: Set<WorkspaceID> = .init(
-			displayWorkspaces.map(\.id)
-		)
-
 		self.init(
 			displayID: displayID,
 			screenFrame: screenFrame,
-			workspaces: displayWorkspaces.compactMap { workspace in
-				guard let frame: LayoutRect = layout.workspaceFrames[workspace.id]
-				else {
-					return nil
-				}
+			// This canvas's Panels only. Another canvas's Panels are solved into
+			// that canvas's rectangle and must never be drawn here.
+			panels: presentation.panelIDs(onCanvas: displayID).compactMap { panelID in
+				guard let panel: PanelDescriptor = presentation.panels[panelID],
+					let frame: LayoutRect = layout.panelFrames[panelID]
+				else { return nil }
 				return .init(
-					id: workspace.id,
-					title: workspace.title,
+					id: panelID,
+					workspaceID: panel.workspaceID,
+					title: panel.providerHint.map { "\($0.displayName) · \(panel.title)" }
+						?? panel.title,
+					kindID: panel.kindID,
 					frame: frame
 				)
 			},
-			panels: displayWorkspaces.flatMap { workspace in
-				workspace.panels.values
-					.compactMap { panel in
-						guard let frame: LayoutRect = layout.panelFrames[panel.id]
-						else {
-							return nil
-						}
-						return .init(
-							id: panel.id,
-							workspaceID: workspace.id,
-							title: panel.providerHint.map { "\($0.displayName) · \(panel.title)" } ?? panel.title,
-							kindID: panel.kindID,
-							frame: frame
-						)
-					}
-					.sorted { $0.id.rawValue < $1.id.rawValue }
-			},
-			dividers: layout.dividers.filter { divider in
-				switch divider.scope {
-				case .display(let dividerDisplayID):
-					return dividerDisplayID == displayID
-				case .workspace(let workspaceID):
-					return workspaceIDs.contains(workspaceID)
-				}
-			},
+			dividers: layout.dividers.filter { $0.displayID == displayID },
 			virtualFocus: presentation.virtualFocus,
 			arrangeMode: arrangeMode,
 			dragActive: dragActive,

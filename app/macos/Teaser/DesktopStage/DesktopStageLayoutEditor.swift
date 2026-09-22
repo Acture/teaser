@@ -17,8 +17,8 @@ enum LayoutEditorCoordinates {
 /// A projection of the orchestrator, never a separate layout/persistence owner.
 @MainActor
 final class DesktopStageLayoutEditorModel: ObservableObject {
-	struct ScopeChoice: Identifiable {
-		let id: LayoutScope
+	struct CanvasChoice: Identifiable {
+		let id: DisplayID
 		let title: String
 	}
 
@@ -54,12 +54,13 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 		self.onUndo = onUndo
 	}
 
-	var scopes: [ScopeChoice] {
-		state.presentation.displayLayouts.keys.sorted { $0.rawValue < $1.rawValue }.enumerated().map {
-			.init(id: .display($0.element), title: "Display \($0.offset + 1)")
-		} + state.presentation.workspaces.values.sorted { $0.id.rawValue < $1.id.rawValue }.map {
-			.init(id: .workspace($0.id), title: $0.title)
-		}
+	/// One tree per canvas, so the picker lists canvases. A Workspace is not a
+	/// scope any more: it is a label on the Panels inside these trees.
+	var canvases: [CanvasChoice] {
+		state.presentation.canvases.keys
+			.sorted { $0.rawValue < $1.rawValue }
+			.enumerated()
+			.map { .init(id: $0.element, title: "Canvas \($0.offset + 1)") }
 	}
 
 	func update(from orchestrator: DesktopStageOrchestrator) {
@@ -105,16 +106,16 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 }
 
 @MainActor
-private struct LayoutEditorTree<Leaf, Content: View>: View where Leaf: Codable & Hashable & Sendable {
-	let tree: LayoutTree<Leaf>
-	let scope: LayoutScope
+private struct LayoutEditorTree<Content: View>: View {
+	let tree: LayoutTree<PanelID>
+	let displayID: DisplayID
 	let model: DesktopStageLayoutEditorModel
-	let content: (Leaf) -> Content
+	let content: (PanelID) -> Content
 
 	var body: some View { render(tree) }
 
 	// Recursive layout trees require type erasure at this boundary.
-	private func render(_ node: LayoutTree<Leaf>) -> AnyView {
+	private func render(_ node: LayoutTree<PanelID>) -> AnyView {
 		switch node {
 		case .leaf(let leaf):
 			AnyView(content(leaf))
@@ -126,7 +127,7 @@ private struct LayoutEditorTree<Leaf, Content: View>: View where Leaf: Codable &
 					render(axis == .horizontal ? second : first)
 				}
 				.layout(LayoutHolder(axis == .horizontal ? .horizontal : .vertical))
-				.fraction(model.fractionHolder(for: .init(scope: scope, splitID: id),
+				.fraction(model.fractionHolder(for: .init(displayID: displayID, splitID: id),
 					axis: axis, preference: preference))
 				// These are editor handle limits, not provider-window size claims.
 				.constraints(minPFraction: 0.05, minSFraction: 0.05)
@@ -139,15 +140,16 @@ private struct LayoutEditorTree<Leaf, Content: View>: View where Leaf: Codable &
 @MainActor
 private struct DesktopStageLayoutEditorView: View {
 	@ObservedObject var model: DesktopStageLayoutEditorModel
-	@State private var selection: LayoutScope?
+	@State private var selection: DisplayID?
 
 	var body: some View {
 		let presentation: WorkspacePresentation = model.state.presentation
-		let selected: LayoutScope? = model.scopes.first { $0.id == selection }?.id ?? model.scopes.first?.id
+		let selected: DisplayID? = model.canvases.first { $0.id == selection }?.id
+			?? model.canvases.first?.id
 		VStack(alignment: .leading, spacing: 12) {
 			HStack {
 				Picker("Layout", selection: Binding(get: { selected }, set: { selection = $0 })) {
-					ForEach(model.scopes) { scope in Text(scope.title).tag(Optional(scope.id)) }
+					ForEach(model.canvases) { canvas in Text(canvas.title).tag(Optional(canvas.id)) }
 				}
 				.frame(maxWidth: 340)
 				Spacer()
@@ -160,19 +162,16 @@ private struct DesktopStageLayoutEditorView: View {
 				: "Layout stopped. Edit saved proportions without moving any windows.")
 				.font(.callout).foregroundStyle(.secondary)
 			Group {
-				switch selected {
-				case .display(let id):
-					if case .focused(let workspaceID) = presentation.mode,
-						presentation.workspaces[workspaceID]?.displayAffinity == id
-					{
-						workspace(workspaceID)
-					} else if case .focused = presentation.mode {
-						Text("No workspace on this display in Focus mode.")
-					} else if let tree: LayoutTree<WorkspaceID> = presentation.displayLayouts[id]?.workspaceTree {
-						LayoutEditorTree(tree: tree, scope: .display(id), model: model, content: workspace)
+				if let selected, let tree: LayoutTree<PanelID> = presentation
+					.canvases[selected]?.panelTree
+				{
+					LayoutEditorTree(tree: tree, displayID: selected, model: model) { panelID in
+						panel(panelID)
 					}
-				case .workspace(let id): workspace(id)
-				case nil: Text("No layout available")
+				} else if selected != nil {
+					Text("This canvas is empty.")
+				} else {
+					Text("No layout available")
 				}
 			}
 			.id(model.revision)
@@ -184,28 +183,27 @@ private struct DesktopStageLayoutEditorView: View {
 		.padding(16)
 	}
 
-	@ViewBuilder private func workspace(_ id: WorkspaceID) -> some View {
-		if let workspace: WorkspaceDescriptor = model.state.presentation.workspaces[id] {
-			VStack(alignment: .leading, spacing: 4) {
-				Text(workspace.title).font(.headline).lineLimit(1)
-				LayoutEditorTree(tree: workspace.panelTree, scope: .workspace(id), model: model) { panelID in
-					VStack(alignment: .leading, spacing: 4) {
-						Text(workspace.panels[panelID]?.title ?? panelID.rawValue)
-							.font(.callout).lineLimit(2)
-						Text(panelStatus(panelID, workspace: workspace))
-							.font(.caption).foregroundStyle(.secondary).lineLimit(1)
-					}
-					.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-					.background(Color(nsColor: .textBackgroundColor)).clipped()
-				}
-			}
-			.padding(6).background(Color(nsColor: .controlBackgroundColor)).clipped()
+	/// Each leaf names its group, which is the only place a Workspace appears in
+	/// this map now: it labels Panels rather than owning a region of the canvas.
+	@ViewBuilder private func panel(_ panelID: PanelID) -> some View {
+		let presentation: WorkspacePresentation = model.state.presentation
+		let descriptor: PanelDescriptor? = presentation.panels[panelID]
+		VStack(alignment: .leading, spacing: 4) {
+			Text(descriptor?.title ?? panelID.rawValue)
+				.font(.callout).lineLimit(2)
+			Text(descriptor.flatMap { presentation.workspaces[$0.workspaceID]?.title }
+				?? "No group")
+				.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+			Text(panelStatus(panelID, descriptor: descriptor))
+				.font(.caption).foregroundStyle(.secondary).lineLimit(1)
 		}
+		.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+		.background(Color(nsColor: .textBackgroundColor)).clipped()
 	}
 
-	private func panelStatus(_ id: PanelID, workspace: WorkspaceDescriptor) -> String {
+	private func panelStatus(_ id: PanelID, descriptor: PanelDescriptor?) -> String {
 		if model.state.assignedPanels.contains(id) { return "Connected window" }
-		if workspace.panels[id]?.nativeContent == .notes { return "Teaser Notes" }
+		if descriptor?.nativeContent == .notes { return "Teaser Notes" }
 		return "Empty panel"
 	}
 }

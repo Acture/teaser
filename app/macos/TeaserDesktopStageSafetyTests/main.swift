@@ -18,10 +18,10 @@ private func makeCanvas(
 		snapshot: .init(
 			displayID: .init(canvas: id),
 			screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
-			workspaces: [], panels: [], dividers: [],
-			virtualFocus: .init(workspaceID: nil, panelID: nil), arrangeMode: false
+			panels: [], dividers: [],
+			virtualFocus: .none, arrangeMode: false
 		),
-		callbacks: .init(onVirtualFocusChange: { _ in }, onWorkspaceFocusRequest: { _ in },
+		callbacks: .init(onVirtualFocusChange: { _ in },
 			onDividerRatioChange: { _, _, _ in }),
 		onEvent: onEvent,
 		onBecameKey: { _ in },

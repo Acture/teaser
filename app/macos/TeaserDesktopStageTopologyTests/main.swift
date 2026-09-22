@@ -34,6 +34,8 @@ private func display(
 	)
 }
 
+/// A canvas is a window, not a monitor, so a presentation already addressing
+/// canvases that exist has nothing to adapt.
 private func testCurrentTopologyIsNotRewritten() throws {
 	let display: DesktopStageDisplay = display(
 		ShowcasePreset.mainDisplayID.rawValue,
@@ -52,114 +54,78 @@ private func testCurrentTopologyIsNotRewritten() throws {
 	)
 }
 
-private func testChangedTopologyIsBalancedWithoutStraddling() throws {
-	let savedDisplay: DisplayID = .init("saved-display")
+/// The one case that is real: a canvas whose ID is gone. Its Panels would
+/// otherwise sit in a tree no canvas rectangle is ever solved for, so they are
+/// adopted by a canvas that still exists rather than disappearing.
+private func testPanelsOfAVanishedCanvasAreAdopted() throws {
+	let saved: DisplayID = .init("saved-display")
 	let original: WorkspacePresentation = ShowcasePreset.presentation(
-		displayID: savedDisplay
+		displayID: saved
 	)
-	let expectedOrder: [WorkspaceID] = original.displayLayouts[
-		savedDisplay
-	]!.workspaceTree.leaves
-	let displays: [DesktopStageDisplay] = [
-		display("new-main", x: 0),
-		display("new-secondary", x: 6_000),
-	]
+	let placed: [PanelID] = original.panelIDs(onCanvas: saved)
+	try expect(placed.count == 9, "the fixture places nine Panels")
+
+	let live: DesktopStageDisplay = display("live-display", x: 0)
 	let result: (presentation: WorkspacePresentation, changed: Bool) =
-		DesktopStageDisplayTopology.adapt(original, to: displays)
+		DesktopStageDisplayTopology.adapt(original, to: [live])
 
-	try expect(result.changed, "a disconnected saved display must trigger adaptation")
+	try expect(result.changed, "a vanished canvas must be adapted away")
 	try expect(
-		Set(result.presentation.displayLayouts.keys) == Set(displays.map(\.id)),
-		"only connected displays may own Workspace trees"
+		result.presentation.canvases[saved] == nil,
+		"the vanished canvas must not remain addressable"
 	)
-	let firstIDs: [WorkspaceID] = result.presentation.displayLayouts[
-		displays[0].id
-	]!.workspaceTree.leaves
-	let secondIDs: [WorkspaceID] = result.presentation.displayLayouts[
-		displays[1].id
-	]!.workspaceTree.leaves
-	try expect(firstIDs.count == 3, "six Workspaces must split evenly across two displays")
-	try expect(secondIDs.count == 3, "six Workspaces must split evenly across two displays")
 	try expect(
-		firstIDs + secondIDs == expectedOrder,
-		"adaptation must preserve saved Workspace order"
+		Set(result.presentation.panelIDs(onCanvas: live.id)) == Set(placed),
+		"every Panel must land on a canvas that still exists"
 	)
-
-	let displayFrames: [DisplayID: LayoutRect] = Dictionary(
-		uniqueKeysWithValues: displays.map { ($0.id, $0.frame) }
-	)
-	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
-		presentation: result.presentation,
-		displayFrames: displayFrames
-	)
-	for display: DesktopStageDisplay in displays {
-		let workspaceIDs: [WorkspaceID] = result.presentation.displayLayouts[
-			display.id
-		]!.workspaceTree.leaves
-		for workspaceID: WorkspaceID in workspaceIDs {
-			try expect(
-				result.presentation.workspaces[workspaceID]?.displayAffinity
-					== display.id,
-				"Workspace affinity must follow its rebuilt display tree"
-			)
-			try expect(
-				display.frame.contains(layout.workspaceFrames[workspaceID]!),
-				"a Workspace must never straddle displays"
-			)
-		}
+	// Membership is not placement: adopting a canvas's Panels must not regroup
+	// any of them.
+	for panelID: PanelID in placed {
+		try expect(
+			result.presentation.workspaceID(of: panelID)
+				== original.workspaceID(of: panelID),
+			"adoption must not change \(panelID.rawValue)'s group"
+		)
 	}
+
+	let again: (presentation: WorkspacePresentation, changed: Bool) =
+		DesktopStageDisplayTopology.adapt(result.presentation, to: [live])
+	try expect(!again.changed, "a second pass must be stable")
+	try expect(
+		again.presentation == result.presentation,
+		"a stable second pass must not rebuild the tree"
+	)
 }
 
-private func testMissingWorkspacesAreAppendedDeterministically() throws {
-	let display: DesktopStageDisplay = display(
-		ShowcasePreset.mainDisplayID.rawValue,
-		x: 0
+/// With several canvases alive, the orphans go to one of them by a rule that
+/// does not depend on dictionary order.
+private func testAdoptionIsDeterministic() throws {
+	let saved: DisplayID = .init("zz-vanished")
+	let original: WorkspacePresentation = ShowcasePreset.presentation(
+		displayID: saved
 	)
-	var malformed: WorkspacePresentation = ShowcasePreset.presentation(
-		displayID: display.id
-	)
-	try malformed.displayLayouts[display.id]!.workspaceTree.remove(
-		ShowcasePreset.researchWorkspaceID
-	)
-	try malformed.displayLayouts[display.id]!.workspaceTree.remove(
-		ShowcasePreset.paperWorkspaceID
-	)
-	let savedOrder: [WorkspaceID] = malformed.displayLayouts[
-		display.id
-	]!.workspaceTree.leaves
-	let expectedMissing: [WorkspaceID] = [
-		ShowcasePreset.paperWorkspaceID,
-		ShowcasePreset.researchWorkspaceID,
+	let displays: [DesktopStageDisplay] = [
+		display("bbb", x: 0),
+		display("aaa", x: 6_000),
 	]
-
 	let first: (presentation: WorkspacePresentation, changed: Bool) =
-		DesktopStageDisplayTopology.adapt(malformed, to: [display])
+		DesktopStageDisplayTopology.adapt(original, to: displays)
 	let second: (presentation: WorkspacePresentation, changed: Bool) =
-		DesktopStageDisplayTopology.adapt(malformed, to: [display])
-	try expect(first.changed, "an unplaced Workspace makes saved topology stale")
-	try expect(
-		first.presentation.displayLayouts[display.id]!.workspaceTree.leaves
-			== savedOrder + expectedMissing,
-		"unplaced Workspaces must follow saved order in stable ID order"
-	)
+		DesktopStageDisplayTopology.adapt(original, to: displays.reversed())
 	try expect(
 		first.presentation == second.presentation,
-		"the rebuilt balanced topology must be deterministic"
+		"adoption must not depend on the order displays are reported in"
 	)
-
-	let stable: (presentation: WorkspacePresentation, changed: Bool) =
-		DesktopStageDisplayTopology.adapt(first.presentation, to: [display])
-	try expect(!stable.changed, "a rebuilt topology must be stable on the next launch")
 	try expect(
-		stable.presentation == first.presentation,
-		"a stable second pass must not rebuild the balanced tree"
+		!first.presentation.panelIDs(onCanvas: .init("aaa")).isEmpty,
+		"the lowest-sorting canvas takes the orphans"
 	)
 }
 
 do {
 	try testCurrentTopologyIsNotRewritten()
-	try testChangedTopologyIsBalancedWithoutStraddling()
-	try testMissingWorkspacesAreAppendedDeterministically()
+	try testPanelsOfAVanishedCanvasAreAdopted()
+	try testAdoptionIsDeterministic()
 	print("Teaser desktop-stage topology tests passed")
 } catch {
 	fputs("Teaser desktop-stage topology tests failed: \(error)\n", stderr)

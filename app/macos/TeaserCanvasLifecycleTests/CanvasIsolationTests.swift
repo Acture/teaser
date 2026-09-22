@@ -55,103 +55,87 @@ private let aSoloPanelID: PanelID = .init("a-solo")
 private let bLeftPanelID: PanelID = .init("b-left")
 private let bRightPanelID: PanelID = .init("b-right")
 
-/// Two canvases, three Workspaces: Alpha and Gamma on canvas A, Delta on
-/// canvas B. Every Workspace names its own canvas as its display affinity and
-/// every canvas has its own display layout, which is the shape the canvas host
-/// produces and the shape non-shared `setDisplays` must accept unchanged.
+/// Two canvases, three groups: Alpha and Gamma interleaved in canvas A's one
+/// tree, Delta in canvas B's. A canvas holds Panels, not Workspaces, so canvas
+/// A proves per-canvas release reaches every group placed on it — and that two
+/// groups can share one tree without either owning a rectangle.
 private func twoCanvasPresentation(
-	mode: WorkspacePresentationMode = .tiled
+	focus: CanvasFocus? = nil
 ) throws -> WorkspacePresentation {
-	let alpha: WorkspaceDescriptor = .init(
-		id: alphaWorkspaceID,
-		title: "Alpha",
-		detail: "Canvas A, first Workspace",
-		displayAffinity: displayA,
-		panelTree: .split(
-			id: .init("alpha-root"),
-			axis: .horizontal,
-			preference: .user(0.5),
-			first: .leaf(aLeftPanelID),
-			second: .leaf(aRightPanelID)
-		),
-		panels: [
-			aLeftPanelID: fixturePanel(aLeftPanelID, "A Left"),
-			aRightPanelID: fixturePanel(aRightPanelID, "A Right"),
-		]
-	)
-	let gamma: WorkspaceDescriptor = .init(
-		id: gammaWorkspaceID,
-		title: "Gamma",
-		detail: "Canvas A, second Workspace",
-		displayAffinity: displayA,
-		panelTree: .leaf(aSoloPanelID),
-		panels: [aSoloPanelID: fixturePanel(aSoloPanelID, "A Solo")]
-	)
-	let delta: WorkspaceDescriptor = .init(
-		id: deltaWorkspaceID,
-		title: "Delta",
-		detail: "Canvas B",
-		displayAffinity: displayB,
-		panelTree: .split(
-			id: .init("delta-root"),
-			axis: .horizontal,
-			preference: .user(0.5),
-			first: .leaf(bLeftPanelID),
-			second: .leaf(bRightPanelID)
-		),
-		panels: [
-			bLeftPanelID: fixturePanel(bLeftPanelID, "B Left"),
-			bRightPanelID: fixturePanel(bRightPanelID, "B Right"),
-		]
-	)
-	return .init(
-		mode: mode,
+	.init(
 		virtualFocus: .none,
-		displayLayouts: [
+		canvases: [
 			displayA: .init(
 				displayID: displayA,
-				workspaceTree: .split(
+				panelTree: .split(
 					id: .init("canvas-a-root"),
 					axis: .vertical,
 					preference: .user(0.5),
-					first: .leaf(alphaWorkspaceID),
-					second: .leaf(gammaWorkspaceID)
-				)
+					first: .split(
+						id: .init("alpha-root"),
+						axis: .horizontal,
+						preference: .user(0.5),
+						first: .leaf(aLeftPanelID),
+						second: .leaf(aRightPanelID)
+					),
+					second: .leaf(aSoloPanelID)
+				),
+				focus: focus
 			),
 			displayB: .init(
 				displayID: displayB,
-				workspaceTree: .leaf(deltaWorkspaceID)
+				panelTree: .split(
+					id: .init("delta-root"),
+					axis: .horizontal,
+					preference: .user(0.5),
+					first: .leaf(bLeftPanelID),
+					second: .leaf(bRightPanelID)
+				)
 			),
 		],
 		workspaces: [
-			alphaWorkspaceID: alpha,
-			gammaWorkspaceID: gamma,
-			deltaWorkspaceID: delta,
+			alphaWorkspaceID: .init(
+				id: alphaWorkspaceID,
+				title: "Alpha",
+				detail: "Canvas A, first group"
+			),
+			gammaWorkspaceID: .init(
+				id: gammaWorkspaceID,
+				title: "Gamma",
+				detail: "Canvas A, second group"
+			),
+			deltaWorkspaceID: .init(
+				id: deltaWorkspaceID,
+				title: "Delta",
+				detail: "Canvas B"
+			),
+		],
+		panels: [
+			aLeftPanelID: fixturePanel(aLeftPanelID, "A Left", alphaWorkspaceID),
+			aRightPanelID: fixturePanel(aRightPanelID, "A Right", alphaWorkspaceID),
+			aSoloPanelID: fixturePanel(aSoloPanelID, "A Solo", gammaWorkspaceID),
+			bLeftPanelID: fixturePanel(bLeftPanelID, "B Left", deltaWorkspaceID),
+			bRightPanelID: fixturePanel(bRightPanelID, "B Right", deltaWorkspaceID),
 		],
 		panelKinds: try .init()
 	)
 }
 
-/// Both Workspaces on canvas A. With one canvas open this is what the shared
-/// projection produces; with two canvases open, display-topology rebalancing
-/// would split them across the canvases, which shared mode must never do.
+/// Only canvas A. With one canvas open this is what the shared projection
+/// produces, and closing canvas B must never redistribute its Panels here.
 private func oneCanvasPresentation() throws -> WorkspacePresentation {
 	var presentation: WorkspacePresentation = try twoCanvasPresentation()
+	presentation.canvases.removeValue(forKey: displayB)
+	presentation.panels.removeValue(forKey: bLeftPanelID)
+	presentation.panels.removeValue(forKey: bRightPanelID)
 	presentation.workspaces.removeValue(forKey: deltaWorkspaceID)
-	presentation.displayLayouts.removeValue(forKey: displayB)
 	return presentation
 }
 
 /// No canvas is open and nothing is placed: what the app holds before the first
 /// canvas window exists, and what it returns to when the last one closes.
 private func emptyCanvasPresentation() throws -> WorkspacePresentation {
-	.init(
-		mode: .tiled,
-		virtualFocus: .none,
-		displayLayouts: [:],
-		workspaces: [:],
-		panelKinds: try .init()
-	)
+	.init(panelKinds: try .init())
 }
 
 // MARK: - Two-canvas world
@@ -298,11 +282,9 @@ private func testClosingACanvasReleasesOnlyItsOwnWindows() throws {
 	// Organization is server-owned: a closing canvas hides its Workspaces, it
 	// never hands them to a canvas that is still open.
 	try expect(
-		world.orchestrator.presentation.workspaces[alphaWorkspaceID]?
-			.displayAffinity == displayA
-			&& world.orchestrator.presentation.workspaces[gammaWorkspaceID]?
-				.displayAffinity == displayA,
-		"a closed canvas keeps its Workspaces; they are never redistributed"
+		world.orchestrator.presentation.canvasID(containing: aLeftPanelID) == displayA
+			&& world.orchestrator.presentation.canvasID(containing: aSoloPanelID) == displayA,
+		"a closed canvas keeps its Panels; they are never redistributed"
 	)
 }
 
@@ -446,12 +428,12 @@ private func testSharedModeNeverRebalancesAcrossCanvases() throws {
 	func expectUnchanged(_ message: String) throws {
 		let now: WorkspacePresentation = world.orchestrator.presentation
 		try expect(
-			now.workspaces == before.workspaces,
-			"\(message): a Workspace's canvas or panel tree changed"
+			now.workspaces == before.workspaces && now.panels == before.panels,
+			"\(message): group membership or a Panel descriptor changed"
 		)
 		try expect(
-			now.displayLayouts == before.displayLayouts,
-			"\(message): a canvas's Workspace tree changed"
+			now.canvases == before.canvases,
+			"\(message): a canvas's Panel tree changed"
 		)
 	}
 
@@ -467,43 +449,45 @@ private func testSharedModeNeverRebalancesAcrossCanvases() throws {
 	try expectUnchanged("settling back to one canvas")
 
 	try expect(
-		world.orchestrator.presentation.workspaces.values.allSatisfy {
-			$0.displayAffinity == displayA
+		world.orchestrator.presentation.panels.keys.allSatisfy {
+			world.orchestrator.presentation.canvasID(containing: $0) == displayA
 		},
-		"placement is the projection's, so no Workspace may follow a new display"
+		"placement is the projection's, so no Panel may follow a new display"
 	)
 	try expect(
-		Set(world.orchestrator.presentation.displayLayouts.keys) == [displayA],
-		"a canvas with no Workspaces must not be given one"
+		Set(world.orchestrator.presentation.canvases.keys) == [displayA],
+		"a canvas with no Panels must not be given one"
 	)
 }
 
 @MainActor
 private func testFocusFallsBackOnlyOnTheClosingCanvas() throws {
 	let closing: CanvasWorld = .init(
-		presentation: try twoCanvasPresentation(mode: .focused(alphaWorkspaceID))
+		presentation: try twoCanvasPresentation(focus: .emphasised(alphaWorkspaceID))
 	)
 	closing.orchestrator.releaseWindows(onDisplay: displayA)
 	try expect(
-		closing.orchestrator.presentation.mode == .tiled,
-		"a focused Workspace whose canvas closes has nowhere to fill, so it tiles"
+		closing.orchestrator.presentation.canvases[displayA]?.focus == nil,
+		"a closed canvas stops emphasising anything"
 	)
 
-	let surviving: CanvasWorld = .init(
-		presentation: try twoCanvasPresentation(mode: .focused(deltaWorkspaceID))
-	)
-	let before: WorkspaceDescriptor = try unwrap(
-		surviving.orchestrator.presentation.workspaces[deltaWorkspaceID],
-		"the fixture must place a Workspace on canvas B"
+	// Focus belongs to one canvas, so closing a different one cannot end it.
+	var focused: WorkspacePresentation = try twoCanvasPresentation()
+	focused.focusWorkspace(deltaWorkspaceID, onCanvas: displayB)
+	let surviving: CanvasWorld = .init(presentation: focused)
+	let before: CanvasLayout = try unwrap(
+		surviving.orchestrator.presentation.canvases[displayB],
+		"the fixture must place Panels on canvas B"
 	)
 	surviving.orchestrator.releaseWindows(onDisplay: displayA)
 	try expect(
-		surviving.orchestrator.presentation.mode == .focused(deltaWorkspaceID),
-		"focus fills one canvas, so closing another must not end it"
+		surviving.orchestrator.presentation.canvases[displayB]?.focus
+			== .emphasised(deltaWorkspaceID),
+		"focus is per canvas, so closing another must not end it"
 	)
 	try expect(
-		surviving.orchestrator.presentation.workspaces[deltaWorkspaceID] == before,
-		"the surviving canvas's Workspace must be untouched by the close"
+		surviving.orchestrator.presentation.canvases[displayB] == before,
+		"the surviving canvas must be untouched by the close"
 	)
 }
 
@@ -522,8 +506,7 @@ private func testClosingTheLastCanvasSolvesAnEmptyLayout() throws {
 		"an empty presentation with no canvas must still solve"
 	)
 	try expect(
-		layout.panelFrames.isEmpty && layout.workspaceFrames.isEmpty
-			&& layout.dividers.isEmpty,
+		layout.panelFrames.isEmpty && layout.dividers.isEmpty,
 		"nothing placed must solve to nothing drawn"
 	)
 	try expect(
@@ -602,20 +585,22 @@ private func testProjectionKeepsEachCanvasItsOwnWorkspaces() throws {
 			workspaces: [(id: workspaceAID, panels: ["pa-1", "pa-2"])]
 		)
 	)
-	let workspaceA: WorkspaceID = .init(workspaceAID)
 	let workspaceB: WorkspaceID = .init(workspaceBID)
+	let panelsA: [PanelID] = ["pa-1", "pa-2"].map { PanelID($0) }
+	let panelsB: [PanelID] = ["pb-1", "pb-2"].map { PanelID($0) }
 	let treeA: LayoutTree<PanelID> = try unwrap(
-		harness.orchestrator.presentation.workspaces[workspaceA]?.panelTree,
-		"the first Workspace must be placed on the target canvas"
+		harness.orchestrator.presentation.canvases[displayA]?.panelTree,
+		"the first group's Panels must be seated on the target canvas"
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceA]?
-			.displayAffinity == displayA,
-		"a Workspace with no placement yet lands on the canvas the person used"
+		panelsA.allSatisfy {
+			harness.orchestrator.presentation.canvasID(containing: $0) == displayA
+		},
+		"a Panel with no seat yet lands on the canvas the person used"
 	)
 
-	// A second Workspace arrives while canvas B is the target: it lands there,
-	// and the first one keeps the canvas it already has.
+	// A second group arrives while canvas B is the target: its Panels land
+	// there, and the first group's keep the canvas they already have.
 	session.setTargetDisplay(displayB)
 	try deliver(
 		organizationSnapshot(
@@ -627,20 +612,25 @@ private func testProjectionKeepsEachCanvasItsOwnWorkspaces() throws {
 		)
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceA]?
-			.displayAffinity == displayA
-			&& harness.orchestrator.presentation.workspaces[workspaceA]?
-				.panelTree == treeA,
-		"a placed Workspace keeps its canvas and its tree across snapshots"
+		harness.orchestrator.presentation.canvases[displayA]?.panelTree == treeA,
+		"a seated Panel keeps its canvas and its tree across snapshots"
 	)
 	let treeB: LayoutTree<PanelID> = try unwrap(
-		harness.orchestrator.presentation.workspaces[workspaceB]?.panelTree,
-		"a new Workspace must land on the target canvas"
+		harness.orchestrator.presentation.canvases[displayB]?.panelTree,
+		"a new group's Panels must land on the target canvas"
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceB]?
-			.displayAffinity == displayB,
-		"the target canvas receives the Workspace that had no placement"
+		panelsB.allSatisfy {
+			harness.orchestrator.presentation.canvasID(containing: $0) == displayB
+		},
+		"the target canvas receives the Panels that had no seat"
+	)
+	// Membership is the server's and never follows placement.
+	try expect(
+		panelsB.allSatisfy {
+			harness.orchestrator.presentation.workspaceID(of: $0) == workspaceB
+		},
+		"seating a Panel on a canvas must not change its group"
 	)
 
 	// Canvas B closes. The host takes its display away and re-projects; the
@@ -648,42 +638,44 @@ private func testProjectionKeepsEachCanvasItsOwnWorkspaces() throws {
 	harness.orchestrator.setDisplays([canvasADisplay])
 	try session.canvasesDidChange()
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceB] == nil,
-		"a Workspace on a closed canvas is left out rather than moved"
+		harness.orchestrator.presentation.canvases[displayB] == nil,
+		"a closed canvas stops being a canvas the solver places anything on"
 	)
 	try expect(
-		session.workspacePlacement[workspaceB] == displayB,
-		"its placement entry survives the close, which is what Reopen restores"
+		panelsB.allSatisfy {
+			harness.orchestrator.presentation.canvasID(containing: $0) == nil
+		},
+		"a Panel on a closed canvas is left unplaced rather than moved"
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceA]?
-			.displayAffinity == displayA
-			&& harness.orchestrator.presentation.workspaces[workspaceA]?
-				.panelTree == treeA,
-		"closing one canvas must not disturb the other canvas's Workspace"
+		panelsB.allSatisfy { harness.orchestrator.presentation.panels[$0] != nil },
+		"its descriptor survives the close, which is what Reopen restores"
 	)
 	try expect(
-		Set(harness.orchestrator.presentation.displayLayouts.keys) == [displayA],
+		harness.orchestrator.presentation.canvases[displayA]?.panelTree == treeA,
+		"closing one canvas must not disturb the other canvas's tree"
+	)
+	try expect(
+		Set(harness.orchestrator.presentation.canvases.keys) == [displayA],
 		"a closed canvas is no longer a display the solver places anything on"
 	)
 
-	// Reopen Closed Canvas: the same canvas ID comes back and its Workspace
-	// returns arranged the way it was, from the layouts the session parked.
+	// Reopen Closed Canvas: the same canvas ID comes back and its Panels return
+	// arranged the way they were, from the layout the session parked.
 	harness.orchestrator.setDisplays([canvasADisplay, canvasBDisplay])
 	try session.canvasesDidChange()
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceB]?
-			.displayAffinity == displayB,
-		"reopening a canvas brings back exactly the Workspaces it held"
+		harness.orchestrator.presentation.canvases[displayB]?.panelTree == treeB,
+		"the reopened canvas keeps the tree it was arranged with"
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceB]?
-			.panelTree == treeB,
-		"the reopened canvas's Workspace keeps the tree it was arranged with"
+		panelsB.allSatisfy {
+			harness.orchestrator.presentation.canvasID(containing: $0) == displayB
+		},
+		"reopening a canvas brings back exactly the Panels it held"
 	)
 	try expect(
-		harness.orchestrator.presentation.workspaces[workspaceA]?
-			.panelTree == treeA,
+		harness.orchestrator.presentation.canvases[displayA]?.panelTree == treeA,
 		"reopening a canvas must not rearrange the canvas that stayed open"
 	)
 }
