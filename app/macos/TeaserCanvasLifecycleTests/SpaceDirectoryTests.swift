@@ -321,11 +321,22 @@ private func testNamesSpacesTheWayMissionControlDoes() throws {
 		) == "full-screen Space 280",
 		"a fullscreen Space is named by its own ID, not merely as fullscreen"
 	)
+	// Numbering runs on across monitors rather than restarting. On one display
+	// that is the same answer; on several it is the only one that does not hand
+	// two Spaces the same name.
 	try expect(
 		snapshot.name(
 			of: .init(managedID: 27, uuid: otherMonitorDesktopUUID, isFullScreen: false)
-		) == "Desktop 1",
-		"desktops are numbered per monitor, which is the bar the person sees"
+		) == "Desktop 3",
+		"a second monitor's desktop continues the numbering, never restarts it"
+	)
+	try expect(
+		Set(
+			snapshot.monitors
+				.flatMap(\.spaces)
+				.compactMap { snapshot.name(of: $0) }
+		).count == snapshot.monitors.flatMap(\.spaces).count,
+		"no two Spaces in the whole configuration may share a name"
 	)
 }
 

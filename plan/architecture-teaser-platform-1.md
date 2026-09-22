@@ -321,9 +321,10 @@ projection. The Rust core is unchanged.
   weighted ratios and user-ratio survival including a clamped solve, the gap
   hierarchy and the gutter rule, shortfall reporting, and both focus stages.
 - `TeaserCanvasLifecycleTests` covers Mission Control's own Space naming — a
-  fullscreen Space taking no desktop number but carrying its own ID,
-  per-monitor numbering, the live record beating a stale copy, and a Space the
-  bar no longer describes — and
+  fullscreen Space taking no desktop number but carrying its own ID, numbering
+  that runs on across monitors, no two Spaces in one configuration sharing a
+  name, the live record beating a stale copy, and a Space the bar no longer
+  describes — and
   seeing a canvas establishing which Space it is on without touching its frame
   or phase. It also covers per-canvas isolation on the flat model,
   the unconnected seed, seeding stopping once a projection owns the
@@ -372,14 +373,20 @@ No Rust, no wire format and no organization state changes.
   say so about itself, and the canvas that can see it is the one that must. A
   canvas whose placement is unknown is left unsaid rather than guessed at, and
   fragments of one group on this same canvas send nobody anywhere.
-- Desktops are numbered per monitor and count only desktops, because a
-  fullscreen Space shows its application's name in the bar and takes no desktop
-  number. A fullscreen Space is named by that ID instead: saying only that it
-  is fullscreen identifies nothing once two applications are, and the
-  application's own name is readable only through the Dock's Accessibility
-  tree, which this path must never reach for. The live record decides: a Space
-  keeps its ID while becoming or ceasing to be fullscreen, so a caller's stale
-  copy must not name it.
+- macOS's own label for a Space is readable — the Dock gives each Spaces-bar
+  button an `AXDescription` of "Exit to Desktop 2", localized — but only while
+  Mission Control is on screen. With it closed the Dock's whole tree is one
+  list of Dock items, so the bar does not exist to read. Naming a Space must
+  never take over the screen, so the number is derived, and derived to agree
+  with that label.
+- Desktops are numbered across every monitor in the order the preferences list
+  them, never restarted per monitor: on one display the two rules agree, and on
+  several, restarting would hand two Spaces the same name. Only desktops are
+  counted, because a fullscreen Space shows its application in the bar and
+  takes no desktop number; it is named by its own ID instead, since saying only
+  that it is fullscreen identifies nothing once two applications are. The live
+  record decides: a Space keeps its ID while becoming or ceasing to be
+  fullscreen, so a caller's stale copy must not name it.
 - macOS publishes no way to ask which Space a window is on, so a canvas is
   stamped with the Space that is current every time it is visible, not only
   when Spaces change: a canvas anyone has seen must never still be waiting to
