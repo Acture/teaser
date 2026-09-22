@@ -756,9 +756,103 @@ private func testSharedModeNeverSeedsAPanel() throws {
 	)
 }
 
+/// A Panel that has never been placed lands beside a member of its own group,
+/// so a group arrives together instead of being scattered by arrival order.
+@MainActor
+private func testANewPanelIsSeatedBesideItsGroup() throws {
+	let placement: WorkspacePlacement = .init(
+		openDisplays: [displayA],
+		targetDisplay: displayA
+	)
+	let first: WorkspacePresentation = try OrganizationProjection.project(
+		organizationSnapshot(
+			revision: 1,
+			workspaces: [(id: "alpha", panels: ["a1"]), (id: "beta", panels: ["b1"])]
+		),
+		previous: nil,
+		placement: placement
+	)
+	// A second member of alpha arrives.
+	let grown: WorkspacePresentation = try OrganizationProjection.project(
+		organizationSnapshot(
+			revision: 2,
+			workspaces: [
+				(id: "alpha", panels: ["a1", "a2"]),
+				(id: "beta", panels: ["b1"]),
+			]
+		),
+		previous: first,
+		placement: placement
+	)
+	let order: [PanelID] = grown.panelIDs(onCanvas: displayA)
+	let groups: [WorkspaceID?] = order.map { grown.workspaceID(of: $0) }
+	// Each group occupies one contiguous run of the tree's leaves.
+	var runs: Int = 0
+	for index: Int in groups.indices where index == 0 || groups[index] != groups[index - 1] {
+		runs += 1
+	}
+	try expect(
+		runs == 2,
+		"each group must be one contiguous run, got \(groups.map { $0?.rawValue ?? "?" })"
+	)
+}
+
+/// Adjacency is a preference, not a rule. It applies only to a Panel with no
+/// seat at all, so a layout the person scattered on purpose is never tidied up
+/// behind their back.
+@MainActor
+private func testReprojectionNeverTidiesAScatteredGroup() throws {
+	let placement: WorkspacePlacement = .init(
+		openDisplays: [displayA],
+		targetDisplay: displayA
+	)
+	let snapshot: OrganizationSnapshot = organizationSnapshot(
+		revision: 1,
+		workspaces: [
+			(id: "alpha", panels: ["a1", "a2"]),
+			(id: "beta", panels: ["b1"]),
+		]
+	)
+	var scattered: WorkspacePresentation = try OrganizationProjection.project(
+		snapshot, previous: nil, placement: placement
+	)
+	// Deliberately interleave: alpha, beta, alpha.
+	scattered.canvases[displayA] = .init(
+		displayID: displayA,
+		panelTree: .split(
+			id: .init("root"),
+			axis: .horizontal,
+			preference: .user(0.5),
+			first: .leaf(.init("a1")),
+			second: .split(
+				id: .init("inner"),
+				axis: .horizontal,
+				preference: .user(0.5),
+				first: .leaf(.init("b1")),
+				second: .leaf(.init("a2"))
+			)
+		)
+	)
+	let again: WorkspacePresentation = try OrganizationProjection.project(
+		snapshot, previous: scattered, placement: placement
+	)
+	try expect(
+		again.canvases[displayA]?.panelTree == scattered.canvases[displayA]?.panelTree,
+		"reprojecting a scattered layout must change nothing"
+	)
+}
+
 @MainActor
 func canvasIsolationCases() -> [TestCase] {
 	[
+		.init(
+			"a new Panel is seated beside its group",
+			testANewPanelIsSeatedBesideItsGroup
+		),
+		.init(
+			"reprojection never tidies a scattered group",
+			testReprojectionNeverTidiesAScatteredGroup
+		),
 		.init(
 			"an unconnected canvas opens with one empty Panel",
 			testAnUnconnectedCanvasOpensWithOneEmptyPanel

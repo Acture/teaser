@@ -97,7 +97,8 @@ enum OrganizationProjection {
 			let previousCanvas: CanvasLayout? = previous?.canvases[displayID]
 			let tree: LayoutTree<PanelID>? = reconcile(
 				previousCanvas?.panelTree,
-				leaves: leaves
+				leaves: leaves,
+				panels: panels
 			)
 			// A focused group with no member left on this canvas stops being
 			// focused: focus can only ever emphasise what the canvas holds.
@@ -129,9 +130,47 @@ enum OrganizationProjection {
 		)
 	}
 
+	/// Where a Panel that has never been placed should land. Next to a member of
+	/// its own group when this canvas already shows one, so a group arrives
+	/// together instead of being scattered by arrival order.
+	///
+	/// A preference, not a rule: it only ever applies to a Panel with no seat at
+	/// all. Nothing here reads "these members are not adjacent" and rearranges,
+	/// so a layout the person scattered on purpose survives every reprojection.
+	private static func seat(
+		_ panelID: PanelID,
+		beside tree: LayoutTree<PanelID>,
+		panels: [PanelID: PanelDescriptor],
+		splitID: LayoutSplitID
+	) -> LayoutTree<PanelID> {
+		var next: LayoutTree<PanelID> = tree
+		if let workspaceID: WorkspaceID = panels[panelID]?.workspaceID,
+			let sibling: PanelID = tree.leaves.last(where: {
+				panels[$0]?.workspaceID == workspaceID
+			}),
+			(try? next.insert(
+				panelID,
+				at: .trailing,
+				of: sibling,
+				splitID: splitID
+			)) != nil
+		{
+			return next
+		}
+		// A group with no member here yet joins at the root.
+		return .split(
+			id: splitID,
+			axis: .horizontal,
+			preference: .derived,
+			first: tree,
+			second: .leaf(panelID)
+		)
+	}
+
 	private static func reconcile(
 		_ old: LayoutTree<PanelID>?,
-		leaves: [PanelID]
+		leaves: [PanelID],
+		panels: [PanelID: PanelDescriptor]
 	) -> LayoutTree<PanelID>? {
 		let allowed: Set<PanelID> = .init(leaves)
 		func prune(_ tree: LayoutTree<PanelID>) -> LayoutTree<PanelID>? {
@@ -155,12 +194,11 @@ enum OrganizationProjection {
 		var result: LayoutTree<PanelID>? = old.flatMap(prune)
 		for leaf: PanelID in leaves where result?.contains(leaf) != true {
 			if let existing: LayoutTree<PanelID> = result {
-				result = .split(
-					id: .init("local-\(UUID().uuidString)"),
-					axis: .horizontal,
-					preference: .derived,
-					first: existing,
-					second: .leaf(leaf)
+				result = seat(
+					leaf,
+					beside: existing,
+					panels: panels,
+					splitID: .init("local-\(UUID().uuidString)")
 				)
 			} else {
 				result = .leaf(leaf)
