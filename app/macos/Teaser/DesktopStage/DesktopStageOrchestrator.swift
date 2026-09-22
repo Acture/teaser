@@ -153,6 +153,10 @@ final class DesktopStageOrchestrator {
 	/// still-open canvas is tiling.
 	private var retainedLeases: Set<ExternalWindowIdentity> = []
 	private var detachedIdentities: Set<ExternalWindowIdentity> = []
+	/// Windows Teaser minimized to clear a canvas for a focused group. Only
+	/// these are ever restored: one the person had already minimized before
+	/// adoption must stay minimized when focus ends.
+	private var minimizedForFocus: Set<ExternalWindowIdentity> = []
 	private var draggingIdentity: ExternalWindowIdentity?
 	private var undoSnapshot: DesktopStageStateSnapshot?
 	private var undoCoalescingKey: String?
@@ -361,6 +365,8 @@ final class DesktopStageOrchestrator {
 		// display that no longer exists, so no Undo step can survive its close.
 		discardUndoHistory()
 		presentation.clearFocus(onCanvas: displayID)
+		// Released windows are no longer Teaser's to restore.
+		minimizedForFocus.subtract(releasedIdentities)
 		if failures > 0 {
 			statusMessage = "Canvas closed; \(failures) window(s) could not be restored"
 		}
@@ -888,6 +894,11 @@ final class DesktopStageOrchestrator {
 		}
 	}
 
+	/// Focus has two stages on one canvas. The first grows the group and raises
+	/// it, leaving every other Panel placed and usable. The second gives the
+	/// group the canvas and minimizes the rest, which is the only way macOS
+	/// lets Teaser move another application's window out of the way. A third
+	/// press restores everything.
 	func toggleWorkspaceFocus(workspaceID requestedID: WorkspaceID?) {
 		guard let canvasID: DisplayID = activeCanvasID else { return }
 		guard let workspaceID: WorkspaceID = requestedID
@@ -895,19 +906,77 @@ final class DesktopStageOrchestrator {
 				presentation.workspaceID(of: $0)
 			})
 		else { return }
+		var restored: Bool = false
 		do {
 			try performTransaction(label: "Workspace presentation changed") {
-				if presentation.canvases[canvasID]?.focus?.workspaceID == workspaceID {
+				switch presentation.canvases[canvasID]?.focus {
+				case .emphasised(let id) where id == workspaceID:
+					presentation.focusWorkspace(
+						workspaceID, onCanvas: canvasID, exclusive: true
+					)
+				case .exclusive(let id) where id == workspaceID:
 					presentation.clearFocus(onCanvas: canvasID)
-				} else if !presentation.focusWorkspace(workspaceID, onCanvas: canvasID) {
-					// Saying so beats a silent no-op: the group is real, it just
-					// has no member on the canvas being worked in.
-					setStatus("That group has no Panel on this canvas.")
+					restored = true
+				default:
+					if presentation.canvases[canvasID]?.focus != nil { restored = true }
+					if !presentation.focusWorkspace(workspaceID, onCanvas: canvasID) {
+						// Saying so beats a silent no-op: the group is real, it
+						// just has no member on the canvas being worked in.
+						setStatus("That group has no Panel on this canvas.")
+					}
 				}
 			}
 		} catch {
 			setStatus(error.localizedDescription)
+			return
 		}
+		applyFocusMinimization(onCanvas: canvasID)
+		// A restored window has to be framed again, and it was not in the last
+		// solve because focus had pruned it out.
+		if restored { relayout(synchronously: isStageActive) }
+	}
+
+	/// Brings the canvas's windows into line with its focus stage. A window that
+	/// refuses to minimize is reported and skipped: half a genie animation is
+	/// not worth rolling back, and the rest of the canvas is still correct.
+	private func applyFocusMinimization(onCanvas canvasID: DisplayID) {
+		var failures: Int = 0
+		if case .exclusive(let workspaceID) = presentation.canvases[canvasID]?.focus {
+			for panelID: PanelID in presentation.panelIDs(onCanvas: canvasID)
+			where presentation.workspaceID(of: panelID) != workspaceID {
+				guard let identity: ExternalWindowIdentity = panelAssignments[panelID],
+					!minimizedForFocus.contains(identity),
+					let lease: any ExternalWindowLease = leases[identity]
+				else { continue }
+				do {
+					// A window the person had already minimized is not Teaser's to
+					// manage. Claiming it here would mean raising it when focus
+					// ends, undoing something they did themselves.
+					guard try !lease.snapshot().isMinimized else { continue }
+					try lease.setMinimized(true)
+					minimizedForFocus.insert(identity)
+				} catch {
+					failures += 1
+				}
+			}
+		} else {
+			for panelID: PanelID in presentation.panelIDs(onCanvas: canvasID) {
+				guard let identity: ExternalWindowIdentity = panelAssignments[panelID],
+					minimizedForFocus.contains(identity),
+					let lease: any ExternalWindowLease = leases[identity]
+				else { continue }
+				do {
+					try lease.setMinimized(false)
+					minimizedForFocus.remove(identity)
+				} catch {
+					failures += 1
+				}
+			}
+		}
+		if failures > 0 {
+			setStatus("\(failures) window(s) would not minimize; the rest followed focus.")
+		}
+		host?.orchestratorDidChangeState(self)
 	}
 
 	private func splitVirtualPanel() {

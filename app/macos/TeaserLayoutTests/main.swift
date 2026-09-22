@@ -576,6 +576,166 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 	)
 }
 
+// MARK: - Focus
+
+private func focusPresentation() throws -> WorkspacePresentation {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	presentation.canvases[.init("canvas-b")] = .init(
+		displayID: .init("canvas-b"),
+		panelTree: .leaf(.init("b-solo"))
+	)
+	presentation.panels[.init("b-solo")] = .init(
+		id: .init("b-solo"),
+		title: "b-solo",
+		workspaceID: .init("alpha"),
+		kindID: .generic,
+		providerHint: nil,
+		profileOverride: .init(
+			minimumSize: .init(width: 10, height: 10),
+			preferredAspectRatio: .init(0.1, 10),
+			growthWeight: 1
+		),
+		nativeContent: .none
+	)
+	return presentation
+}
+
+private func focusFrames() -> [DisplayID: LayoutRect] {
+	[
+		weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+		.init("canvas-b"): .init(x: 1_000, y: 0, width: 1_000, height: 400),
+	]
+}
+
+/// The first stage is weight, not a takeover: the emphasised group grows and
+/// everything else stays placed and usable. Teaser cannot lower another
+/// application's window, so a Panel removed from the layout would strand its
+/// window on top of the layout rather than behind it.
+private func testEmphasisGrowsWithoutHidingAnything() throws {
+	var presentation: WorkspacePresentation = try focusPresentation()
+	let before: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	presentation.focusWorkspace(.init("beta"), onCanvas: weightedDisplayID)
+	let after: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	try expect(
+		after.panelFrames.count == before.panelFrames.count,
+		"emphasis must not remove a Panel from the layout"
+	)
+	let beta: LayoutRect = try unwrap(after.panelFrames[.init("b1")], "beta Panel")
+	let betaBefore: LayoutRect = try unwrap(before.panelFrames[.init("b1")], "beta before")
+	try expect(
+		beta.size.width > betaBefore.size.width,
+		"the emphasised group must actually grow"
+	)
+	try expect(
+		(after.panelFrames[.init("a1")]?.size.width ?? 0) > 0,
+		"an unfocused Panel must keep a usable rectangle"
+	)
+}
+
+/// The second stage gives the group the canvas. It prunes the solve only: the
+/// stored tree, its split IDs and every chosen proportion are untouched, which
+/// is what lets clearing focus restore the canvas exactly.
+private func testExclusivePrunesTheSolveNotTheTree() throws {
+	var presentation: WorkspacePresentation = try focusPresentation()
+	let storedBefore: LayoutTree<PanelID>? = presentation
+		.canvases[weightedDisplayID]?.panelTree
+	let tiled: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	presentation.focusWorkspace(
+		.init("alpha"), onCanvas: weightedDisplayID, exclusive: true
+	)
+	let exclusive: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	try expect(
+		exclusive.panelFrames[.init("b1")] == nil,
+		"an exclusive focus must leave the other group unframed"
+	)
+	try expect(
+		exclusive.panelFrames[.init("a1")] != nil
+			&& exclusive.panelFrames[.init("a2")] != nil,
+		"the focused group keeps every member"
+	)
+	try expect(
+		presentation.canvases[weightedDisplayID]?.panelTree == storedBefore,
+		"focus must not touch the stored tree"
+	)
+
+	presentation.clearFocus(onCanvas: weightedDisplayID)
+	let restored: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	try expect(restored == tiled, "clearing focus must restore the canvas exactly")
+}
+
+/// Focus is per canvas and can only emphasise what the canvas already holds, so
+/// it never reaches across to recall a member placed elsewhere.
+private func testFocusOnlyChangesItsOwnCanvas() throws {
+	var presentation: WorkspacePresentation = try focusPresentation()
+	let before: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	presentation.focusWorkspace(
+		.init("alpha"), onCanvas: weightedDisplayID, exclusive: true
+	)
+	let after: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	try expect(
+		after.panelFrames[.init("b-solo")] == before.panelFrames[.init("b-solo")],
+		"the other canvas must be byte-identical"
+	)
+	try expect(
+		presentation.canvasID(containing: .init("b-solo")) == .init("canvas-b"),
+		"focus must never recall a member from another canvas"
+	)
+}
+
+/// A canvas can only focus a group it holds. Refusing keeps the promise that
+/// focus never pulls members in from elsewhere.
+private func testFocusOnAnAbsentGroupIsRefused() throws {
+	var presentation: WorkspacePresentation = try focusPresentation()
+	try expect(
+		!presentation.focusWorkspace(.init("beta"), onCanvas: .init("canvas-b")),
+		"a canvas with no member of that group must refuse"
+	)
+	try expect(
+		presentation.canvases[.init("canvas-b")]?.focus == nil,
+		"a refused focus must change nothing"
+	)
+}
+
+/// Emphasis moves only the dividers that separate the focused group. A
+/// proportion the person chose *inside* that group is theirs and stays put.
+private func testFocusMovesOnlyBoundaryDividers() throws {
+	var presentation: WorkspacePresentation = try focusPresentation()
+	presentation.focusWorkspace(.init("alpha"), onCanvas: weightedDisplayID)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: focusFrames()
+	)
+	let inner: Double = try unwrap(
+		layout.effectiveRatios[
+			.init(displayID: weightedDisplayID, splitID: .init("inner"))
+		],
+		"the within-group divider must be solved"
+	)
+	try expectApproximatelyEqual(
+		inner, 0.5, "a divider inside the focused group keeps its chosen ratio"
+	)
+	let root: Double = try unwrap(
+		layout.effectiveRatios[
+			.init(displayID: weightedDisplayID, splitID: .init("root"))
+		],
+		"the boundary divider must be solved"
+	)
+	try expect(root > 0.5, "the boundary divider must move for the focused group")
+}
+
 // MARK: - Degradation
 
 /// A canvas too small to honour a Panel's minimum still lays every Panel out —
@@ -1141,6 +1301,11 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testEmphasisGrowsWithoutHidingAnything()
+	try testExclusivePrunesTheSolveNotTheTree()
+	try testFocusOnlyChangesItsOwnCanvas()
+	try testFocusOnAnAbsentGroupIsRefused()
+	try testFocusMovesOnlyBoundaryDividers()
 	try testShortfallsAreReportedNotThrown()
 	try testNoShortfallOnAGenerousCanvas()
 	try testExactFitIsNotAShortfall()

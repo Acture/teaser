@@ -146,6 +146,9 @@ final class FakeWindow {
 	/// it at selection time. Each of these makes the real selection throw.
 	var isStandard: Bool = true
 	var isMinimized: Bool = false
+	/// A window whose Accessibility implementation will not minimize, so the
+	/// refusal path is exercised rather than assumed.
+	var refusesMinimize: Bool = false
 	var isFullScreen: Bool = false
 	var allowsMove: Bool = true
 	var allowsResize: Bool = true
@@ -516,6 +519,14 @@ final class FakeExternalWindowLease: ExternalWindowLease {
 		let window: FakeWindow = try boundWindow()
 		try requireLiveWindow(window)
 		service.log.record(.focusAndRaise(window.identity))
+	}
+
+	func setMinimized(_ minimized: Bool) throws {
+		let window: FakeWindow = try boundWindow()
+		guard !window.refusesMinimize else {
+			throw ManagedExternalWindowError.windowCannotMinimize
+		}
+		window.isMinimized = minimized
 	}
 
 	@discardableResult

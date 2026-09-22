@@ -69,6 +69,11 @@ protocol ExternalWindowLease: AnyObject {
 	) throws -> ManagedExternalWindowSnapshot
 	func raise() throws
 	func focusAndRaise() throws
+	/// Minimizing is the only way macOS lets Teaser move another application's
+	/// window out of the way: Accessibility offers raise and minimize, and has
+	/// no lower. A window whose Accessibility implementation refuses to minimize
+	/// throws rather than being reported as hidden.
+	func setMinimized(_ minimized: Bool) throws
 	@discardableResult
 	func release(restoringOriginalFrame: Bool) -> Bool
 }

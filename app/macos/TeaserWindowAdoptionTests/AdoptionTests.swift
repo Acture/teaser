@@ -1212,10 +1212,87 @@ private func testNoWindowIsEverDisplayed() throws {
 	)
 }
 
+/// Focus has two stages. The first only re-weights; the second minimizes the
+/// windows of every other group on that canvas, because Accessibility offers
+/// raise and minimize and no lower. A third press restores them.
+@MainActor
+private func testTwoStageFocusMinimizesOnlyTheSecondTime() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		!other.isMinimized,
+		"the first stage only re-weights; nothing may be minimized yet"
+	)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		other.isMinimized,
+		"the second stage must clear the canvas of the other group's windows"
+	)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(!other.isMinimized, "a third press must restore what Teaser minimized")
+}
+
+/// A window the person had already minimized is not Teaser's to restore.
+@MainActor
+private func testFocusRestoresOnlyWhatTeaserMinimized() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	other.isMinimized = true
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		other.isMinimized,
+		"clearing focus must not raise a window the person minimized themselves"
+	)
+}
+
+/// A window that will not minimize is reported and skipped rather than aborting
+/// the transition: half a genie animation is not worth rolling back.
+@MainActor
+private func testARefusedMinimizeIsReportedAndDoesNotAbort() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let stubborn: FakeWindow = harness.addWindow()
+	try harness.adopt(stubborn, into: betaPanelID)
+	stubborn.refusesMinimize = true
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		harness.orchestrator.presentation.canvases[testDisplayID]?.focus?.isExclusive
+			== true,
+		"a refused minimize must not undo the focus stage"
+	)
+	try expect(
+		harness.orchestrator.statusMessage?.contains("would not minimize") == true,
+		"a refused minimize must be explained: "
+			+ "\(harness.orchestrator.statusMessage ?? "none")"
+	)
+}
+
 @MainActor
 func adoptionCases() -> [TestCase] {
 	[
 		.init("default run touches no desktop state", testDefaultRunTouchesNoDesktopState),
+		.init("two-stage focus minimizes only the second time", testTwoStageFocusMinimizesOnlyTheSecondTime),
+		.init("focus restores only what Teaser minimized", testFocusRestoresOnlyWhatTeaserMinimized),
+		.init("a refused minimize is reported and does not abort", testARefusedMinimizeIsReportedAndDoesNotAbort),
 		.init("qualified drag adopts an empty Panel", testQualifiedDragAdoptsEmptyPanel),
 		.init("highlight follows the pointer across Panels", testHighlightFollowsThePointerAcrossPanels),
 		.init("every occupied edge highlights its own split", testEveryOccupiedEdgeHighlightsItsOwnSplit),

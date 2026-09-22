@@ -87,8 +87,14 @@ struct ConstrainedLayoutSolver: Sendable {
 	/// while same-group neighbours' contours meet and merge.
 	let groupGap: Double
 
-	init(panelGap: Double = 4, groupGap: Double = 16) {
+	/// How much more of its axis an emphasised group's Panels take. It is a
+	/// weight multiplier, not a takeover: every other Panel stays placed and
+	/// usable, because Teaser cannot lower another application's window.
+	let focusBoost: Double
+
+	init(panelGap: Double = 4, groupGap: Double = 16, focusBoost: Double = 3) {
 		precondition(panelGap >= 0)
+		precondition(focusBoost >= 1)
 		// The contour pass inflates each Panel by panelGap / 2, so same-group
 		// neighbours touch and merge. A group gutter must stay wider than two of
 		// those inflations plus a stroke, or two groups' contours would merge
@@ -96,6 +102,7 @@ struct ConstrainedLayoutSolver: Sendable {
 		precondition(groupGap >= 3 * panelGap)
 		self.panelGap = panelGap
 		self.groupGap = groupGap
+		self.focusBoost = focusBoost
 	}
 
 	/// The rectangle Panels are actually laid out in: the canvas inset by one
@@ -130,17 +137,33 @@ struct ConstrainedLayoutSolver: Sendable {
 		) {
 			// A blank canvas places nothing and is not an error: it is what every
 			// canvas starts as.
-			guard let tree: LayoutTree<PanelID> = presentation.canvases[displayID]?
+			guard let stored: LayoutTree<PanelID> = presentation.canvases[displayID]?
 				.panelTree
 			else { continue }
 			guard let displayFrame: LayoutRect = displayFrames[displayID] else {
 				throw ConstrainedLayoutError.missingDisplayFrame(displayID)
 			}
+			// Focus is applied to the solve, never to the stored tree: every split
+			// ID and every proportion the person chose survives untouched, so
+			// clearing focus restores the canvas exactly.
+			let focus: CanvasFocus? = presentation.canvases[displayID]?.focus
+			var tree: LayoutTree<PanelID> = stored
+			if case .exclusive(let workspaceID) = focus {
+				guard let only: LayoutTree<PanelID> = pruned(
+					stored,
+					toWorkspace: workspaceID,
+					presentation: presentation
+				) else { continue }
+				tree = only
+			}
+			var emphasised: WorkspaceID?
+			if case .emphasised(let workspaceID) = focus { emphasised = workspaceID }
 			let solution: TreeSolution = try solveTreeNode(
 				tree,
 				in: layoutFrame(inCanvas: displayFrame),
 				displayID: displayID,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			panelFrames.merge(solution.leafFrames) { _, _ in
 				preconditionFailure("Validated Panel IDs must be unique")
@@ -212,27 +235,70 @@ struct ConstrainedLayoutSolver: Sendable {
 
 	// MARK: - Metrics
 
+	/// Whether any leaf of this subtree belongs to the given group.
+	private func holds(
+		_ tree: LayoutTree<PanelID>,
+		workspaceID: WorkspaceID?,
+		presentation: WorkspacePresentation
+	) -> Bool {
+		guard let workspaceID else { return false }
+		return tree.leaves.contains {
+			presentation.workspaceID(of: $0) == workspaceID
+		}
+	}
+
+	/// Drops every leaf outside one group. Returns nil when the group has no
+	/// Panel here, which the caller treats as nothing to show.
+	private func pruned(
+		_ tree: LayoutTree<PanelID>,
+		toWorkspace workspaceID: WorkspaceID,
+		presentation: WorkspacePresentation
+	) -> LayoutTree<PanelID>? {
+		switch tree {
+		case .leaf(let panelID):
+			return presentation.workspaceID(of: panelID) == workspaceID ? tree : nil
+		case .split(let id, let axis, let preference, let first, let second):
+			let left: LayoutTree<PanelID>? = pruned(
+				first, toWorkspace: workspaceID, presentation: presentation
+			)
+			let right: LayoutTree<PanelID>? = pruned(
+				second, toWorkspace: workspaceID, presentation: presentation
+			)
+			guard let left else { return right }
+			guard let right else { return left }
+			return .split(
+				id: id,
+				axis: axis,
+				preference: preference,
+				first: left,
+				second: right
+			)
+		}
+	}
+
 	private func panelMetrics(
 		_ panelID: PanelID,
-		presentation: WorkspacePresentation
+		presentation: WorkspacePresentation,
+		emphasised: WorkspaceID?
 	) throws -> LeafLayoutMetrics {
 		guard let panel: PanelDescriptor = presentation.panels[panelID] else {
 			throw ConstrainedLayoutError.missingPanel(panelID)
 		}
-		if let profile: LayoutProfile = panel.profileOverride {
-			return .init(
-				minimumSize: profile.minimumSize,
-				growthWeight: profile.growthWeight
-			)
-		}
-		guard let definition: PanelKindDefinition = presentation.panelKinds
+		let profile: LayoutProfile
+		if let override: LayoutProfile = panel.profileOverride {
+			profile = override
+		} else if let definition: PanelKindDefinition = presentation.panelKinds
 			.definition(for: panel.kindID)
-		else {
+		{
+			profile = definition.defaultProfile
+		} else {
 			throw ConstrainedLayoutError.missingPanelKind(panel.kindID)
 		}
+		// Emphasis is weight, so minimums still hold and nothing is hidden.
+		let boost: Double = panel.workspaceID == emphasised ? focusBoost : 1
 		return .init(
-			minimumSize: definition.defaultProfile.minimumSize,
-			growthWeight: definition.defaultProfile.growthWeight
+			minimumSize: profile.minimumSize,
+			growthWeight: profile.growthWeight * boost
 		)
 	}
 
@@ -271,19 +337,24 @@ struct ConstrainedLayoutSolver: Sendable {
 
 	private func treeMetrics(
 		_ tree: LayoutTree<PanelID>,
-		presentation: WorkspacePresentation
+		presentation: WorkspacePresentation,
+		emphasised: WorkspaceID?
 	) throws -> LeafLayoutMetrics {
 		switch tree {
 		case .leaf(let panelID):
-			return try panelMetrics(panelID, presentation: presentation)
+			return try panelMetrics(
+				panelID, presentation: presentation, emphasised: emphasised
+			)
 		case .split(_, let axis, _, let first, let second):
 			let firstMetrics: LeafLayoutMetrics = try treeMetrics(
 				first,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			let secondMetrics: LeafLayoutMetrics = try treeMetrics(
 				second,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			// The same gutter the placing pass will use, or a minimum computed
 			// here would not be the minimum actually honoured there.
@@ -326,7 +397,8 @@ struct ConstrainedLayoutSolver: Sendable {
 		_ tree: LayoutTree<PanelID>,
 		in frame: LayoutRect,
 		displayID: DisplayID,
-		presentation: WorkspacePresentation
+		presentation: WorkspacePresentation,
+		emphasised: WorkspaceID?
 	) throws -> TreeSolution {
 		switch tree {
 		case .leaf(let panelID):
@@ -338,11 +410,13 @@ struct ConstrainedLayoutSolver: Sendable {
 		case .split(let splitID, let axis, let preference, let first, let second):
 			let firstMetrics: LeafLayoutMetrics = try treeMetrics(
 				first,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			let secondMetrics: LeafLayoutMetrics = try treeMetrics(
 				second,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			let nodeGap: Double = gap(
 				between: first,
@@ -374,9 +448,18 @@ struct ConstrainedLayoutSolver: Sendable {
 			let derived: Double = totalWeight.isFinite && totalWeight > 0
 				? (firstMetrics.growthWeight / totalWeight).clamped(to: 0.05 ... 0.95)
 				: 0.5
-			let desired: Double = preference.userRatio.flatMap {
-				$0.isFinite ? $0 : nil
-			} ?? derived
+			// A divider separating the emphasised group from the rest follows the
+			// boost even when the person set it: emphasis is a thing they just
+			// asked for, and a canvas whose dividers had all been dragged would
+			// otherwise ignore it entirely. Dividers *inside* the focused group
+			// keep their proportions, and clearing focus restores every one of
+			// them, because none of this is written back.
+			let isFocusBoundary: Bool = emphasised != nil
+				&& holds(first, workspaceID: emphasised, presentation: presentation)
+					!= holds(second, workspaceID: emphasised, presentation: presentation)
+			let desired: Double = isFocusBoundary
+				? derived
+				: (preference.userRatio.flatMap { $0.isFinite ? $0 : nil } ?? derived)
 
 			let ratio: Double
 			if usable > 0, firstMinimum + secondMinimum <= usable {
@@ -411,13 +494,15 @@ struct ConstrainedLayoutSolver: Sendable {
 				first,
 				in: frames.first,
 				displayID: displayID,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			let secondSolution: TreeSolution = try solveTreeNode(
 				second,
 				in: frames.second,
 				displayID: displayID,
-				presentation: presentation
+				presentation: presentation,
+				emphasised: emphasised
 			)
 			var leafFrames: [PanelID: LayoutRect] = firstSolution.leafFrames
 			leafFrames.merge(secondSolution.leafFrames) { _, _ in
