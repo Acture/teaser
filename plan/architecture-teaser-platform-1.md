@@ -236,6 +236,103 @@ canvases, focus routing, persistence/restore, or the multi-application demo.
   fullscreen Space, and adopted-window placement below the menu bar. Unrun
   checks are reported as unrun.
 
+### Canvas layout and Workspace contour slice
+
+This slice implements the in-canvas half of TASK-030 (P-561) on the canvas host
+slice. It does not deliver cross-launch persistence (P-563), real-window write
+paths beyond existing adoption (P-511), shortcut routing (P-562), or the TUI
+projection. The Rust core is unchanged.
+
+#### One flat tree per canvas
+
+- A Workspace owns no rectangle. Membership is `PanelDescriptor.workspaceID`,
+  mirroring `Panel.workspace_id` in the shared core, and placement is whichever
+  canvas tree holds the leaf. The display→Workspace→Panel nesting is gone, with
+  `LayoutScope`, `DisplayWorkspaceLayout` and `PresentationLayout.workspaceFrames`.
+  That separation is what lets one group span canvases and lets two of its
+  Panels sit apart with another group's Panel between them.
+- Each canvas owns one `LayoutTree<PanelID>`, nil while blank. A move changes
+  placement only; membership changes through an explicit server command.
+- A split nobody has dragged is sized from the summed growth weights of its two
+  subtrees, so Panels follow their kinds instead of halving. A dragged divider
+  records `SplitPreference.userRatio` and keeps it; a solve clamped by a minimum
+  is never written back, so a proportion the canvas is currently too small to
+  honour returns intact when the room does.
+- Spacing carries the hierarchy: the narrow gutter inside one group, the wide
+  one wherever a split's two subtrees are not the same single group. A subtree
+  mixing groups always takes the wide gutter, and both the measuring and the
+  placing pass read the same per-node gap.
+- A Panel the canvas cannot give its minimum is still placed, and reported:
+  `LayoutQuality.shortfalls` names it and the size it needs, and the canvas says
+  so in its own status text. The solve never fails for it.
+
+#### Group contours
+
+- Contours are derived from the solved frames by a grid pass, not by cancelling
+  rectangle edges: every rectangle contributes its coordinates to one snapped
+  axis pair, so a tall Panel facing two shorter ones already has its edge split
+  at their shared coordinate. Partial overlap, T-junctions and an edge that is
+  interior on one half and boundary on the other are then the same rule.
+- Adjacent members of one group produce one continuous loop; a locally
+  disconnected group produces one loop per fragment, and a fragment on another
+  canvas keeps the same colour and a group-wide ordinal. A ring around another
+  group's Panel strokes the hole as well: the inner edge is as much the group's
+  boundary as the outer one.
+- Colour is FNV-1a over the Workspace ID, not a seeded hash, so it survives a
+  relaunch and agrees between clients. The palette omits the arc around
+  `systemBlue`, which the Virtual Focus ring and the drop highlight both use.
+- A canvas showing a single group draws no contour and reserves no gutter for
+  one. There is nothing to tell apart, and a lone window must not sit inside a
+  border of wasted space.
+- Contours are drawn and never hit-tested. No cursor rect or mouse path reads
+  one, so a contour cannot intercept input meant for a provider window.
+
+#### Focus, adoption and the unconnected canvas
+
+- Focus is per canvas and has two stages. The first weights the group larger and
+  raises it, leaving every other Panel framed and usable. The second gives the
+  group the canvas and minimizes the other groups' adopted windows, which is all
+  macOS offers: Accessibility has raise and minimize and no lower. A third press
+  restores. Only windows Teaser minimized are restored, and a window that
+  refuses to minimize is reported without aborting the transition.
+- Focus prunes the solve, never the stored tree. Every split ID and every
+  `userRatio` survives untouched, which is what makes clearing focus restore the
+  canvas exactly. A canvas can only focus a group it already holds, so focus
+  never recalls a member placed elsewhere.
+- An open canvas is the consent to run: there is no separate Start step and no
+  connection gate. Activation never prompts — an unauthorized app stays inactive
+  and says so. An explicit Stop is remembered until an explicit Start.
+- A canvas with no authoritative projection behind it seeds one empty Panel, so
+  it has something to drag a window into and to split. Server ownership is
+  decided by a projection having arrived, never by a session object existing.
+- Control-Option-A adopts the frontmost window into the focused Panel without a
+  drag. A drag asks macOS to recognise a window-move gesture, which Stage
+  Manager breaks by scaling and animating the window it moves.
+- The Layout Editor window is removed: the canvas resizes by dragging its own
+  dividers, so a second window editing a thumbnail of it was a duplicate entry
+  point. Its SplitView dependency is removed with it.
+
+#### Evidence
+
+- `TeaserLayoutTests` covers contour geometry (adjacent pair, L shape, partial
+  overlap, an edge half interior and half boundary, a ring with a hole, a
+  diagonal touch, disconnected fragments, determinism, degenerate frames), the
+  palette's distance from the focus blue and the stability of its hash, growth
+  weighted ratios and user-ratio survival including a clamped solve, the gap
+  hierarchy and the gutter rule, shortfall reporting, and both focus stages.
+- `TeaserCanvasLifecycleTests` covers per-canvas isolation on the flat model,
+  the unconnected seed, seeding stopping once a projection owns the
+  presentation, and the adjacency preference together with its refusal to tidy a
+  scattered layout.
+- `TeaserWindowAdoptionTests` covers activation against a substituted
+  Accessibility service without prompting, the explicit Stop surviving, the two
+  focus stages against fake leases, restoring only what Teaser minimized, a
+  refused minimize, and the split axis.
+- Authorized native checks, all unrun: a contour visible under a real adopted
+  window; a click near a gutter never intercepted; fluorescence legible over
+  light and dark wallpapers in both appearances; the frosted backdrop; adoption
+  by Control-Option-A against a real provider; and the full pre-push gate.
+
 ## 3. Alternatives
 
 - **ALT-001**: Stock Herdr plus App/plugins cannot by itself implement the chosen

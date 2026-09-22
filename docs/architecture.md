@@ -59,10 +59,15 @@ Panels have stable IDs, typed bindings, and data-defined size profiles. Task,
 CLI, App, Agent, File, and Notes are kinds, not subclasses. A move changes
 placement; explicit regroup changes membership. Neither recreates the content.
 
-Tiling fills usable space with unequal sizes and clear gaps. Same-Workspace
-adjacency is a soft preference, not a connected-rectangle constraint. Adjacent
-members share an outer fluorescent contour; disconnected fragments use the same
-color. Do not draw a giant bounding box around intervening groups.
+Tiling fills usable space with unequal sizes and clear gaps: the narrow gutter
+inside one group, the wide one between groups. Unequal sizing comes from the
+Panels' growth weights, and a divider the person drags keeps their proportion.
+Same-Workspace adjacency is a soft preference, not a connected-rectangle
+constraint. Adjacent members share an outer fluorescent contour; disconnected
+fragments use the same color, and an enclosed other-group Panel is a stroked
+hole. Do not draw a giant bounding box around intervening groups, and draw
+nothing on a canvas showing a single group. A Panel below its minimum is still
+placed and is reported with the size it needs.
 
 Share topology, constraints, ratios, and commands where meaningful. Native pixel
 geometry and TUI cell geometry remain separate projections. Terminal resize
@@ -72,8 +77,12 @@ resize one PTY against each other. Viewport and focus remain client-local.
 ## Native App and external windows
 
 The JSON client reuses the existing native implementation. Each open canvas is
-one display to the layout solver, and the projection places every Workspace on a
-canvas the client owns, so closing one canvas never rearranges another.
+one display to the layout solver and owns one flat Panel tree; the projection
+seats each Panel on a canvas the client owns, so closing one canvas never
+rearranges another. A Workspace owns no rectangle: membership travels on the
+Panel, and the group's shape is a contour derived from the solved frames.
+A canvas with no authoritative projection behind it seeds one empty Panel, so it
+is usable before anything connects.
 
 Connection and organization controls accept an explicit JSON socket path. They
 can create, rename, delete, regroup, change kind, and rebind through server

@@ -39,15 +39,26 @@ not a container capable of embedding arbitrary external GUI windows.
 canvases does not implicitly change Workspace membership.
 
 **Workspace contour**: The same-colored outer boundary of locally adjacent
-members. Separate fragments use the same group identity/color. It is not a
-background, title bar, or mandatory rectangular container.
+members, derived from solved Panel rectangles. Separate fragments use the same
+group identity/color; an enclosed other-group Panel is a stroked hole. It is not
+a background, title bar, or mandatory rectangular container, and a canvas
+showing one group draws none: there is nothing to tell apart.
 
-**Layout**: Unequal tiling, split, move, resize, focus, and undo. Group adjacency is
-a soft preference. Topology and constraints can be shared; native pixel and TUI
-cell rectangles are computed by their respective adapters.
+**Layout**: Unequal tiling, split, move, resize, focus, and undo. One flat Panel
+tree per canvas: a Workspace is a label on its Panels, never a region. A split
+nobody has dragged is sized from its Panels' growth weights; a dragged one keeps
+the proportion the person chose. Group adjacency is a soft preference applied
+only to a Panel with no placement yet. Topology and constraints can be shared;
+native pixel and TUI cell rectangles are computed by their respective adapters.
 
-**Virtual Focus**: A client's selected Panel/Workspace for layout commands. It
-does not redirect another client's focus or native app input.
+**Virtual Focus**: A client's selected Panel for layout commands. It does not
+redirect another client's focus or native app input.
+
+**Canvas focus**: One canvas emphasising one group, in two stages: weighted
+larger and raised, then exclusive, which minimizes the other groups' adopted
+windows because macOS offers no way to lower them. It prunes the solve, never
+the stored tree, so clearing it restores the canvas exactly, and it can only
+emphasise a group the canvas already holds.
 
 **Input Focus**: The real input destination. External-app handoff requires an
 explicit action to an exact window; Teaser does not synthesize background input.
