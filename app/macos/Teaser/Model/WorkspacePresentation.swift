@@ -212,6 +212,18 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 		canvases[canvasID]?.focus = nil
 	}
 
+	/// Drops a canvas's focus once the group it emphasises has no Panel left
+	/// there. An exclusive focus on an absent group prunes the solve to nothing
+	/// and the canvas renders empty, so every edit that can move or remove the
+	/// last member ends here.
+	private mutating func clearFocusIfGroupAbsent(onCanvas canvasID: DisplayID) {
+		guard let focus: CanvasFocus = canvases[canvasID]?.focus else { return }
+		let stillHere: Bool = panelIDs(onCanvas: canvasID).contains {
+			panels[$0]?.workspaceID == focus.workspaceID
+		}
+		if !stillHere { canvases[canvasID]?.focus = nil }
+	}
+
 	// MARK: - Edits
 
 	/// The first Panel on a blank canvas. Splitting needs something to split.
@@ -344,6 +356,10 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 			destination.panelTree = .leaf(panelID)
 		}
 		canvases[destinationID] = destination
+		// Both ends: the source may have lost its focused group's last member,
+		// and a same-canvas move must be judged after the reinsertion.
+		clearFocusIfGroupAbsent(onCanvas: sourceID)
+		clearFocusIfGroupAbsent(onCanvas: destinationID)
 	}
 
 	/// Removes a Panel from the presentation entirely. One placed on no canvas
@@ -359,6 +375,9 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 		}
 		panels.removeValue(forKey: panelID)
 		if virtualFocus.panelID == panelID { virtualFocus = .none }
+		for canvasID: DisplayID in canvases.keys {
+			clearFocusIfGroupAbsent(onCanvas: canvasID)
+		}
 	}
 
 	mutating func setUserRatio(

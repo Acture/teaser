@@ -384,6 +384,7 @@ final class DesktopStageOrchestrator {
 		discardUndoHistory()
 		var failedRestorations: Int = 0
 		for (identity, lease): (ExternalWindowIdentity, any ExternalWindowLease) in leases {
+			restoreIfMinimizedForFocus(identity, lease: lease)
 			if !lease.release(restoringOriginalFrame: !detachedIdentities.contains(identity)) {
 				failedRestorations += 1
 			}
@@ -451,6 +452,10 @@ final class DesktopStageOrchestrator {
 			) else { continue }
 			releasedIdentities.insert(identity)
 			guard let lease: any ExternalWindowLease = leases[identity] else { continue }
+			// Un-minimize before letting go: after release there is no lease left
+			// to ask, and the window would stay in the Dock with nothing in
+			// Teaser able to bring it back.
+			restoreIfMinimizedForFocus(identity, lease: lease)
 			if lease.release(restoringOriginalFrame: true) {
 				leases.removeValue(forKey: identity)
 				retainedLeases.remove(identity)
@@ -1042,6 +1047,7 @@ final class DesktopStageOrchestrator {
 			})
 		else { return }
 		var restored: Bool = false
+		var groupAbsentHere: Bool = false
 		do {
 			try performTransaction(label: "Workspace presentation changed") {
 				switch presentation.canvases[canvasID]?.focus {
@@ -1054,11 +1060,11 @@ final class DesktopStageOrchestrator {
 					restored = true
 				default:
 					if presentation.canvases[canvasID]?.focus != nil { restored = true }
-					if !presentation.focusWorkspace(workspaceID, onCanvas: canvasID) {
-						// Saying so beats a silent no-op: the group is real, it
-						// just has no member on the canvas being worked in.
-						setStatus("That group has no Panel on this canvas.")
-					}
+					// Recorded, not set here: `performTransaction` writes its own
+					// status after the closure returns and would overwrite it.
+					groupAbsentHere = !presentation.focusWorkspace(
+						workspaceID, onCanvas: canvasID
+					)
 				}
 			}
 		} catch {
@@ -1069,11 +1075,28 @@ final class DesktopStageOrchestrator {
 		// A restored window has to be framed again, and it was not in the last
 		// solve because focus had pruned it out.
 		if restored { relayout(synchronously: isStageActive) }
+		if groupAbsentHere {
+			// Saying so beats a silent no-op: the group is real, it just has no
+			// member on the canvas being worked in.
+			setStatus("That group has no Panel on this canvas.")
+		}
 	}
 
 	/// Brings the canvas's windows into line with its focus stage. A window that
 	/// refuses to minimize is reported and skipped: half a genie animation is
 	/// not worth rolling back, and the rest of the canvas is still correct.
+	/// Hands a window back if Teaser minimized it for focus. A failure is
+	/// swallowed on purpose: this runs while releasing or stopping, where the
+	/// caller already reports its own failures and there is nothing left to
+	/// retry against.
+	private func restoreIfMinimizedForFocus(
+		_ identity: ExternalWindowIdentity,
+		lease: any ExternalWindowLease
+	) {
+		guard minimizedForFocus.remove(identity) != nil else { return }
+		try? lease.setMinimized(false)
+	}
+
 	private func applyFocusMinimization(onCanvas canvasID: DisplayID) {
 		var failures: Int = 0
 		if case .exclusive(let workspaceID) = presentation.canvases[canvasID]?.focus {

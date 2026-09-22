@@ -51,6 +51,11 @@ enum DesktopStageShortcuts {
 			(.rightArrow, .moveVirtualFocus(.right)), (.upArrow, .moveVirtualFocus(.up)),
 			(.downArrow, .moveVirtualFocus(.down)), (.return, .handInputToPanel),
 			(.keypadEnter, .handInputToPanel), (.z, .undo),
+			// Adoption without a drag. A global hot key does not bring Teaser
+			// forward, so the window the person is looking at is still the
+			// frontmost one — and it is on stage by definition, which is what
+			// makes this work where dragging under Stage Manager does not.
+			(.a, .adoptFrontmostWindow),
 		]
 		return keys.map { key, command in
 			.init(shortcut: .init(key, modifiers: [.control, .option]), command: command)

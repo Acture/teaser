@@ -51,6 +51,9 @@ private func testBindingTableIsExact() throws {
 		(36, controlOption, .handInputToPanel),
 		(76, controlOption, .handInputToPanel),
 		(6, controlOption, .undo),
+		// A the menu advertises: it was missing from the table while the menu
+		// item claimed it, so pressing it did nothing.
+		(0, controlOption, .adoptFrontmostWindow),
 	]
 
 	for testCase: (keyCode: UInt16, modifiers: UInt, expected: DesktopStageCommand) in cases {
@@ -149,18 +152,24 @@ private func testLibrarySubscriptionLifetime() throws {
 	let source: RecordingShortcutSource = .init()
 	var commands: [DesktopStageCommand] = []
 	let monitor: DesktopStageShortcutMonitor = .init(source: source) { commands.append($0) }
+	// Derived, not written out: three hardcoded counts meant adding one binding
+	// broke two unrelated assertions and said nothing about what changed.
+	let unscoped: Int = DesktopStageShortcuts.bindings.filter {
+		!$0.requiresArrangeMode
+	}.count
+	let total: Int = DesktopStageShortcuts.bindings.count
 	try expect(source.listeners.isEmpty, "construction must not install global shortcuts")
 	monitor.start()
-	try expect(monitor.isRunning && source.listeners.count == 12, "stage starts only unscoped bindings")
+	try expect(monitor.isRunning && source.listeners.count == unscoped, "stage starts only unscoped bindings")
 	monitor.start()
-	try expect(source.listeners.count == 12, "repeated start must not double-register")
+	try expect(source.listeners.count == unscoped, "repeated start must not double-register")
 	for listener: RecordingShortcutSource.Listener in source.listeners {
 		try expect(!listener.binding.requiresArrangeMode, "layout Undo must stay unregistered outside Arrange")
 		listener.action()
 	}
 	try expect(commands == source.listeners.map(\.binding.command), "library callbacks must dispatch real commands")
 	monitor.setArrangeModeEnabled(true)
-	try expect(source.listeners.count == 13, "Arrange installs layout Undo")
+	try expect(source.listeners.count == total, "Arrange installs layout Undo")
 	let scoped: [RecordingShortcutSource.Listener] = Array(source.listeners.suffix(1))
 	try expect(scoped.map(\.binding.command) == [.undo], "the only Arrange-scoped binding is layout Undo")
 	for listener: RecordingShortcutSource.Listener in scoped { listener.action() }

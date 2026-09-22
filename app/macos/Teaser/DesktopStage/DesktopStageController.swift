@@ -236,7 +236,18 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private func activateStageIfPossible() {
 		orchestrator.setDisplays(canvasDisplays())
 		guard orchestrator.activateForOpenCanvas() else { return }
-		try? managedWindowFocusObserver.start()
+		do {
+			// Without this observer Virtual Focus stops following the window the
+			// person actually clicks, and later commands aim at the wrong Panel.
+			// A stage that cannot track focus is worse than no stage, so stop
+			// and say why rather than running half-blind.
+			try managedWindowFocusObserver.start()
+		} catch {
+			orchestrator.stopStage()
+			orchestrator.setStatus(error.localizedDescription)
+			updateChrome()
+			return
+		}
 		shortcutMonitor.start()
 		updateChrome()
 	}

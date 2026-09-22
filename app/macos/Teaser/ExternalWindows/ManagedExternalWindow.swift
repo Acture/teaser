@@ -1916,14 +1916,22 @@ final class WindowDragObserver {
 				ExternalWindowDiagnostics.logger.notice("drag-qualified pid=\(pendingDrag.handle.identity.processIdentifier, privacy: .public) window=\(pendingDrag.handle.identity.windowID, privacy: .public)")
 				onEvent?(.began(dragSnapshot))
 			} else if !pendingDrag.loggedQualificationFailure,
+				hypot(
+					pendingDrag.currentSample.mouseAppKitScreenLocation.x
+						- pendingDrag.initialSample.mouseAppKitScreenLocation.x,
+					pendingDrag.currentSample.mouseAppKitScreenLocation.y
+						- pendingDrag.initialSample.mouseAppKitScreenLocation.y
+				) >= qualificationConfiguration.minimumMouseMovement,
 				let reason: String = externalWindowDragQualificationFailure(
 					initial: pendingDrag.initialSample,
 					current: pendingDrag.currentSample,
 					configuration: qualificationConfiguration
 				)
 			{
-				// Once per press, so a drag that never lands says why instead of
-				// failing silently.
+				// Once per press, and only once the pointer has actually moved
+				// far enough to be a drag. Logging the first sample would always
+				// latch "mouse moved 0.3 < 6" and bury the real reason a genuine
+				// drag was refused.
 				pendingDrag.loggedQualificationFailure = true
 				ExternalWindowDiagnostics.logger.notice("drag-not-qualified: \(reason, privacy: .public)")
 			}
