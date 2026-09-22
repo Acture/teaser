@@ -78,6 +78,17 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 		self.status = status
 	}
 
+	/// How many distinct groups have a Panel on this canvas.
+	private static func groupCount(
+		on displayID: DisplayID,
+		in presentation: WorkspacePresentation
+	) -> Int {
+		Set(
+			presentation.panelIDs(onCanvas: displayID)
+				.compactMap { presentation.workspaceID(of: $0) }
+		).count
+	}
+
 	init(
 		displayID: DisplayID,
 		screenFrame: LayoutRect,
@@ -106,18 +117,23 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 					frame: frame
 				)
 			},
-			contours: layout.contours.flatMap { contour in
-				contour.fragments
-					.filter { $0.displayID == displayID }
-					.map {
-						DesktopOverlayContour(
-							workspaceID: contour.workspaceID,
-							color: layout.contourColors[contour.workspaceID]
-								?? WorkspaceContourPalette.colors[0],
-							fragment: $0
-						)
-					}
-			},
+			// A contour exists to tell one group from another. On a canvas showing
+			// a single group there is nothing to tell apart, so outlining
+			// everything would be decoration that says nothing.
+			contours: Self.groupCount(on: displayID, in: presentation) < 2
+				? []
+				: layout.contours.flatMap { contour in
+					contour.fragments
+						.filter { $0.displayID == displayID }
+						.map {
+							DesktopOverlayContour(
+								workspaceID: contour.workspaceID,
+								color: layout.contourColors[contour.workspaceID]
+									?? WorkspaceContourPalette.colors[0],
+								fragment: $0
+							)
+						}
+				},
 			dividers: layout.dividers.filter { $0.displayID == displayID },
 			virtualFocus: presentation.virtualFocus,
 			arrangeMode: arrangeMode,

@@ -95,6 +95,7 @@ final class DesktopStageStatusController: NSObject {
 		case quit
 		// Appended: the raw values are menu-item tags, so existing cases keep theirs.
 		case adoptWindow
+		case adoptFrontmost
 	}
 
 	private let callbacks: DesktopStageStatusCallbacks
@@ -148,6 +149,13 @@ final class DesktopStageStatusController: NSObject {
 		menu.addItem(item(title: "Show Canvas", action: .showControls))
 		menu.addItem(item(title: state.stageActive ? "Stop Layout" : "Start Layout", action: .toggleStage))
 		menu.addItem(item(title: "Adopt Window…", action: .adoptWindow))
+		menu.addItem(
+			item(
+				title: "Adopt Frontmost Window (⌃⌥A)",
+				action: .adoptFrontmost,
+				enabled: state.stageActive && state.hasVirtualPanel
+			)
+		)
 		menu.addItem(item(title: "Quit Teaser", action: .quit))
 		menu.addItem(.separator())
 
@@ -301,6 +309,8 @@ final class DesktopStageStatusController: NSObject {
 			callbacks.onQuit()
 		case .adoptWindow:
 			callbacks.onAdoptWindow()
+		case .adoptFrontmost:
+			callbacks.onCommand(.adoptFrontmostWindow)
 		}
 	}
 }

@@ -131,11 +131,17 @@ final class DesktopStageOrchestrator {
 	private(set) var stageStoppedExplicitly: Bool = false
 	private(set) var isArrangeModeEnabled: Bool = false
 	private(set) var dropHighlight: DesktopOverlayDropHighlight?
-	private(set) var isSharedOrganization: Bool = false
-	/// Whether an authoritative projection has ever arrived. `isSharedOrganization`
-	/// only means a session object exists — it is switched on when the client is
-	/// constructed, long before anything connects — so it cannot answer "does the
-	/// server own this presentation yet".
+	/// Whether the server owns this presentation, which is the only question the
+	/// adoption, mutation and undo paths actually want answered.
+	///
+	/// It is deliberately derived rather than stored. The stored flag used to be
+	/// set when the session object was constructed — at app start, long before
+	/// anything connects — so every one of those paths behaved as though a
+	/// server owned a presentation that did not exist yet: adoption was refused
+	/// against an empty adoptable set, and local edits were refused outright.
+	var isSharedOrganization: Bool { hasAuthoritativeProjection }
+	/// Set by the first authoritative projection and never cleared: once the
+	/// server has spoken, this client does not go back to owning the graph.
 	private(set) var hasAuthoritativeProjection: Bool = false
 	private var sharedAdoptablePanels: Set<PanelID> = []
 	var onSharedKindChange: ((PanelID, PanelKindID) -> Void)?
@@ -204,8 +210,10 @@ final class DesktopStageOrchestrator {
 
 	var canUndo: Bool { !isSharedOrganization && undoSnapshot != nil }
 
+	/// Attaches a session. It does not by itself hand ownership to the server —
+	/// only an authoritative projection does that — so nothing here may gate
+	/// adoption or local edits.
 	func useSharedOrganization() {
-		isSharedOrganization = true
 		discardUndoHistory()
 	}
 
@@ -273,9 +281,6 @@ final class DesktopStageOrchestrator {
 	/// runs in shared mode: there the projection owns every canvas, and seeding
 	/// here would make the client a second writer of membership.
 	func seedCanvasIfUnconnected(_ displayID: DisplayID) {
-		// Gated on a projection having arrived, not on a session existing: the
-		// session switches `isSharedOrganization` on at construction, so gating
-		// on that seeded nothing, ever, and every canvas opened empty.
 		guard !hasAuthoritativeProjection,
 			presentation.canvases[displayID] == nil
 		else { return }
@@ -512,6 +517,8 @@ final class DesktopStageOrchestrator {
 			setStatus(isArrangeModeEnabled ? "Arrange mode" : "Live mode")
 		case .splitPanel:
 			splitVirtualPanel()
+		case .adoptFrontmostWindow:
+			adoptFrontmostWindow()
 		case .toggleWorkspaceFocus:
 			toggleWorkspaceFocus(workspaceID: nil)
 		case .previousWorkspace:
@@ -892,6 +899,35 @@ final class DesktopStageOrchestrator {
 	}
 
 	// MARK: - Virtual focus and Workspace presentation
+
+	/// Adopts whatever window is in front into the Panel that has Virtual Focus,
+	/// without a drag. Dragging asks macOS to recognise a window-move gesture,
+	/// which Stage Manager breaks by scaling and animating the window it moves;
+	/// the window in front is simply resolvable, on stage by definition.
+	func adoptFrontmostWindow() {
+		guard isStageActive else {
+			setStatus("Open a canvas before adopting a window.")
+			return
+		}
+		guard let panelID: PanelID = presentation.virtualFocus.panelID else {
+			setStatus("Select a Panel first; its outline shows which one.")
+			return
+		}
+		guard !isPanelOccupied(panelID) else {
+			setStatus("That Panel already holds a window. Split it, or pick another.")
+			return
+		}
+		// Front to back, so the first one that can be taken is the window the
+		// person was just looking at.
+		guard let candidate: ExternalWindowCandidate = adoptableWindows().first(where: {
+			$0.rejectionReason == nil && $0.isVisibleOnCurrentSpace
+		}) else {
+			setStatus("No window in front can be adopted right now.")
+			return
+		}
+		guard adoptWindow(identity: candidate.identity, into: panelID) else { return }
+		setStatus("Adopted \(candidate.applicationName).")
+	}
 
 	func setVirtualFocus(_ focus: VirtualFocusState) {
 		do {

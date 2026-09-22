@@ -674,6 +674,52 @@ private func testExclusiveFocusLeavesNoContourForHiddenGroups() throws {
 	)
 }
 
+/// A contour exists to tell one group from another. A canvas showing a single
+/// group has nothing to tell apart, so it draws none: an outline around
+/// everything is decoration that says nothing.
+private func testASingleGroupDrawsNoContour() throws {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	let frames: [DisplayID: LayoutRect] = [
+		weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+	]
+	let mixed: DesktopOverlaySnapshot = .init(
+		displayID: weightedDisplayID,
+		screenFrame: frames[weightedDisplayID] ?? .init(x: 0, y: 0, width: 1, height: 1),
+		presentation: presentation,
+		layout: try ConstrainedLayoutSolver.solve(
+			presentation: presentation, displayFrames: frames
+		),
+		arrangeMode: false
+	)
+	try expect(
+		!mixed.contours.isEmpty,
+		"two groups on one canvas must still be outlined"
+	)
+
+	// Put every Panel in one group; the distinction disappears and so does the
+	// fluorescence.
+	for panelID: PanelID in presentation.panels.keys {
+		presentation.panels[panelID]?.workspaceID = .init("alpha")
+	}
+	let single: DesktopOverlaySnapshot = .init(
+		displayID: weightedDisplayID,
+		screenFrame: frames[weightedDisplayID] ?? .init(x: 0, y: 0, width: 1, height: 1),
+		presentation: presentation,
+		layout: try ConstrainedLayoutSolver.solve(
+			presentation: presentation, displayFrames: frames
+		),
+		arrangeMode: false
+	)
+	try expect(
+		single.contours.isEmpty,
+		"one group on a canvas must draw no contour at all"
+	)
+	try expect(
+		single.panels.count == 3,
+		"suppressing the contour must not suppress the Panels"
+	)
+}
+
 // MARK: - Focus
 
 private func focusPresentation() throws -> WorkspacePresentation {
@@ -1399,6 +1445,7 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testASingleGroupDrawsNoContour()
 	try testSolvedLayoutCarriesContours()
 	try testSolvedContoursStayOutOfEveryPanel()
 	try testAdjacentMembersShareOneSolvedLoop()
