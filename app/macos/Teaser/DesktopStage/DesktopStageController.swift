@@ -788,7 +788,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					$0.focus != nil
 				},
 				hasVirtualPanel: virtualPanelID != nil,
-				canSplit: organization.client.canApply && virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
+				// A split needs a Panel with a solved rectangle, nothing else. It
+				// used to also require a connected client, which greyed the item
+				// out on every canvas that has no server behind it — while the
+				// keyboard shortcut worked, so the menu was simply lying.
+				canSplit: virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
 				canCycleWorkspaces: presentation.canvases.keys.contains {
 					presentation.workspaceOrder(onCanvas: $0).count > 1
 				},

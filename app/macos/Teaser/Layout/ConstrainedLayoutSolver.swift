@@ -166,9 +166,19 @@ struct ConstrainedLayoutSolver: Sendable {
 			}
 			var emphasised: WorkspaceID?
 			if case .emphasised(let workspaceID) = focus { emphasised = workspaceID }
+			// The inset exists to give a group contour room to be drawn. A canvas
+			// showing one group draws none, so insetting it would just leave a
+			// border of wasted space around the only thing on screen.
+			let groups: Set<WorkspaceID> = .init(
+				presentation.panelIDs(onCanvas: displayID)
+					.compactMap { presentation.workspaceID(of: $0) }
+			)
+			let canvasFrame: LayoutRect = groups.count > 1
+				? layoutFrame(inCanvas: displayFrame)
+				: displayFrame
 			let solution: TreeSolution = try solveTreeNode(
 				tree,
-				in: layoutFrame(inCanvas: displayFrame),
+				in: canvasFrame,
 				displayID: displayID,
 				presentation: presentation,
 				emphasised: emphasised

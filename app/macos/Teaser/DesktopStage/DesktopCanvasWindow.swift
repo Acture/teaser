@@ -97,6 +97,13 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		window.hasShadow = false
 		window.titlebarAppearsTransparent = true
 		window.titleVisibility = .hidden
+		// The canvas is a backdrop, not a document window. Its close, minimise
+		// and zoom buttons would sit in the strip around the Panels and read as
+		// chrome belonging to whatever window was adopted into it. Closing is
+		// ⌘W, fullscreen is ⌃⌘F, and both still work.
+		for button: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+			window.standardWindowButton(button)?.isHidden = true
+		}
 		container.addSubview(backdrop)
 		layoutView.addSubview(canvasView)
 		container.addSubview(layoutView)

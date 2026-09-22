@@ -262,14 +262,16 @@ private func testEachCanvasSolvesInsideItsOwnRectangle() throws {
 		presentation: presentation,
 		displayFrames: [canvasA: frameA, canvasB: frameB]
 	)
+	// One group per canvas here, so no contour is drawn and no gutter is
+	// reserved: the Panel takes the whole canvas.
 	let solver: ConstrainedLayoutSolver = .init()
 	try expect(
-		layout.panelFrames[.init("first")] == solver.layoutFrame(inCanvas: frameA),
-		"canvas A fills its own rectangle inside the gutter"
+		layout.panelFrames[.init("first")] == frameA,
+		"a single-group canvas gives its Panel the whole rectangle"
 	)
 	try expect(
-		layout.panelFrames[.init("second")] == solver.layoutFrame(inCanvas: frameB),
-		"canvas B fills its own rectangle inside the gutter"
+		layout.panelFrames[.init("second")] == frameB,
+		"the second canvas does the same"
 	)
 
 	// A Panel the presentation still knows but no open canvas places is not an
@@ -280,10 +282,10 @@ private func testEachCanvasSolvesInsideItsOwnRectangle() throws {
 		displayFrames: [canvasA: frameA]
 	)
 	try expect(
-		partial.panelFrames.count == 1
-			&& partial.panelFrames[.init("first")] == solver.layoutFrame(inCanvas: frameA),
+		partial.panelFrames.count == 1 && partial.panelFrames[.init("first")] == frameA,
 		"a Panel on a closed canvas must not fail the solve"
 	)
+	_ = solver
 }
 
 private func testVirtualFocusSurvivesPresentationRoundTrip() throws {
@@ -943,6 +945,40 @@ private func testExactFitIsNotAShortfall() throws {
 	)
 }
 
+/// The gutter around the canvas edge exists to give a contour room. A canvas
+/// that draws no contour must not reserve it: a lone window would otherwise sit
+/// inside a border of wasted space.
+private func testASingleGroupCanvasReservesNoGutter() throws {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	let frame: LayoutRect = .init(x: 0, y: 0, width: 1_000, height: 400)
+	let mixed: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: [weightedDisplayID: frame]
+	)
+	let mixedSpan: Double = (mixed.panelFrames.values.map(\.maxX).max() ?? 0)
+		- (mixed.panelFrames.values.map(\.minX).min() ?? 0)
+	try expect(
+		mixedSpan < frame.size.width,
+		"two groups must keep a gutter for their contours"
+	)
+
+	for panelID: PanelID in presentation.panels.keys {
+		presentation.panels[panelID]?.workspaceID = .init("alpha")
+	}
+	let single: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation, displayFrames: [weightedDisplayID: frame]
+	)
+	try expectApproximatelyEqual(
+		single.panelFrames.values.map(\.minX).min() ?? -1,
+		frame.minX,
+		"a single-group canvas must start at its own edge"
+	)
+	try expectApproximatelyEqual(
+		single.panelFrames.values.map(\.maxX).max() ?? -1,
+		frame.maxX,
+		"and must reach its far edge"
+	)
+}
+
 // MARK: - Gap hierarchy
 
 /// Three Panels in a row where only the outer two share a group, so one split
@@ -1458,6 +1494,7 @@ private func run() throws {
 	try testShortfallsAreReportedNotThrown()
 	try testNoShortfallOnAGenerousCanvas()
 	try testExactFitIsNotAShortfall()
+	try testASingleGroupCanvasReservesNoGutter()
 	try testGroupGapAppliesOnlyBetweenGroups()
 	try testMixedSubtreeTakesTheWideGutter()
 	try testGapAgreesWithMinimums()
