@@ -24,6 +24,10 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 	/// selected and copied.
 	private let statusLabel: NSTextField = .init(wrappingLabelWithString: "")
 	private let container: NSView
+	/// The canvas's material. Without it a windowed canvas is plain transparent
+	/// glass: the drawn contours float with nothing behind them, and there is no
+	/// surface to read as "this region is Teaser's".
+	private let backdrop: NSVisualEffectView
 	private let onEvent: @MainActor (CanvasEvent) -> Void
 	/// Which canvas the person is working in. It is not a lifecycle event: the
 	/// machine has no opinion about focus, while the host places new Workspaces
@@ -59,7 +63,17 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		)
 		container = .init(frame: .init(origin: .zero, size: contentRect.size))
 		layoutView = .init(frame: .init(origin: .zero, size: contentRect.size))
+		backdrop = .init(frame: .init(origin: .zero, size: contentRect.size))
 		super.init()
+		backdrop.autoresizingMask = [.width, .height]
+		// Blurs what is actually behind the window, so the canvas reads as a
+		// pane over the desktop rather than a flat fill.
+		backdrop.blendingMode = .behindWindow
+		backdrop.material = .underWindowBackground
+		// Keeps the blur alive when Teaser is not the active application: the
+		// canvas is a surface other applications' windows sit on, so it is
+		// normal for it not to be key.
+		backdrop.state = .active
 		window.title = "Teaser — Canvas"
 		window.isReleasedWhenClosed = false
 		window.isRestorable = false
@@ -83,6 +97,7 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		window.hasShadow = false
 		window.titlebarAppearsTransparent = true
 		window.titleVisibility = .hidden
+		container.addSubview(backdrop)
 		layoutView.addSubview(canvasView)
 		container.addSubview(layoutView)
 		statusLabel.isSelectable = true
@@ -201,10 +216,15 @@ final class DesktopCanvasWindow: NSObject, NSWindowDelegate {
 		NSApplication.shared.activate()
 	}
 
+	/// A macOS fullscreen Space has no wallpaper behind it, so there is nothing
+	/// for the material to blur and the canvas falls back to a solid backdrop.
+	/// Windowed and screen-filling canvases keep the blur: both sit on an
+	/// ordinary Space with a desktop behind them.
 	func setOpaque(_ opaque: Bool) {
 		window.isOpaque = opaque
 		window.hasShadow = opaque
 		window.backgroundColor = opaque ? Self.backdropColor : .clear
+		backdrop.isHidden = opaque
 		canvasView.needsDisplay = true
 	}
 

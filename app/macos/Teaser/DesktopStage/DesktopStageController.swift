@@ -62,6 +62,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var permissionTask: Task<Void, Never>?
 	private var newSpaceTask: Task<Void, Never>?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
+	/// Set by Stop Layout, so focusing a canvas afterwards does not immediately
+	/// start it again. Cleared by an explicit Start.
+	private var stageStoppedExplicitly: Bool = false
 	private var lastLoggedStatusMessage: String?
 
 	private lazy var windowPickerModel: DesktopStageWindowPickerModel = .init(
@@ -169,9 +172,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard !isRunning else { return }
 		isRunning = true
 		installSystemObservers()
-		// Launch opens one canvas filling its screen. Filling keeps it on this
-		// Space, which is the only state where adopted windows can sit inside it.
-		openCanvas(fill: .fillScreen)
+		// Launch opens an ordinary window. Filling the screen is immersive and
+		// covers everything the person might want to drag in, so it is something
+		// they ask for (View › Fill Screen) rather than what they land in.
+		openCanvas(fill: .free)
 		// No window opens itself on top of the canvas. Connecting is reachable
 		// from the status menu, and the canvas says so in its own status text,
 		// which is selectable and copyable where it stands.
@@ -224,9 +228,33 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	/// Canvas commands and new Workspaces follow the canvas the person is in,
 	/// which is the key window rather than whichever canvas opened last.
 	private func canvasBecameKey(_ id: CanvasID) {
-		guard canvases[id] != nil, lastKeyCanvasID != id else { return }
+		guard canvases[id] != nil else { return }
+		// Working in a canvas is the consent. There is no separate Start step.
+		activateStageIfPossible()
+		guard lastKeyCanvasID != id else { return }
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
+	}
+
+	/// Brings the stage up when the person is working in a canvas and macOS has
+	/// already granted Accessibility. It never prompts: an unauthorized app
+	/// stays inactive and says so, rather than throwing a system dialog at
+	/// someone who only clicked their own window. An explicit Stop Layout wins
+	/// until the next explicit Start, so this cannot undo that choice.
+	private func activateStageIfPossible() {
+		guard !orchestrator.isStageActive, !stageStoppedExplicitly,
+			orchestrator.permissionStatus(prompt: false) == .authorized
+		else { return }
+		orchestrator.setDisplays(canvasDisplays())
+		do {
+			try orchestrator.startStage()
+			try managedWindowFocusObserver.start()
+			shortcutMonitor.start()
+		} catch {
+			orchestrator.stopStage()
+			orchestrator.setStatus(error.localizedDescription)
+		}
+		updateChrome()
 	}
 
 	private func makeCanvas(id: CanvasID, index: Int) -> DesktopCanvasWindow {
@@ -628,10 +656,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	// MARK: - Stage lifecycle
 
 	private func toggleStage() {
-		if orchestrator.isStageActive { orchestrator.stopStage(); return }
-		guard organization.client.state == .ready else {
-			orchestrator.setStatus("Connect to Herdr before starting the stage. Stop/Release remains available offline."); return
+		if orchestrator.isStageActive {
+			stageStoppedExplicitly = true
+			orchestrator.stopStage()
+			return
 		}
+		stageStoppedExplicitly = false
+		// No connection gate: a canvas with no server behind it holds its own
+		// Panels, and laying those out touches nobody's organization.
 		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
 			requestAccessibility()
 			return
@@ -682,7 +714,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			orchestrator.setStatus("Accessibility allowed. Drag a window onto a canvas.")
 			startExternalObservation(promptForAccessibility: false)
 		} else {
-			orchestrator.setStatus("Accessibility allowed. Use Start Stage to begin adoption.")
+			// Permission just arrived; if the person is already in a canvas this
+			// starts without them having to go looking for a menu item.
+			activateStageIfPossible()
+			if !orchestrator.isStageActive {
+				orchestrator.setStatus(
+					"Accessibility allowed. Start Layout in the Teaser status menu."
+				)
+			}
 		}
 		updateChrome()
 	}
