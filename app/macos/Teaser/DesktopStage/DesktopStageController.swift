@@ -172,7 +172,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		// Launch opens one canvas filling its screen. Filling keeps it on this
 		// Space, which is the only state where adopted windows can sit inside it.
 		openCanvas(fill: .fillScreen)
-		organizationControls.show()
+		// No window opens itself on top of the canvas. Connecting is reachable
+		// from the status menu, and the canvas says so in its own status text,
+		// which is selectable and copyable where it stands.
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
 			while !Task.isCancelled {
@@ -892,12 +894,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func presentPanelDefinitionEditor() {
 		organizationControls.show()
-		orchestrator.setStatus("Set a custom kind in Organization controls; size profiles remain server-owned.")
+		orchestrator.setStatus("Set a custom kind in Connection & Organization; size profiles remain server-owned.")
 	}
 
 	private func confirmResetShowcase() {
 		organizationControls.show()
-		orchestrator.setStatus("Delete Panels and empty parents explicitly in Organization controls.")
+		orchestrator.setStatus("Delete Panels and empty parents explicitly in Connection & Organization.")
 	}
 
 	// MARK: - Persistence
@@ -908,7 +910,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		let presentation: WorkspacePresentation = .init(panelKinds: try! .init())
 		do {
 			return .init(presentation: presentation, notes: [:], store: try PresentationStore.live(),
-				statusMessage: "Connect to an explicit Herdr socket in Connection & Organization.")
+				statusMessage: "Not connected. Open Connection & Organization from the Teaser status menu to choose a Herdr socket.")
 		} catch {
 			return .init(presentation: presentation, notes: [:], store: nil,
 				statusMessage: "Local archive unavailable: \(error.localizedDescription)")
