@@ -802,6 +802,25 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			// windows in them: macOS admits no other app's window to this Space.
 			lines.append("Adopted windows stay on the desktop Space while this canvas is full screen.")
 		}
+		// An unsatisfiable size is explained rather than silently absorbed: the
+		// Panels are still placed, just smaller than their kind asks for.
+		let canvasPanels: Set<PanelID> = panelIDs(onDisplay: .init(canvas: id))
+		let short: [PanelID: LayoutSize] = (orchestrator.layout?.quality.shortfalls ?? [:])
+			.filter { canvasPanels.contains($0.key) }
+		if !short.isEmpty {
+			let named: [String] = short.keys
+				.sorted { $0.rawValue < $1.rawValue }
+				.prefix(3)
+				.map { orchestrator.presentation.panels[$0]?.title ?? $0.rawValue }
+			let extra: Int = short.count - named.count
+			let tail: String = extra > 0 ? " and \(extra) more" : ""
+			let needed: LayoutSize = short.values.max { $0.area < $1.area } ?? .zero
+			lines.append(
+				"This canvas is too small for \(named.joined(separator: ", "))\(tail); "
+					+ "the largest wants \(needed.layoutDescription). Make the canvas "
+					+ "bigger, or close or merge a Panel."
+			)
+		}
 		return lines.isEmpty ? nil : lines.joined(separator: "\n")
 	}
 

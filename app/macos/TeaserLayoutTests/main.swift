@@ -576,6 +576,69 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 	)
 }
 
+// MARK: - Degradation
+
+/// A canvas too small to honour a Panel's minimum still lays every Panel out —
+/// refusing would leave the person with nothing — but it says which Panels it
+/// could not satisfy and what they need.
+private func testShortfallsAreReportedNotThrown() throws {
+	let presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1,
+		secondMinimum: .init(width: 600, height: 400)
+	)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 300, height: 200),
+		]
+	)
+	try expect(layout.panelFrames.count == 2, "every Panel is still placed")
+	let needed: LayoutSize = try unwrap(
+		layout.quality.shortfalls[.init("second")],
+		"the Panel that could not fit must be reported"
+	)
+	try expect(
+		needed == .init(width: 600, height: 400),
+		"the report must state the size the Panel actually needs"
+	)
+}
+
+private func testNoShortfallOnAGenerousCanvas() throws {
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: try weightedPresentation(firstWeight: 1, secondWeight: 1),
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 2_000, height: 1_200),
+		]
+	)
+	try expect(
+		layout.quality.shortfalls.isEmpty,
+		"a canvas with room to spare must report nothing"
+	)
+}
+
+/// A Panel given exactly its minimum must not be reported: the split arithmetic
+/// can land a fraction of a point under, and a warning that never clears is
+/// noise rather than an explanation.
+private func testExactFitIsNotAShortfall() throws {
+	let solver: ConstrainedLayoutSolver = .init()
+	let layout: PresentationLayout = try solver.solve(
+		presentation: try gapPresentation(),
+		displayFrames: [
+			weightedDisplayID: .init(
+				x: 0,
+				y: 0,
+				width: 30 + solver.panelGap + solver.groupGap + 2 * solver.groupGap,
+				height: 200
+			),
+		]
+	)
+	try expect(
+		layout.quality.shortfalls.isEmpty,
+		"an exact fit is satisfied, not short: \(layout.quality.shortfalls)"
+	)
+}
+
 // MARK: - Gap hierarchy
 
 /// Three Panels in a row where only the outer two share a group, so one split
@@ -1078,6 +1141,9 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testShortfallsAreReportedNotThrown()
+	try testNoShortfallOnAGenerousCanvas()
+	try testExactFitIsNotAShortfall()
 	try testGroupGapAppliesOnlyBetweenGroups()
 	try testMixedSubtreeTakesTheWideGutter()
 	try testGapAgreesWithMinimums()

@@ -21,6 +21,12 @@ struct LayoutDivider: Codable, Equatable, Hashable, Sendable {
 struct LayoutQuality: Codable, Equatable, Sendable {
 	let maximumAspectRatioDeviation: Double
 	let totalAspectRatioDeviation: Double
+	/// Panels the canvas could not give their minimum size, and the size each
+	/// one actually needs. The solve still succeeds and still places every
+	/// Panel — shrinking in proportion is better than refusing to lay out — but
+	/// a Panel below its minimum is something the person should be told about
+	/// rather than left to wonder at.
+	let shortfalls: [PanelID: LayoutSize]
 }
 
 struct PresentationLayout: Codable, Equatable, Sendable {
@@ -505,6 +511,7 @@ struct ConstrainedLayoutSolver: Sendable {
 	) throws -> LayoutQuality {
 		var maximumDeviation: Double = 0
 		var totalDeviation: Double = 0
+		var shortfalls: [PanelID: LayoutSize] = [:]
 		for (panelID, frame): (PanelID, LayoutRect) in panelFrames {
 			guard let panel: PanelDescriptor = presentation.panels[panelID] else {
 				throw ConstrainedLayoutError.missingPanel(panelID)
@@ -524,10 +531,18 @@ struct ConstrainedLayoutSolver: Sendable {
 			)
 			maximumDeviation = max(maximumDeviation, deviation)
 			totalDeviation += deviation
+			// A tolerance, because a Panel given exactly its minimum can land a
+			// fraction of a point under it through the split arithmetic.
+			if frame.size.width < profile.minimumSize.width - 0.001
+				|| frame.size.height < profile.minimumSize.height - 0.001
+			{
+				shortfalls[panelID] = profile.minimumSize
+			}
 		}
 		return .init(
 			maximumAspectRatioDeviation: maximumDeviation,
-			totalAspectRatioDeviation: totalDeviation
+			totalAspectRatioDeviation: totalDeviation,
+			shortfalls: shortfalls
 		)
 	}
 
