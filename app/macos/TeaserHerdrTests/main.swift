@@ -104,7 +104,7 @@ func project(
 	_ snapshot: OrganizationSnapshot,
 	previous: WorkspacePresentation? = nil
 ) throws -> WorkspacePresentation {
-	try OrganizationProjection.project(snapshot, previous: previous, placement: testPlacement).presentation
+	try OrganizationProjection.project(snapshot, previous: previous, placement: testPlacement)
 }
 
 let cases: [TestCase] = [
@@ -112,7 +112,7 @@ let cases: [TestCase] = [
 		let value: OrganizationSnapshot = try fixture(); try value.validate()
 		try expect(value.panels[0].title == "Design 👩‍💻", "shared fixture includes joined emoji")
 		let projected: WorkspacePresentation = try project(value)
-		try expect(projected.workspaces.values.flatMap { $0.panels.values }.count == 4, "all fixture Panels")
+		try expect(projected.panels.count == 4, "all fixture Panels")
 		try expect(projected.panelKinds.definition(for: .init("custom-chart")) != nil, "custom kind retained")
 	},
 	.init("Rust-valid Unicode labels and format scalars remain valid") {
@@ -202,17 +202,17 @@ let cases: [TestCase] = [
 	.init("rename preserves placement; regroup and deletion reconcile stable IDs") {
 		var value: OrganizationSnapshot = try fixture()
 		var old: WorkspacePresentation = try project(value)
-		let workspaceID: WorkspaceID = .init(value.workspaces[0].id)
-		let splitID: LayoutSplitID = old.workspaces[workspaceID]!.panelTree.splitIDs[0]
-		try old.setDesiredRatio(0.7, for: splitID, in: .workspace(workspaceID))
+		let canvasID: DisplayID = old.canvases.keys.first!
+		let splitID: LayoutSplitID = old.canvases[canvasID]!.panelTree!.splitIDs[0]
+		try old.setUserRatio(0.7, for: splitID, onCanvas: canvasID)
 		value.panels[0].title = "Renamed"
 		let renamed: WorkspacePresentation = try project(value, previous: old)
-		try expect(renamed.workspaces[workspaceID]!.panelTree == old.workspaces[workspaceID]!.panelTree, "pixel placement survives rename")
+		try expect(renamed.canvases[canvasID]!.panelTree == old.canvases[canvasID]!.panelTree, "pixel placement survives rename")
 		value.workspaces.append(.init(id: "second", project_id: value.projects[0].id, name: "Second"))
 		value.panels[0].workspace_id = "second"; value.panels.removeLast()
 		let next: WorkspacePresentation = try project(value, previous: renamed)
-		try expect(next.workspaces[.init("second")]?.panels[.init("panel-notes")] != nil, "regroup accepted")
-		try expect(next.workspaces[workspaceID]?.panels[.init("panel-custom")] == nil, "deleted Panel removed")
+		try expect(next.workspaceID(of: .init("panel-notes")) == .init("second"), "regroup accepted")
+		try expect(next.panels[.init("panel-custom")] == nil, "deleted Panel removed")
 	},
 	.init("server rejection remains visible and revision conflict refreshes") {
 		struct RequestID: Decodable { let id: String }
@@ -324,7 +324,7 @@ let cases: [TestCase] = [
 		f.orchestrator.setVirtualPanel(.init("panel-app"))
 		f.orchestrator.perform(.splitPanel)
 		try expect(f.orchestrator.presentation.workspaces.count == before.workspaces.count
-			&& f.orchestrator.presentation.workspaces.values.flatMap { $0.panels.keys }.count == 4, "split cannot invent local Panel")
+			&& f.orchestrator.presentation.panels.count == 4, "split cannot invent local Panel")
 		let window: FakeWindow = f.world.addWindow()
 		try expect(!f.orchestrator.adoptWindow(identity: window.identity, into: .init("panel-cli")), "terminal metadata cannot acquire native lease")
 		try f.cleanup()
@@ -347,12 +347,12 @@ let cases: [TestCase] = [
 		try expect(f.orchestrator.layout?.panelFrames.count == 4, "connect previews layout without stage")
 		try f.orchestrator.startStage(); f.orchestrator.setVirtualPanel(.init("panel-notes"))
 		f.orchestrator.perform(.splitPanel)
-		try expect(f.orchestrator.presentation.workspaces.values.flatMap { $0.panels.keys }.count == 4, "no optimistic local membership")
+		try expect(f.orchestrator.presentation.panels.count == 4, "no optimistic local membership")
 		let panel: OrganizationPanel = try pendingPanel(f.network.sockets.last!)
 		value.panels.append(panel)
 		try f.network.sockets.last!.snapshot(revision(value, 8))
 		try expect(f.orchestrator.presentation.virtualFocus.panelID == .init(panel.id), "committed split focused")
-		try expect(f.orchestrator.presentation.workspaces.values.flatMap { $0.panels.keys }.count == 5, "authoritative new Panel appears")
+		try expect(f.orchestrator.presentation.panels.count == 5, "authoritative new Panel appears")
 		try f.cleanup()
 	},
 	.init("drag-edge creation waits for commit before exact-window adoption") {
@@ -405,7 +405,7 @@ let cases: [TestCase] = [
 		let panel: OrganizationPanel = try pendingPanel(socket)
 		let id: String = try JSONDecoder().decode(RequestID.self, from: socket.sent[0]).id
 		socket.onFrame?(Data("{\"id\":\"\(id)\",\"error\":{\"code\":\"invalid_value\",\"message\":\"rejected\"}}".utf8))
-		try expect(f.orchestrator.presentation.workspaces.values.flatMap { $0.panels.keys }.count == 4, "rejected split leaves graph unchanged")
+		try expect(f.orchestrator.presentation.panels.count == 4, "rejected split leaves graph unchanged")
 		value.panels.append(panel)
 		try f.network.sockets[0].event(revision(value, 8))
 		try expect(f.orchestrator.presentation.virtualFocus.panelID != .init(panel.id), "cancelled intent never reactivates on later snapshot")

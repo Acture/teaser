@@ -28,7 +28,14 @@ private func run() throws {
 	try expect(directoryMode == 0o700 && fileMode == 0o600, "existing directories and saved files must be private")
 	let data: Data = try Data(contentsOf: store.documentURL)
 	let encoded: String = String(decoding: data, as: UTF8.self)
-	let future: Data = Data(encoded.replacingOccurrences(of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99").utf8)
+	// Derived from the current version, not a literal: a hardcoded "1" silently
+	// became a no-op when the schema was bumped, and the case passed without
+	// ever rewriting the version it claims to reject.
+	let current: String = "\"schemaVersion\" : \(PresentationDocument.currentSchemaVersion)"
+	try expect(encoded.contains(current), "a saved document must state its schema version")
+	let future: Data = Data(
+		encoded.replacingOccurrences(of: current, with: "\"schemaVersion\" : 99").utf8
+	)
 	try future.write(to: store.documentURL)
 	do {
 		_ = try store.load()

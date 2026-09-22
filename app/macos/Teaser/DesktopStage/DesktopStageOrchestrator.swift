@@ -126,9 +126,23 @@ final class DesktopStageOrchestrator {
 	private(set) var panelAssignments: [PanelID: ExternalWindowIdentity] = [:]
 	private(set) var statusMessage: String?
 	private(set) var isStageActive: Bool = false
+	/// Set by an explicit Stop, so focusing a canvas afterwards does not start
+	/// the stage again. Cleared by an explicit Start.
+	private(set) var stageStoppedExplicitly: Bool = false
 	private(set) var isArrangeModeEnabled: Bool = false
 	private(set) var dropHighlight: DesktopOverlayDropHighlight?
-	private(set) var isSharedOrganization: Bool = false
+	/// Whether the server owns this presentation, which is the only question the
+	/// adoption, mutation and undo paths actually want answered.
+	///
+	/// It is deliberately derived rather than stored. The stored flag used to be
+	/// set when the session object was constructed — at app start, long before
+	/// anything connects — so every one of those paths behaved as though a
+	/// server owned a presentation that did not exist yet: adoption was refused
+	/// against an empty adoptable set, and local edits were refused outright.
+	var isSharedOrganization: Bool { hasAuthoritativeProjection }
+	/// Set by the first authoritative projection and never cleared: once the
+	/// server has spoken, this client does not go back to owning the graph.
+	private(set) var hasAuthoritativeProjection: Bool = false
 	private var sharedAdoptablePanels: Set<PanelID> = []
 	var onSharedKindChange: ((PanelID, PanelKindID) -> Void)?
 	var onSharedSplit: ((DesktopStageSplitIntent) -> Void)?
@@ -153,6 +167,10 @@ final class DesktopStageOrchestrator {
 	/// still-open canvas is tiling.
 	private var retainedLeases: Set<ExternalWindowIdentity> = []
 	private var detachedIdentities: Set<ExternalWindowIdentity> = []
+	/// Windows Teaser minimized to clear a canvas for a focused group. Only
+	/// these are ever restored: one the person had already minimized before
+	/// adoption must stay minimized when focus ends.
+	private var minimizedForFocus: Set<ExternalWindowIdentity> = []
 	private var draggingIdentity: ExternalWindowIdentity?
 	private var undoSnapshot: DesktopStageStateSnapshot?
 	private var undoCoalescingKey: String?
@@ -192,8 +210,10 @@ final class DesktopStageOrchestrator {
 
 	var canUndo: Bool { !isSharedOrganization && undoSnapshot != nil }
 
+	/// Attaches a session. It does not by itself hand ownership to the server —
+	/// only an authoritative projection does that — so nothing here may gate
+	/// adoption or local edits.
 	func useSharedOrganization() {
-		isSharedOrganization = true
 		discardUndoHistory()
 	}
 
@@ -213,6 +233,7 @@ final class DesktopStageOrchestrator {
 		}
 		discardUndoHistory()
 		presentation = next; notes = nextNotes; sharedAdoptablePanels = adoptable
+		hasAuthoritativeProjection = true
 		relayout(synchronously: isStageActive)
 		host?.orchestratorDidChangeState(self)
 	}
@@ -249,6 +270,93 @@ final class DesktopStageOrchestrator {
 	func setDisplays(_ displays: [DesktopStageDisplay]) {
 		self.displays = displays
 		adaptPresentationToDisplays()
+	}
+
+	/// A canvas the person just opened with no server behind it still has to be
+	/// usable: it gets one empty Panel — the thing a window is dragged into, and
+	/// the thing a split divides — rather than a surface that accepts nothing.
+	///
+	/// The host calls this when a canvas actually opens, not on every display
+	/// change, so merely knowing about a display never invents a Panel. It never
+	/// runs in shared mode: there the projection owns every canvas, and seeding
+	/// here would make the client a second writer of membership.
+	func seedCanvasIfUnconnected(_ displayID: DisplayID) {
+		guard !hasAuthoritativeProjection,
+			presentation.canvases[displayID] == nil
+		else { return }
+		// Each canvas starts its own group. Membership stays per Panel: a split
+		// keeps the group, and moving a Panel to another canvas would not change
+		// it.
+		let workspaceID: WorkspaceID = .init("local-\(displayID.rawValue)")
+		let panelID: PanelID = identifiers.makePanelID(prefix: "panel")
+		presentation.canvases[displayID] = .init(displayID: displayID)
+		if presentation.workspaces[workspaceID] == nil {
+			presentation.workspaces[workspaceID] = .init(
+				id: workspaceID,
+				title: "Canvas",
+				detail: ""
+			)
+		}
+		do {
+			try presentation.seedPanel(
+				.init(
+					id: panelID,
+					title: "Empty",
+					workspaceID: workspaceID,
+					kindID: .generic,
+					providerHint: nil,
+					profileOverride: nil,
+					nativeContent: .none
+				),
+				onCanvas: displayID
+			)
+			// A split needs a target, so the first Panel takes Virtual Focus.
+			if presentation.virtualFocus.panelID == nil {
+				try presentation.setVirtualFocus(panelID)
+			}
+		} catch {
+			setStatus(error.localizedDescription)
+		}
+	}
+
+	/// Brings the stage up because a canvas is open. Opening one is the consent:
+	/// there is no separate Start step, and no connection is required — a canvas
+	/// with no server behind it holds its own Panels.
+	///
+	/// Deliberately not keyed to focus. The canvas sits below ordinary windows,
+	/// and the gesture it exists for is dragging *another* application's window
+	/// onto it — during which Teaser never becomes key. Waiting for focus would
+	/// mean the drag only worked after clicking the backdrop first.
+	///
+	/// It never prompts. An app macOS has not authorized stays inactive and says
+	/// so, rather than throwing a system dialog at someone who only opened a
+	/// window. Returns whether the stage came up, so the host knows whether to
+	/// start its observers.
+	@discardableResult
+	func activateForOpenCanvas() -> Bool {
+		guard !isStageActive, !stageStoppedExplicitly, !displays.isEmpty,
+			permissionStatus(prompt: false) == .authorized
+		else { return false }
+		do {
+			try startStage()
+			return true
+		} catch {
+			stopStage()
+			setStatus(error.localizedDescription)
+			return false
+		}
+	}
+
+	/// Stop Layout. Remembered, so the next canvas click does not undo it.
+	func stopStageExplicitly() {
+		stageStoppedExplicitly = true
+		stopStage()
+	}
+
+	/// Start Layout. Clears an earlier explicit Stop.
+	func startStageExplicitly() throws {
+		stageStoppedExplicitly = false
+		try startStage()
 	}
 
 	func startStage() throws {
@@ -360,11 +468,9 @@ final class DesktopStageOrchestrator {
 		// A snapshot taken while this canvas was open places Workspaces on a
 		// display that no longer exists, so no Undo step can survive its close.
 		discardUndoHistory()
-		if case .focused(let workspaceID) = presentation.mode,
-			presentation.workspaces[workspaceID]?.displayAffinity == displayID
-		{
-			presentation.showTiled()
-		}
+		presentation.clearFocus(onCanvas: displayID)
+		// Released windows are no longer Teaser's to restore.
+		minimizedForFocus.subtract(releasedIdentities)
 		if failures > 0 {
 			statusMessage = "Canvas closed; \(failures) window(s) could not be restored"
 		}
@@ -379,21 +485,26 @@ final class DesktopStageOrchestrator {
 	/// answer every canvas counts as visible, which is the single-canvas
 	/// behavior this started from.
 	private func isOnScreen(panel panelID: PanelID) -> Bool {
-		guard let visibleCanvasDisplays,
-			let workspaceID: WorkspaceID = workspaceID(containing: panelID),
-			let display: DisplayID = presentation.workspaces[workspaceID]?.displayAffinity
-		else { return true }
-		return visibleCanvasDisplays().contains(display)
+		guard let visibleCanvasDisplays else { return true }
+		guard let canvasID: DisplayID = presentation.canvasID(containing: panelID)
+		else { return false }
+		return visibleCanvasDisplays().contains(canvasID)
 	}
 
 	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
-		var result: Set<PanelID> = []
-		for workspace: WorkspaceDescriptor in presentation.workspaces.values
-			where workspace.displayAffinity == displayID
+		.init(presentation.panelIDs(onCanvas: displayID))
+	}
+
+	/// The canvas the person is working in, as far as this type can tell: the one
+	/// holding Virtual Focus, else the lowest-sorting open canvas. Which canvas
+	/// is actually key is host knowledge.
+	private var activeCanvasID: DisplayID? {
+		if let panelID: PanelID = presentation.virtualFocus.panelID,
+			let canvasID: DisplayID = presentation.canvasID(containing: panelID)
 		{
-			result.formUnion(workspace.panels.keys)
+			return canvasID
 		}
-		return result
+		return presentation.canvases.keys.sorted { $0.rawValue < $1.rawValue }.first
 	}
 
 	func perform(_ command: DesktopStageCommand) {
@@ -406,8 +517,10 @@ final class DesktopStageOrchestrator {
 			setStatus(isArrangeModeEnabled ? "Arrange mode" : "Live mode")
 		case .splitPanel:
 			splitVirtualPanel()
+		case .adoptFrontmostWindow:
+			adoptFrontmostWindow()
 		case .toggleWorkspaceFocus:
-			toggleWorkspaceFocus(workspaceID: presentation.virtualFocus.workspaceID)
+			toggleWorkspaceFocus(workspaceID: nil)
 		case .previousWorkspace:
 			cycleWorkspace(offset: -1)
 		case .nextWorkspace:
@@ -578,33 +691,37 @@ final class DesktopStageOrchestrator {
 					return
 				}
 				let newPanelID: PanelID = identifiers.makePanelID(prefix: "adopted")
+				// The adopted window joins the group of the Panel it was aimed at.
+				guard let targetWorkspaceID: WorkspaceID = presentation.workspaceID(
+					of: targetPanelID
+				) else {
+					throw DesktopStageOrchestratorError.panelUnavailable(targetPanelID)
+				}
 				let newPanel: PanelDescriptor = descriptor(
 					for: drag.selection.initialSnapshot,
-					panelID: newPanelID
+					panelID: newPanelID,
+					workspaceID: targetWorkspaceID
 				)
 				try performTransaction(label: "Panel split") {
 					try ensureLease(for: drag.selection)
-					guard let workspaceID: WorkspaceID = workspaceID(
+					guard let canvasID: DisplayID = presentation.canvasID(
 						containing: targetPanelID
 					) else {
 						throw DesktopStageOrchestratorError.panelUnavailable(targetPanelID)
 					}
 					try presentation.insertPanel(
 						newPanel,
-						in: workspaceID,
+						onCanvas: canvasID,
 						at: edge,
 						of: targetPanelID,
 						splitID: identifiers.makeSplitID(prefix: "drop"),
-						desiredRatio: 0.5
+						preference: .derived
 					)
 					if let sourcePanelID {
 						panelAssignments.removeValue(forKey: sourcePanelID)
 					}
 					panelAssignments[newPanelID] = identity
-					try presentation.setVirtualFocus(
-						workspaceID: workspaceID,
-						panelID: newPanelID
-					)
+					try presentation.setVirtualFocus(newPanelID)
 				}
 				host?.orchestrator(self, didCreatePanel: newPanelID)
 			}
@@ -667,12 +784,11 @@ final class DesktopStageOrchestrator {
 
 	/// Placement is client-owned and applied only after server membership exists.
 	func placeCommittedPanel(_ panelID: PanelID, target: PanelID, edge: LayoutEdge) throws {
-		guard let workspaceID: WorkspaceID = workspaceID(containing: target),
-			var workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID], workspace.panels[panelID] != nil
+		guard presentation.panels[panelID] != nil,
+			let canvasID: DisplayID = presentation.canvasID(containing: target)
 		else { throw DesktopStageOrchestratorError.panelUnavailable(panelID) }
-		try workspace.panelTree.remove(panelID)
-		try workspace.panelTree.insert(panelID, at: edge, of: target, splitID: identifiers.makeSplitID(prefix: "local-server-split"))
-		presentation.workspaces[workspaceID] = workspace
+		try presentation.movePanel(panelID, toCanvas: canvasID, at: edge, of: target,
+			splitID: identifiers.makeSplitID(prefix: "local-server-split"))
 		try focusModel(on: panelID)
 		relayout(synchronously: isStageActive)
 		host?.orchestratorDidRequestSave(self)
@@ -771,11 +887,9 @@ final class DesktopStageOrchestrator {
 	func synchronizeVirtualFocus(with identity: ExternalWindowIdentity) {
 		guard let panelID: PanelID = panelAssignments.first(where: {
 			$0.value == identity
-		})?.key,
-			let workspaceID: WorkspaceID = workspaceID(containing: panelID)
-		else { return }
+		})?.key else { return }
 		do {
-			try presentation.setVirtualFocus(workspaceID: workspaceID, panelID: panelID)
+			try presentation.setVirtualFocus(panelID)
 			statusMessage = nil
 			host?.orchestratorDidRequestSave(self)
 			host?.orchestratorDidChangeState(self)
@@ -786,13 +900,38 @@ final class DesktopStageOrchestrator {
 
 	// MARK: - Virtual focus and Workspace presentation
 
+	/// Adopts whatever window is in front into the Panel that has Virtual Focus,
+	/// without a drag. Dragging asks macOS to recognise a window-move gesture,
+	/// which Stage Manager breaks by scaling and animating the window it moves;
+	/// the window in front is simply resolvable, on stage by definition.
+	func adoptFrontmostWindow() {
+		guard isStageActive else {
+			setStatus("Open a canvas before adopting a window.")
+			return
+		}
+		guard let panelID: PanelID = presentation.virtualFocus.panelID else {
+			setStatus("Select a Panel first; its outline shows which one.")
+			return
+		}
+		guard !isPanelOccupied(panelID) else {
+			setStatus("That Panel already holds a window. Split it, or pick another.")
+			return
+		}
+		// Front to back, so the first one that can be taken is the window the
+		// person was just looking at.
+		guard let candidate: ExternalWindowCandidate = adoptableWindows().first(where: {
+			$0.rejectionReason == nil && $0.isVisibleOnCurrentSpace
+		}) else {
+			setStatus("No window in front can be adopted right now.")
+			return
+		}
+		guard adoptWindow(identity: candidate.identity, into: panelID) else { return }
+		setStatus("Adopted \(candidate.applicationName).")
+	}
+
 	func setVirtualFocus(_ focus: VirtualFocusState) {
-		guard let workspaceID: WorkspaceID = focus.workspaceID else { return }
 		do {
-			try presentation.setVirtualFocus(
-				workspaceID: workspaceID,
-				panelID: focus.panelID
-			)
+			try presentation.setVirtualFocus(focus.panelID)
 			statusMessage = nil
 			host?.orchestratorDidRequestSave(self)
 			host?.orchestratorDidChangeState(self)
@@ -847,11 +986,8 @@ final class DesktopStageOrchestrator {
 	}
 
 	func setVirtualPanel(_ panelID: PanelID) {
-		guard let workspaceID: WorkspaceID = workspaceID(containing: panelID) else {
-			return
-		}
 		do {
-			try presentation.setVirtualFocus(workspaceID: workspaceID, panelID: panelID)
+			try presentation.setVirtualFocus(panelID)
 			host?.orchestratorDidRequestSave(self)
 			host?.orchestratorDidChangeState(self)
 		} catch {
@@ -860,30 +996,29 @@ final class DesktopStageOrchestrator {
 	}
 
 	private func focusModel(on panelID: PanelID) throws {
-		guard let workspaceID: WorkspaceID = workspaceID(containing: panelID) else {
-			throw DesktopStageOrchestratorError.panelUnavailable(panelID)
-		}
-		try presentation.setVirtualFocus(workspaceID: workspaceID, panelID: panelID)
+		try presentation.setVirtualFocus(panelID)
 	}
 
+	/// Cycles the groups present on the canvas being worked in. A group with no
+	/// Panel here is not in the cycle: focus is per canvas and never reaches
+	/// across to members placed elsewhere.
 	private func cycleWorkspace(offset: Int) {
 		let before: WorkspacePresentation = presentation
-		let workspaceIDs: [WorkspaceID] = workspaceOrder()
+		guard let canvasID: DisplayID = activeCanvasID else { return }
+		let workspaceIDs: [WorkspaceID] = presentation.workspaceOrder(onCanvas: canvasID)
 		guard workspaceIDs.count > 1 else { return }
-		let currentID: WorkspaceID? = presentation.virtualFocus.workspaceID
+		let currentID: WorkspaceID? = presentation.virtualFocus.panelID
+			.flatMap { presentation.workspaceID(of: $0) }
 		let currentIndex: Int = currentID.flatMap { workspaceIDs.firstIndex(of: $0) } ?? 0
 		let nextIndex: Int = (currentIndex + offset + workspaceIDs.count) % workspaceIDs.count
 		let nextID: WorkspaceID = workspaceIDs[nextIndex]
-		guard let workspace: WorkspaceDescriptor = presentation.workspaces[nextID] else {
-			return
+		let member: PanelID? = presentation.panelIDs(onCanvas: canvasID).first {
+			presentation.workspaceID(of: $0) == nextID
 		}
 		do {
-			try presentation.setVirtualFocus(
-				workspaceID: nextID,
-				panelID: workspace.panelTree.leaves.first
-			)
-			if case .focused = presentation.mode {
-				try presentation.focusWorkspace(nextID)
+			try presentation.setVirtualFocus(member)
+			if presentation.canvases[canvasID]?.focus != nil {
+				presentation.focusWorkspace(nextID, onCanvas: canvasID)
 				try solveAndApply(synchronously: true)
 			}
 			host?.orchestratorDidChangeState(self)
@@ -894,42 +1029,114 @@ final class DesktopStageOrchestrator {
 		}
 	}
 
+	/// Focus has two stages on one canvas. The first grows the group and raises
+	/// it, leaving every other Panel placed and usable. The second gives the
+	/// group the canvas and minimizes the rest, which is the only way macOS
+	/// lets Teaser move another application's window out of the way. A third
+	/// press restores everything.
 	func toggleWorkspaceFocus(workspaceID requestedID: WorkspaceID?) {
+		guard let canvasID: DisplayID = activeCanvasID else { return }
 		guard let workspaceID: WorkspaceID = requestedID
-			?? presentation.virtualFocus.workspaceID
+			?? presentation.virtualFocus.panelID.flatMap({
+				presentation.workspaceID(of: $0)
+			})
 		else { return }
+		var restored: Bool = false
 		do {
 			try performTransaction(label: "Workspace presentation changed") {
-				switch presentation.mode {
-				case .focused(let focusedID) where focusedID == workspaceID:
-					presentation.showTiled()
-				case .focused, .tiled:
-					try presentation.focusWorkspace(workspaceID)
+				switch presentation.canvases[canvasID]?.focus {
+				case .emphasised(let id) where id == workspaceID:
+					presentation.focusWorkspace(
+						workspaceID, onCanvas: canvasID, exclusive: true
+					)
+				case .exclusive(let id) where id == workspaceID:
+					presentation.clearFocus(onCanvas: canvasID)
+					restored = true
+				default:
+					if presentation.canvases[canvasID]?.focus != nil { restored = true }
+					if !presentation.focusWorkspace(workspaceID, onCanvas: canvasID) {
+						// Saying so beats a silent no-op: the group is real, it
+						// just has no member on the canvas being worked in.
+						setStatus("That group has no Panel on this canvas.")
+					}
 				}
 			}
 		} catch {
 			setStatus(error.localizedDescription)
+			return
 		}
+		applyFocusMinimization(onCanvas: canvasID)
+		// A restored window has to be framed again, and it was not in the last
+		// solve because focus had pruned it out.
+		if restored { relayout(synchronously: isStageActive) }
+	}
+
+	/// Brings the canvas's windows into line with its focus stage. A window that
+	/// refuses to minimize is reported and skipped: half a genie animation is
+	/// not worth rolling back, and the rest of the canvas is still correct.
+	private func applyFocusMinimization(onCanvas canvasID: DisplayID) {
+		var failures: Int = 0
+		if case .exclusive(let workspaceID) = presentation.canvases[canvasID]?.focus {
+			for panelID: PanelID in presentation.panelIDs(onCanvas: canvasID)
+			where presentation.workspaceID(of: panelID) != workspaceID {
+				guard let identity: ExternalWindowIdentity = panelAssignments[panelID],
+					!minimizedForFocus.contains(identity),
+					let lease: any ExternalWindowLease = leases[identity]
+				else { continue }
+				do {
+					// A window the person had already minimized is not Teaser's to
+					// manage. Claiming it here would mean raising it when focus
+					// ends, undoing something they did themselves.
+					guard try !lease.snapshot().isMinimized else { continue }
+					try lease.setMinimized(true)
+					minimizedForFocus.insert(identity)
+				} catch {
+					failures += 1
+				}
+			}
+		} else {
+			for panelID: PanelID in presentation.panelIDs(onCanvas: canvasID) {
+				guard let identity: ExternalWindowIdentity = panelAssignments[panelID],
+					minimizedForFocus.contains(identity),
+					let lease: any ExternalWindowLease = leases[identity]
+				else { continue }
+				do {
+					try lease.setMinimized(false)
+					minimizedForFocus.remove(identity)
+				} catch {
+					failures += 1
+				}
+			}
+		}
+		if failures > 0 {
+			setStatus("\(failures) window(s) would not minimize; the rest followed focus.")
+		}
+		host?.orchestratorDidChangeState(self)
 	}
 
 	private func splitVirtualPanel() {
 		guard let targetPanelID: PanelID = presentation.virtualFocus.panelID,
 			let workspaceID: WorkspaceID = workspaceID(containing: targetPanelID),
+			let canvasID: DisplayID = presentation.canvasID(containing: targetPanelID),
 			let targetFrame: LayoutRect = layout?.panelFrames[targetPanelID]
 		else {
 			setStatus(DesktopStageOrchestratorError.layoutUnavailable.localizedDescription)
 			return
 		}
+		let axis: LayoutAxis = splitAxis(for: targetPanelID, frame: targetFrame)
 		if isSharedOrganization {
 			onSharedSplit?(.init(target: targetPanelID,
-				edge: targetFrame.size.width >= targetFrame.size.height ? .trailing : .bottom,
+				edge: axis == .horizontal ? .trailing : .bottom,
 				handle: nil, bundleID: nil))
 			return
 		}
 		let panelID: PanelID = identifiers.makePanelID(prefix: "panel")
+		// A Panel split off another starts in the same group: adjacency is the
+		// default, and changing membership stays an explicit, separate act.
 		let panel: PanelDescriptor = .init(
 			id: panelID,
 			title: "New Panel",
+			workspaceID: workspaceID,
 			kindID: .generic,
 			providerHint: nil,
 			profileOverride: nil,
@@ -940,19 +1147,46 @@ final class DesktopStageOrchestrator {
 				try presentation.splitPanel(
 					targetPanelID,
 					with: panel,
-					in: workspaceID,
+					onCanvas: canvasID,
 					targetFrame: targetFrame,
+					forcedAxis: axis,
 					splitID: identifiers.makeSplitID(prefix: "command")
 				)
-				try presentation.setVirtualFocus(
-					workspaceID: workspaceID,
-					panelID: panelID
-				)
+				try presentation.setVirtualFocus(panelID)
 			}
 			host?.orchestrator(self, didCreatePanel: panelID)
 		} catch {
 			setStatus(error.localizedDescription)
 		}
+	}
+
+	/// Which way to cut a Panel in two. Halving the long side is the usual
+	/// answer, but it is the wrong one for a Panel whose kind wants a shape the
+	/// long side would destroy — a tall File Panel cut across its width leaves
+	/// two Panels nothing fits in. Whichever cut leaves the target closer to its
+	/// preferred proportions wins; a tie keeps the long-side rule.
+	///
+	/// Local and one-shot: no ratio anywhere depends on this, so the layout
+	/// stays deterministic. A drop is never affected — the person aimed it.
+	private func splitAxis(for panelID: PanelID, frame: LayoutRect) -> LayoutAxis {
+		let longSide: LayoutAxis = frame.size.width >= frame.size.height
+			? .horizontal
+			: .vertical
+		guard let panel: PanelDescriptor = presentation.panels[panelID],
+			let profile: LayoutProfile = panel.profileOverride
+				?? presentation.panelKinds.definition(for: panel.kindID)?.defaultProfile,
+			frame.size.width > 0, frame.size.height > 0
+		else { return longSide }
+		// Halving one axis leaves the target at half that dimension.
+		let horizontal: Double = profile.preferredAspectRatio.distance(
+			to: frame.size.width / 2 / frame.size.height
+		)
+		let vertical: Double = profile.preferredAspectRatio.distance(
+			to: frame.size.width / (frame.size.height / 2)
+		)
+		if horizontal < vertical { return .horizontal }
+		if vertical < horizontal { return .vertical }
+		return longSide
 	}
 
 	func handInputToVirtualPanel() {
@@ -975,13 +1209,13 @@ final class DesktopStageOrchestrator {
 
 	func setDividerRatio(
 		_ ratio: Double,
-		scope: LayoutScope,
+		canvasID: DisplayID,
 		splitID: LayoutSplitID
 	) {
-		let key: String = "\(scope)-\(splitID.rawValue)"
+		let key: String = "\(canvasID.rawValue)-\(splitID.rawValue)"
 		let before: DesktopStageStateSnapshot = stateSnapshot()
 		do {
-			try presentation.setDesiredRatio(ratio, for: splitID, in: scope)
+			try presentation.setUserRatio(ratio, for: splitID, onCanvas: canvasID)
 			try solveAndApply(synchronously: true)
 			if undoCoalescingKey != key {
 				prepareForNewUndo()
@@ -1003,16 +1237,12 @@ final class DesktopStageOrchestrator {
 		if isSharedOrganization { onSharedKindChange?(panelID, kindID); return }
 		do {
 			try performTransaction(label: "Panel type changed") {
-				guard let workspaceID: WorkspaceID = workspaceID(containing: panelID),
-					var workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID],
-					var panel: PanelDescriptor = workspace.panels[panelID]
-				else {
+				guard var panel: PanelDescriptor = presentation.panels[panelID] else {
 					throw DesktopStageOrchestratorError.panelUnavailable(panelID)
 				}
 				panel.kindID = kindID
 				panel.profileOverride = nil
-				workspace.panels[panelID] = panel
-				presentation.workspaces[workspaceID] = workspace
+				presentation.panels[panelID] = panel
 			}
 		} catch {
 			setStatus(error.localizedDescription)
@@ -1175,9 +1405,9 @@ final class DesktopStageOrchestrator {
 	private func solveAndApply(synchronously: Bool) throws {
 		// Closing the last canvas leaves nothing to place, and the app keeps
 		// running until another one opens. Only a presentation that does place
-		// Workspaces still needs a display to place them on; the solver reports
-		// the individual display each placed Workspace is missing.
-		guard !displays.isEmpty || presentation.displayLayouts.isEmpty else {
+		// Panels still needs a canvas to place them on; the solver reports the
+		// individual canvas each placed Panel is missing.
+		guard !displays.isEmpty || presentation.canvases.isEmpty else {
 			throw DesktopStageOrchestratorError.displayUnavailable
 		}
 		let displayFrames: [DisplayID: LayoutRect] = Dictionary(
@@ -1202,7 +1432,6 @@ final class DesktopStageOrchestrator {
 		} else {
 			applyCoalesced(nextLayout)
 		}
-		presentation.applyEffectiveRatios(nextLayout.effectiveRatios)
 		layout = nextLayout
 		if isStageActive {
 			host?.orchestrator(self, didSolve: nextLayout)
@@ -1265,9 +1494,7 @@ final class DesktopStageOrchestrator {
 	private func learnWindowMinimums(_ outgrown: [PanelID: LayoutSize]) -> Bool {
 		var learned: Bool = false
 		for (panelID, size): (PanelID, LayoutSize) in outgrown {
-			guard let workspaceID: WorkspaceID = workspaceID(containing: panelID),
-				var descriptor: PanelDescriptor = presentation.workspaces[workspaceID]?
-					.panels[panelID],
+			guard var descriptor: PanelDescriptor = presentation.panels[panelID],
 				let profile: LayoutProfile = descriptor.profileOverride
 					?? presentation.panelKinds.definition(for: descriptor.kindID)?
 					.defaultProfile
@@ -1282,7 +1509,7 @@ final class DesktopStageOrchestrator {
 				preferredAspectRatio: profile.preferredAspectRatio,
 				growthWeight: profile.growthWeight
 			)
-			presentation.workspaces[workspaceID]?.panels[panelID] = descriptor
+			presentation.panels[panelID] = descriptor
 			learned = true
 		}
 		if learned { host?.orchestratorDidRequestSave(self) }
@@ -1298,11 +1525,19 @@ final class DesktopStageOrchestrator {
 		}
 	}
 
+	/// Raises the emphasised group's members, per canvas. Only the canvas that is
+	/// focusing a group raises anything, so one canvas's focus never reorders
+	/// another canvas's windows.
 	private func raiseFocusedWorkspaceIfNeeded() {
-		guard case .focused(let workspaceID) = presentation.mode,
-			let workspace: WorkspaceDescriptor = presentation.workspaces[workspaceID]
-		else { return }
-		for panelID: PanelID in workspace.panelTree.leaves {
+		for (canvasID, canvas): (DisplayID, CanvasLayout) in presentation.canvases {
+			guard let focus: CanvasFocus = canvas.focus else { continue }
+			raise(workspaceID: focus.workspaceID, onCanvas: canvasID)
+		}
+	}
+
+	private func raise(workspaceID: WorkspaceID, onCanvas canvasID: DisplayID) {
+		for panelID: PanelID in presentation.panelIDs(onCanvas: canvasID)
+		where presentation.workspaceID(of: panelID) == workspaceID {
 			if let identity: ExternalWindowIdentity = panelAssignments[panelID],
 				let lease: any ExternalWindowLease = leases[identity]
 			{
@@ -1351,9 +1586,7 @@ final class DesktopStageOrchestrator {
 			let layout
 		else { return nil }
 		let panelID: PanelID = .init(target.panelID)
-		guard
-			let panelFrame: LayoutRect = layout.panelFrames[panelID],
-			let workspaceID: WorkspaceID = workspaceID(containing: panelID)
+		guard let panelFrame: LayoutRect = layout.panelFrames[panelID]
 		else { return nil }
 		let edge: LayoutEdge? = layoutEdge(for: target.region)
 		let frame: LayoutRect = highlightedFrame(panelFrame, edge: edge)
@@ -1371,7 +1604,6 @@ final class DesktopStageOrchestrator {
 			label = "Split and adopt"
 		}
 		return .init(
-			workspaceID: workspaceID,
 			panelID: panelID,
 			edge: edge,
 			frame: frame,
@@ -1454,7 +1686,8 @@ final class DesktopStageOrchestrator {
 
 	private func descriptor(
 		for snapshot: ManagedExternalWindowSnapshot,
-		panelID: PanelID
+		panelID: PanelID,
+		workspaceID: WorkspaceID
 	) -> PanelDescriptor {
 		let ratio: Double = Double(
 			snapshot.appKitScreenFrame.width / snapshot.appKitScreenFrame.height
@@ -1464,6 +1697,7 @@ final class DesktopStageOrchestrator {
 		return .init(
 			id: panelID,
 			title: snapshot.title.isEmpty ? snapshot.applicationName : snapshot.title,
+			workspaceID: workspaceID,
 			kindID: .generic,
 			providerHint: .init(
 				displayName: snapshot.applicationName,
@@ -1481,40 +1715,17 @@ final class DesktopStageOrchestrator {
 		)
 	}
 
-	func workspaceOrder() -> [WorkspaceID] {
-		var seen: Set<WorkspaceID> = []
-		var ordered: [WorkspaceID] = []
-		for displayID: DisplayID in presentation.displayLayouts.keys.sorted(
-			by: { $0.rawValue < $1.rawValue }
-		) {
-			guard let displayLayout: DisplayWorkspaceLayout =
-				presentation.displayLayouts[displayID]
-			else { continue }
-			for workspaceID: WorkspaceID in displayLayout.workspaceTree.leaves where
-				seen.insert(workspaceID).inserted
-			{
-				ordered.append(workspaceID)
-			}
-		}
-		for workspaceID: WorkspaceID in presentation.workspaces.keys.sorted(
-			by: { $0.rawValue < $1.rawValue }
-		) where seen.insert(workspaceID).inserted {
-			ordered.append(workspaceID)
-		}
-		return ordered
+	/// The groups with a Panel on this canvas, in layout order.
+	func workspaceOrder(onCanvas canvasID: DisplayID) -> [WorkspaceID] {
+		presentation.workspaceOrder(onCanvas: canvasID)
 	}
 
 	func workspaceID(containing panelID: PanelID) -> WorkspaceID? {
-		presentation.workspaces.values.first { workspace in
-			workspace.panels[panelID] != nil
-		}?.id
+		presentation.workspaceID(of: panelID)
 	}
 
 	private func panelDescriptor(_ panelID: PanelID) -> PanelDescriptor? {
-		guard let workspaceID: WorkspaceID = workspaceID(containing: panelID) else {
-			return nil
-		}
-		return presentation.workspaces[workspaceID]?.panels[panelID]
+		presentation.panels[panelID]
 	}
 
 	private func layoutEdge(

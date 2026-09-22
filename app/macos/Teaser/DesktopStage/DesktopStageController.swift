@@ -64,15 +64,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
-	private lazy var layoutEditorModel: DesktopStageLayoutEditorModel = .init(
-		presentation: orchestrator.presentation,
-		onResize: { [weak self] reference, ratio in
-			self?.orchestrator.setDividerRatio(ratio, scope: reference.scope, splitID: reference.splitID)
-		},
-		onUndo: { [weak self] in self?.orchestrator.undoLastLayoutChange() }
-	)
-	private lazy var layoutEditorWindow: DesktopStageLayoutEditorWindow = .init(model: layoutEditorModel)
-
 	private lazy var windowPickerModel: DesktopStageWindowPickerModel = .init(
 		onList: { [weak self] in self?.orchestrator.adoptableWindows() ?? [] },
 		onAdopt: { [weak self] identity, panelID in
@@ -88,9 +79,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onVirtualFocusChange: { [weak self] focus in
 			self?.orchestrator.setVirtualFocus(focus)
 		},
-		onWorkspaceFocusRequest: { [weak self] workspaceID in
-			self?.orchestrator.toggleWorkspaceFocus(workspaceID: workspaceID)
-		},
 		onPanelInputFocusRequest: { [weak self] panelID in
 			self?.orchestrator.setVirtualPanel(panelID)
 			self?.orchestrator.handInputToVirtualPanel()
@@ -98,8 +86,8 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		onUndoRequest: { [weak self] in
 			self?.orchestrator.undoLastLayoutChange()
 		},
-		onDividerRatioChange: { [weak self] scope, splitID, ratio in
-			self?.orchestrator.setDividerRatio(ratio, scope: scope, splitID: splitID)
+		onDividerRatioChange: { [weak self] canvasID, splitID, ratio in
+			self?.orchestrator.setDividerRatio(ratio, canvasID: canvasID, splitID: splitID)
 		}
 	)
 
@@ -135,8 +123,7 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				self?.organizationControls.show()
 			},
 			onToggleStage: { [weak self] in self?.toggleStage() },
-			onAdoptWindow: { [weak self] in self?.showWindowPicker() },
-			onEditLayout: { [weak self] in self?.layoutEditorWindow.show() }
+			onAdoptWindow: { [weak self] in self?.showWindowPicker() }
 		)
 	)
 
@@ -182,10 +169,13 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard !isRunning else { return }
 		isRunning = true
 		installSystemObservers()
-		// Launch opens one canvas filling its screen. Filling keeps it on this
-		// Space, which is the only state where adopted windows can sit inside it.
-		openCanvas(fill: .fillScreen)
-		organizationControls.show()
+		// Launch opens an ordinary window. Filling the screen is immersive and
+		// covers everything the person might want to drag in, so it is something
+		// they ask for (View › Fill Screen) rather than what they land in.
+		openCanvas(fill: .free)
+		// No window opens itself on top of the canvas. Connecting is reachable
+		// from the status menu, and the canvas says so in its own status text,
+		// which is selectable and copyable where it stands.
 		refreshPermission()
 		permissionTask = Task { @MainActor [weak self] in
 			while !Task.isCancelled {
@@ -223,6 +213,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		canvas.show(space: currentSpace())
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
+		// With no server connected there is nothing to project, so the canvas
+		// would otherwise open with nothing to drag a window into.
+		orchestrator.seedCanvasIfUnconnected(.init(canvas: id))
 		if fill == .fillScreen {
 			setFill(.fillScreen, on: canvas)
 		}
@@ -237,13 +230,23 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		organization.setTargetDisplay(.init(canvas: id))
 	}
 
+	/// AppKit plumbing only. Whether the stage may come up is the orchestrator's
+	/// decision, where it can be tested against a substituted Accessibility
+	/// service instead of a real one.
+	private func activateStageIfPossible() {
+		orchestrator.setDisplays(canvasDisplays())
+		guard orchestrator.activateForOpenCanvas() else { return }
+		try? managedWindowFocusObserver.start()
+		shortcutMonitor.start()
+		updateChrome()
+	}
+
 	private func makeCanvas(id: CanvasID, index: Int) -> DesktopCanvasWindow {
 		let canvas: DesktopCanvasWindow = .init(
 			id: id,
 			snapshot: .init(
 				displayID: .init(canvas: id),
 				screenFrame: .init(x: 0, y: 0, width: 1_200, height: 800),
-				workspaces: [],
 				panels: [],
 				dividers: [],
 				virtualFocus: orchestrator.presentation.virtualFocus,
@@ -453,6 +456,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		// setDisplays does not solve, so the projection can drop a closed
 		// canvas's Workspaces before anything tries to lay them out.
 		orchestrator.setDisplays(canvasDisplays())
+		// An open canvas is the consent to run. Doing this here rather than on
+		// focus is what makes dragging a window in work without clicking the
+		// backdrop first: that drag never makes Teaser key.
+		activateStageIfPossible()
 		do {
 			try organization.canvasesDidChange()
 		} catch {
@@ -554,7 +561,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		shortcutMonitor.stop()
 		panelTypeChooser.close()
 		statusController.close()
-		layoutEditorWindow.close()
 		windowPickerWindow.close()
 		organizationControls.close()
 		removeAllNotesPanels()
@@ -638,17 +644,19 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	// MARK: - Stage lifecycle
 
 	private func toggleStage() {
-		if orchestrator.isStageActive { orchestrator.stopStage(); return }
-		guard organization.client.state == .ready else {
-			orchestrator.setStatus("Connect to Herdr before starting the stage. Stop/Release remains available offline."); return
+		if orchestrator.isStageActive {
+			orchestrator.stopStageExplicitly()
+			return
 		}
+		// No connection gate: a canvas with no server behind it holds its own
+		// Panels, and laying those out touches nobody's organization.
 		guard orchestrator.permissionStatus(prompt: false) == .authorized else {
 			requestAccessibility()
 			return
 		}
 		orchestrator.setDisplays(canvasDisplays())
 		do {
-			try orchestrator.startStage()
+			try orchestrator.startStageExplicitly()
 			try managedWindowFocusObserver.start()
 			shortcutMonitor.start()
 			orchestrator.setStatus("Drag a window onto a canvas to adopt it")
@@ -692,7 +700,14 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			orchestrator.setStatus("Accessibility allowed. Drag a window onto a canvas.")
 			startExternalObservation(promptForAccessibility: false)
 		} else {
-			orchestrator.setStatus("Accessibility allowed. Use Start Stage to begin adoption.")
+			// Permission just arrived; if the person is already in a canvas this
+			// starts without them having to go looking for a menu item.
+			activateStageIfPossible()
+			if !orchestrator.isStageActive {
+				orchestrator.setStatus(
+					"Accessibility allowed. Start Layout in the Teaser status menu."
+				)
+			}
 		}
 		updateChrome()
 	}
@@ -728,7 +743,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard isRunning else { return }
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
-		layoutEditorModel.update(from: orchestrator)
 		windowPickerModel.update(from: orchestrator)
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
 			let displayID: DisplayID = .init(canvas: id)
@@ -750,7 +764,6 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 				canvas.update(.init(
 					displayID: displayID,
 					screenFrame: canvasFrame,
-					workspaces: [],
 					panels: [],
 					dividers: [],
 					virtualFocus: presentation.virtualFocus,
@@ -771,13 +784,18 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		statusController.update(
 			.init(
 				arrangeModeEnabled: orchestrator.isArrangeModeEnabled,
-				workspaceFocused: {
-					if case .focused = presentation.mode { return true }
-					return false
-				}(),
+				workspaceFocused: presentation.canvases.values.contains {
+					$0.focus != nil
+				},
 				hasVirtualPanel: virtualPanelID != nil,
-				canSplit: organization.client.canApply && virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
-				canCycleWorkspaces: orchestrator.workspaceOrder().count > 1,
+				// A split needs a Panel with a solved rectangle, nothing else. It
+				// used to also require a connected client, which greyed the item
+				// out on every canvas that has no server behind it — while the
+				// keyboard shortcut worked, so the menu was simply lying.
+				canSplit: virtualPanelID.flatMap { layout?.panelFrames[$0] } != nil,
+				canCycleWorkspaces: presentation.canvases.keys.contains {
+					presentation.workspaceOrder(onCanvas: $0).count > 1
+				},
 				canHandInputToPanel: canHandInput,
 				canUndo: orchestrator.canUndo,
 				accessibility: accessibility,
@@ -787,11 +805,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		)
 	}
 
-	/// A highlight belongs to the canvas whose Workspace it points at, so a drag
-	/// never lights up a Panel outline on a canvas it cannot land on.
+	/// A highlight belongs to the canvas holding the Panel it points at, so a
+	/// drag never lights up a Panel outline on a canvas it cannot land on.
 	private func dropHighlight(on displayID: DisplayID) -> DesktopOverlayDropHighlight? {
 		guard let highlight: DesktopOverlayDropHighlight = orchestrator.dropHighlight,
-			orchestrator.presentation.workspaces[highlight.workspaceID]?.displayAffinity == displayID
+			orchestrator.presentation.canvasID(containing: highlight.panelID) == displayID
 		else { return nil }
 		return highlight
 	}
@@ -806,16 +824,30 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			// windows in them: macOS admits no other app's window to this Space.
 			lines.append("Adopted windows stay on the desktop Space while this canvas is full screen.")
 		}
+		// An unsatisfiable size is explained rather than silently absorbed: the
+		// Panels are still placed, just smaller than their kind asks for.
+		let canvasPanels: Set<PanelID> = panelIDs(onDisplay: .init(canvas: id))
+		let short: [PanelID: LayoutSize] = (orchestrator.layout?.quality.shortfalls ?? [:])
+			.filter { canvasPanels.contains($0.key) }
+		if !short.isEmpty {
+			let named: [String] = short.keys
+				.sorted { $0.rawValue < $1.rawValue }
+				.prefix(3)
+				.map { orchestrator.presentation.panels[$0]?.title ?? $0.rawValue }
+			let extra: Int = short.count - named.count
+			let tail: String = extra > 0 ? " and \(extra) more" : ""
+			let needed: LayoutSize = short.values.max { $0.area < $1.area } ?? .zero
+			lines.append(
+				"This canvas is too small for \(named.joined(separator: ", "))\(tail); "
+					+ "the largest wants \(needed.layoutDescription). Make the canvas "
+					+ "bigger, or close or merge a Panel."
+			)
+		}
 		return lines.isEmpty ? nil : lines.joined(separator: "\n")
 	}
 
 	private func panelIDs(onDisplay displayID: DisplayID) -> Set<PanelID> {
-		var result: Set<PanelID> = []
-		for workspace: WorkspaceDescriptor in orchestrator.presentation.workspaces.values
-		where workspace.displayAffinity == displayID {
-			result.formUnion(workspace.panels.keys)
-		}
-		return result
+		.init(orchestrator.presentation.panelIDs(onCanvas: displayID))
 	}
 
 	// MARK: - Teaser-owned Panel content
@@ -825,17 +857,20 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private func updateNotesPanels(using layout: PresentationLayout) {
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		var hosted: [CanvasID: Set<PanelID>] = [:]
-		for workspace: WorkspaceDescriptor in presentation.workspaces.values {
-			guard let canvasID: CanvasID = canvasID(forDisplay: workspace.displayAffinity),
+		for displayID: DisplayID in presentation.canvases.keys {
+			guard let canvasID: CanvasID = canvasID(forDisplay: displayID),
 				let canvas: DesktopCanvasWindow = canvases[canvasID]
 			else { continue }
-			for panel: PanelDescriptor in workspace.panels.values
-			where panel.nativeContent == .notes {
-				guard let frame: LayoutRect = layout.panelFrames[panel.id] else { continue }
-				let controller: NotesPanelController = notesPanels[panel.id] ?? makeNotesPanel(for: panel)
-				notesPanels[panel.id] = controller
-				canvas.setContent(controller.view, for: panel.id, frame: frame)
-				hosted[canvasID, default: []].insert(panel.id)
+			for panelID: PanelID in presentation.panelIDs(onCanvas: displayID) {
+				guard let panel: PanelDescriptor = presentation.panels[panelID],
+					panel.nativeContent == .notes,
+					let frame: LayoutRect = layout.panelFrames[panelID]
+				else { continue }
+				let controller: NotesPanelController = notesPanels[panelID]
+					?? makeNotesPanel(for: panel)
+				notesPanels[panelID] = controller
+				canvas.setContent(controller.view, for: panelID, frame: frame)
+				hosted[canvasID, default: []].insert(panelID)
 			}
 		}
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
@@ -891,12 +926,12 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func presentPanelDefinitionEditor() {
 		organizationControls.show()
-		orchestrator.setStatus("Set a custom kind in Organization controls; size profiles remain server-owned.")
+		orchestrator.setStatus("Set a custom kind in Connection & Organization; size profiles remain server-owned.")
 	}
 
 	private func confirmResetShowcase() {
 		organizationControls.show()
-		orchestrator.setStatus("Delete Panels and empty parents explicitly in Organization controls.")
+		orchestrator.setStatus("Delete Panels and empty parents explicitly in Connection & Organization.")
 	}
 
 	// MARK: - Persistence
@@ -904,11 +939,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private static func loadInitialState() -> InitialState {
 		// The legacy file remains untouched. It is never imported into the server
 		// graph or overwritten with an empty shared projection.
-		let presentation: WorkspacePresentation = .init(mode: .tiled, virtualFocus: .none,
-			displayLayouts: [:], workspaces: [:], panelKinds: try! .init())
+		let presentation: WorkspacePresentation = .init(panelKinds: try! .init())
 		do {
 			return .init(presentation: presentation, notes: [:], store: try PresentationStore.live(),
-				statusMessage: "Connect to an explicit Herdr socket in Connection & Organization.")
+				statusMessage: "Not connected. Open Connection & Organization from the Teaser status menu to choose a Herdr socket.")
 		} catch {
 			return .init(presentation: presentation, notes: [:], store: nil,
 				statusMessage: "Local archive unavailable: \(error.localizedDescription)")

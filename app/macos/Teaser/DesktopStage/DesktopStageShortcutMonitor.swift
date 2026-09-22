@@ -14,6 +14,7 @@ enum DesktopStageCommand: Equatable, Hashable, Sendable {
 	case nextWorkspace
 	case moveVirtualFocus(DesktopStageFocusDirection)
 	case handInputToPanel
+	case adoptFrontmostWindow
 	case undo
 }
 

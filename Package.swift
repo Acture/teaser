@@ -29,7 +29,6 @@ let package: Package = Package(
 	// it the availability annotations across AppKit and SwiftUI do not resolve.
 	platforms: [.macOS(.v14)],
 	dependencies: [
-		.package(url: "https://github.com/stevengharris/SplitView.git", exact: "3.5.3"),
 		.package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", exact: "3.1.0"),
 	],
 	targets: [
@@ -44,7 +43,6 @@ let package: Package = Package(
 		.target(
 			name: "TeaserKit",
 			dependencies: [
-				.product(name: "SplitView", package: "SplitView"),
 				.product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
 				.target(name: "TeaserPrivateAccessibility"),
 			],

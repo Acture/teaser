@@ -21,7 +21,6 @@ final class OrganizationSession {
 	/// now. Placement is client-owned and lives in memory only: restoring it across
 	/// launches belongs to P-563, so it is deliberately absent from the persisted
 	/// `OrganizationLocalScope`.
-	private(set) var workspacePlacement: [WorkspaceID: DisplayID] = [:]
 	/// The canvas that receives Workspaces with no placement yet.
 	private var targetDisplayID: DisplayID?
 	private var nativeIntent: NativeIntent?
@@ -66,9 +65,7 @@ final class OrganizationSession {
 		scope = .init(scope: UUID(), endpoint: path)
 		projected = nil
 		// A new connection is a new organization: nothing placed here belongs to it.
-		workspacePlacement = [:]
-		parkedWorkspaces = [:]
-		parkedDisplayLayouts = [:]
+		parkedCanvases = [:]
 		do { try project(.empty) } catch { orchestrator.setStatus(error.localizedDescription); return }
 		client.connect(path: path)
 	}
@@ -104,19 +101,16 @@ final class OrganizationSession {
 		onProjection?()
 	}
 
-	/// Closing a canvas takes its Workspaces out of the presentation, so their
-	/// trees would be gone by the time it reopens. Keeping the last shown trees
-	/// here — not the Workspaces themselves — is what makes a reopened canvas
-	/// come back arranged the way it was, for this session only.
-	private var parkedWorkspaces: [WorkspaceID: WorkspaceDescriptor] = [:]
-	private var parkedDisplayLayouts: [DisplayID: DisplayWorkspaceLayout] = [:]
+	/// Closing a canvas takes its Panels out of the presentation, so its tree
+	/// would be gone by the time it reopens. Keeping the last shown tree here is
+	/// what makes a reopened canvas come back arranged the way it was, and what
+	/// keeps its Panels from migrating to another canvas meanwhile. Session
+	/// only; surviving a relaunch is persistence, which this does not do.
+	private var parkedCanvases: [DisplayID: CanvasLayout] = [:]
 
 	private func rememberLayouts(of presentation: WorkspacePresentation) {
-		for (workspaceID, workspace): (WorkspaceID, WorkspaceDescriptor) in presentation.workspaces {
-			parkedWorkspaces[workspaceID] = workspace
-		}
-		for (displayID, layout): (DisplayID, DisplayWorkspaceLayout) in presentation.displayLayouts {
-			parkedDisplayLayouts[displayID] = layout
+		for (displayID, canvas): (DisplayID, CanvasLayout) in presentation.canvases {
+			parkedCanvases[displayID] = canvas
 		}
 	}
 
@@ -124,13 +118,9 @@ final class OrganizationSession {
 	/// trees of canvases that are currently closed.
 	private func parked(_ presentation: WorkspacePresentation) -> WorkspacePresentation {
 		var merged: WorkspacePresentation = presentation
-		for (workspaceID, workspace): (WorkspaceID, WorkspaceDescriptor) in parkedWorkspaces
-		where merged.workspaces[workspaceID] == nil {
-			merged.workspaces[workspaceID] = workspace
-		}
-		for (displayID, layout): (DisplayID, DisplayWorkspaceLayout) in parkedDisplayLayouts
-		where merged.displayLayouts[displayID] == nil {
-			merged.displayLayouts[displayID] = layout
+		for (displayID, canvas): (DisplayID, CanvasLayout) in parkedCanvases
+		where merged.canvases[displayID] == nil {
+			merged.canvases[displayID] = canvas
 		}
 		return merged
 	}
@@ -141,7 +131,7 @@ final class OrganizationSession {
 	private var placement: WorkspacePlacement {
 		let open: [DisplayID] = orchestrator.displays.map(\.id)
 		let target: DisplayID? = open.contains { $0 == targetDisplayID } ? targetDisplayID : open.first
-		return .init(openDisplays: open, assignments: workspacePlacement, targetDisplay: target)
+		return .init(openDisplays: open, targetDisplay: target)
 	}
 	func setNote(_ text: String, panelID: PanelID) {
 		guard let document: String = projected?.panels.first(where: { $0.id == panelID.rawValue })?.binding.document_id else { return }
@@ -180,7 +170,7 @@ final class OrganizationSession {
 	/// the server again.
 	private func reconcile(_ snapshot: OrganizationSnapshot) throws {
 		let previous: OrganizationSnapshot? = projected
-		let (presentation, assignments): (WorkspacePresentation, [WorkspaceID: DisplayID]) =
+		let presentation: WorkspacePresentation =
 			try OrganizationProjection.project(snapshot,
 				previous: previous == nil ? nil : parked(orchestrator.presentation), placement: placement)
 		// The first projection of a connection has nothing of its own on screen
@@ -195,9 +185,8 @@ final class OrganizationSession {
 			if let document: String = panel.binding.document_id { notes[.init(panel.id)] = scope?.documents[document] ?? "" }
 		}
 		try orchestrator.reconcileOrganization(presentation, retaining: compatible, adoptable: adoptable, notes: notes)
-		// Placement advances with the snapshot it was computed for; a refused
-		// reconcile leaves both untouched so the next attempt starts from one state.
-		workspacePlacement = assignments
+		// Placement now lives in the canvas trees themselves, so a refused
+		// reconcile leaves it untouched with the snapshot it was computed for.
 		projected = snapshot
 	}
 

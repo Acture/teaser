@@ -387,6 +387,60 @@ func qualifiesExternalWindowDrag(
 			<= configuration.maximumSizeDelta
 }
 
+/// Why a drag did not qualify as a window drag, for diagnostics only; nil when
+/// it did. The qualification gate is silent by design, which makes a drag that
+/// never lands impossible to explain — this names the criterion and its numbers
+/// so one run answers it. Geometry only: no titles, no provider content.
+func externalWindowDragQualificationFailure(
+	initial: ExternalWindowDragSample,
+	current: ExternalWindowDragSample,
+	configuration: ExternalWindowDragQualificationConfiguration = .init()
+) -> String? {
+	guard !qualifiesExternalWindowDrag(
+		initial: initial,
+		current: current,
+		configuration: configuration
+	) else { return nil }
+	guard initial.windowAppKitScreenFrame.isValidManagedExternalWindowFrame,
+		current.windowAppKitScreenFrame.isValidManagedExternalWindowFrame
+	else { return "window frame unusable" }
+	let mouse: CGVector = .init(
+		dx: current.mouseAppKitScreenLocation.x - initial.mouseAppKitScreenLocation.x,
+		dy: current.mouseAppKitScreenLocation.y - initial.mouseAppKitScreenLocation.y
+	)
+	let window: CGVector = .init(
+		dx: current.windowAppKitScreenFrame.minX - initial.windowAppKitScreenFrame.minX,
+		dy: current.windowAppKitScreenFrame.minY - initial.windowAppKitScreenFrame.minY
+	)
+	let widthDelta: CGFloat = abs(
+		current.windowAppKitScreenFrame.width - initial.windowAppKitScreenFrame.width
+	)
+	let heightDelta: CGFloat = abs(
+		current.windowAppKitScreenFrame.height - initial.windowAppKitScreenFrame.height
+	)
+	func rounded(_ value: CGFloat) -> String { String(format: "%.1f", value) }
+	if hypot(mouse.dx, mouse.dy) < configuration.minimumMouseMovement {
+		return "mouse moved \(rounded(hypot(mouse.dx, mouse.dy)))"
+			+ " < \(rounded(configuration.minimumMouseMovement))"
+	}
+	if hypot(window.dx, window.dy) < configuration.minimumWindowMovement {
+		return "window moved \(rounded(hypot(window.dx, window.dy)))"
+			+ " < \(rounded(configuration.minimumWindowMovement))"
+	}
+	if max(abs(mouse.dx - window.dx), abs(mouse.dy - window.dy))
+		> configuration.maximumDeltaError
+	{
+		return "window lagged the pointer by"
+			+ " \(rounded(max(abs(mouse.dx - window.dx), abs(mouse.dy - window.dy))))"
+			+ " > \(rounded(configuration.maximumDeltaError))"
+	}
+	if max(widthDelta, heightDelta) > configuration.maximumSizeDelta {
+		return "window resized by \(rounded(max(widthDelta, heightDelta)))"
+			+ " > \(rounded(configuration.maximumSizeDelta))"
+	}
+	return "unknown"
+}
+
 @MainActor
 final class ExternalWindowSelection: ExternalWindowHandle {
 	let identity: ExternalWindowIdentity
@@ -1669,6 +1723,8 @@ final class WindowDragObserver {
 		let initialSample: ExternalWindowDragSample
 		var currentSample: ExternalWindowDragSample
 		var isQualified: Bool
+		/// One diagnostic per press, so a slow drag cannot flood the log.
+		var loggedQualificationFailure: Bool = false
 	}
 
 	/// Resampling floor for a held drag; the production pointer source delivers
@@ -1856,8 +1912,20 @@ final class WindowDragObserver {
 				configuration: qualificationConfiguration
 			) {
 				pendingDrag.isQualified = true
+				pendingDrag.loggedQualificationFailure = true
 				ExternalWindowDiagnostics.logger.notice("drag-qualified pid=\(pendingDrag.handle.identity.processIdentifier, privacy: .public) window=\(pendingDrag.handle.identity.windowID, privacy: .public)")
 				onEvent?(.began(dragSnapshot))
+			} else if !pendingDrag.loggedQualificationFailure,
+				let reason: String = externalWindowDragQualificationFailure(
+					initial: pendingDrag.initialSample,
+					current: pendingDrag.currentSample,
+					configuration: qualificationConfiguration
+				)
+			{
+				// Once per press, so a drag that never lands says why instead of
+				// failing silently.
+				pendingDrag.loggedQualificationFailure = true
+				ExternalWindowDiagnostics.logger.notice("drag-not-qualified: \(reason, privacy: .public)")
 			}
 			self.pendingDrag = pendingDrag
 		} catch {

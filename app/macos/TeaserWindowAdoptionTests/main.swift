@@ -12,7 +12,7 @@ NSApplication.shared.setActivationPolicy(.prohibited)
 
 // Every case runs even after one fails, so a mutation of the product reports
 // the whole set of regressions that caught it rather than only the first.
-let cases: [TestCase] = adoptionCases() + dragObserverCases() + layoutEditorCases()
+let cases: [TestCase] = adoptionCases() + dragObserverCases()
 	+ windowPickerCases()
 var failures: [String] = []
 for testCase: TestCase in cases {

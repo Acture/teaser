@@ -6,7 +6,10 @@ struct PersistedNote: Codable, Equatable, Sendable {
 }
 
 struct PresentationDocument: Codable, Equatable, Sendable {
-	static let currentSchemaVersion: Int = 1
+	/// 2 is the flat model: one Panel tree per canvas, with Workspace membership
+	/// on each Panel. A version 1 file describes Workspace rectangles and cannot
+	/// be read into this shape, so it is refused rather than misread.
+	static let currentSchemaVersion: Int = 2
 
 	let schemaVersion: Int
 	var presentation: WorkspacePresentation
@@ -52,21 +55,23 @@ struct PresentationStore: Sendable {
 		)
 	}
 
+	/// Reads the version through a probe first. The synthesized decoder would
+	/// otherwise decode `presentation` before any version check ran, so an older
+	/// file failed with a raw `DecodingError` rather than saying what it was.
+	private struct SchemaProbe: Decodable {
+		let schemaVersion: Int
+	}
+
 	func load() throws -> PresentationDocument? {
 		guard FileManager.default.fileExists(atPath: documentURL.path) else {
 			return nil
 		}
 		let data: Data = try Data(contentsOf: documentURL)
-		let document: PresentationDocument = try JSONDecoder().decode(
-			PresentationDocument.self,
-			from: data
-		)
-		guard document.schemaVersion == PresentationDocument.currentSchemaVersion else {
-			throw PresentationStoreError.unsupportedSchemaVersion(
-				document.schemaVersion
-			)
+		let probe: SchemaProbe = try JSONDecoder().decode(SchemaProbe.self, from: data)
+		guard probe.schemaVersion == PresentationDocument.currentSchemaVersion else {
+			throw PresentationStoreError.unsupportedSchemaVersion(probe.schemaVersion)
 		}
-		return document
+		return try JSONDecoder().decode(PresentationDocument.self, from: data)
 	}
 
 	func save(_ document: PresentationDocument) throws {

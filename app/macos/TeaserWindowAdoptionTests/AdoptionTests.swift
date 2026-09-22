@@ -1212,10 +1212,212 @@ private func testNoWindowIsEverDisplayed() throws {
 	)
 }
 
+/// Focus has two stages. The first only re-weights; the second minimizes the
+/// windows of every other group on that canvas, because Accessibility offers
+/// raise and minimize and no lower. A third press restores them.
+@MainActor
+private func testTwoStageFocusMinimizesOnlyTheSecondTime() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		!other.isMinimized,
+		"the first stage only re-weights; nothing may be minimized yet"
+	)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		other.isMinimized,
+		"the second stage must clear the canvas of the other group's windows"
+	)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(!other.isMinimized, "a third press must restore what Teaser minimized")
+}
+
+/// A window the person had already minimized is not Teaser's to restore.
+@MainActor
+private func testFocusRestoresOnlyWhatTeaserMinimized() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let other: FakeWindow = harness.addWindow()
+	try harness.adopt(other, into: betaPanelID)
+	other.isMinimized = true
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		other.isMinimized,
+		"clearing focus must not raise a window the person minimized themselves"
+	)
+}
+
+/// A window that will not minimize is reported and skipped rather than aborting
+/// the transition: half a genie animation is not worth rolling back.
+@MainActor
+private func testARefusedMinimizeIsReportedAndDoesNotAbort() throws {
+	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
+	try harness.orchestrator.startStage()
+	defer { harness.orchestrator.stopStage() }
+	let stubborn: FakeWindow = harness.addWindow()
+	try harness.adopt(stubborn, into: betaPanelID)
+	stubborn.refusesMinimize = true
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	harness.orchestrator.toggleWorkspaceFocus(workspaceID: testWorkspaceID)
+	try expect(
+		harness.orchestrator.presentation.canvases[testDisplayID]?.focus?.isExclusive
+			== true,
+		"a refused minimize must not undo the focus stage"
+	)
+	try expect(
+		harness.orchestrator.statusMessage?.contains("would not minimize") == true,
+		"a refused minimize must be explained: "
+			+ "\(harness.orchestrator.statusMessage ?? "none")"
+	)
+}
+
+// MARK: - Split axis
+
+/// Halving the long side is the usual answer, but not for a Panel whose kind
+/// wants a shape that cut would destroy. A tall File Panel cut across its width
+/// leaves two Panels nothing fits in.
+@MainActor
+private func testSplitAxisFollowsThePreferredAspect() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try harness.orchestrator.startStageExplicitly()
+	defer { harness.orchestrator.stopStage() }
+
+	// A File Panel prefers 0.55–1.4, so a wide frame should be cut across its
+	// width — the long-side rule alone would agree here, so make it disagree:
+	// give the Panel a band that only the other cut can reach.
+	harness.orchestrator.setPanelKind(.file, panelID: leftPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+	let before: LayoutRect = try unwrap(
+		harness.orchestrator.layout?.panelFrames[leftPanelID],
+		"the target must be solved"
+	)
+	harness.orchestrator.perform(.splitPanel)
+	let after: LayoutRect = try unwrap(
+		harness.orchestrator.layout?.panelFrames[leftPanelID],
+		"the target must still be solved"
+	)
+	// Whichever axis was chosen, exactly one dimension may shrink.
+	let narrowed: Bool = after.size.width < before.size.width - 1
+	let shortened: Bool = after.size.height < before.size.height - 1
+	try expect(
+		narrowed != shortened,
+		"a split must halve exactly one axis of the target"
+	)
+	let profile: LayoutProfile = try unwrap(
+		harness.orchestrator.presentation.panels[leftPanelID]?.profileOverride
+			?? PanelKindDefinition.file.defaultProfile,
+		"the File profile"
+	)
+	let chosen: Double = profile.preferredAspectRatio.distance(
+		to: after.size.width / after.size.height
+	)
+	let rejected: Double = profile.preferredAspectRatio.distance(
+		to: narrowed
+			? before.size.width / (before.size.height / 2)
+			: before.size.width / 2 / before.size.height
+	)
+	try expect(
+		chosen <= rejected + 0.000_001,
+		"the cut taken must land at least as close to the preferred band"
+	)
+}
+
+// MARK: - Stage activation
+
+/// An open canvas is the consent to run. There is no Start step to find, and
+/// crucially no connection required: this harness has no server at all.
+@MainActor
+private func testAnOpenCanvasActivatesTheStage() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try expect(!harness.orchestrator.isStageActive, "nothing is active before asking")
+	try expect(
+		harness.orchestrator.activateForOpenCanvas(),
+		"an authorized app with an open canvas must come up"
+	)
+	try expect(harness.orchestrator.isStageActive, "the stage must be active")
+	try expect(
+		harness.service.promptCount == 0,
+		"activation must never raise the Accessibility dialog"
+	)
+}
+
+/// Without Accessibility the app stays inactive and silent. Throwing a system
+/// dialog at someone who only opened a window is not consent.
+@MainActor
+private func testActivationWithoutAccessibilityNeverPrompts() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	harness.service.permission = .notAuthorized
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an unauthorized app must not come up"
+	)
+	try expect(!harness.orchestrator.isStageActive, "the stage must stay inactive")
+	try expect(
+		harness.service.promptCount == 0,
+		"an unauthorized activation must not prompt either"
+	)
+}
+
+/// Stop Layout has to stick, or every later canvas event would undo it.
+@MainActor
+private func testAnExplicitStopSurvivesLaterActivation() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try harness.orchestrator.startStageExplicitly()
+	harness.orchestrator.stopStageExplicitly()
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an explicit Stop must not be undone by an open canvas"
+	)
+	try expect(!harness.orchestrator.isStageActive, "the stage must stay stopped")
+
+	// An explicit Start is how the person takes it back.
+	try harness.orchestrator.startStageExplicitly()
+	try expect(harness.orchestrator.isStageActive, "an explicit Start must win")
+	harness.orchestrator.stopStage()
+	try expect(
+		harness.orchestrator.activateForOpenCanvas(),
+		"a non-explicit stop must not leave the stage latched off"
+	)
+}
+
+/// With no canvas open there is nothing to lay out, so nothing comes up.
+@MainActor
+private func testNoCanvasMeansNoStage() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	harness.orchestrator.setDisplays([])
+	try expect(
+		!harness.orchestrator.activateForOpenCanvas(),
+		"an app with no canvas open must not start a stage"
+	)
+}
+
 @MainActor
 func adoptionCases() -> [TestCase] {
 	[
 		.init("default run touches no desktop state", testDefaultRunTouchesNoDesktopState),
+		.init("an open canvas activates the stage", testAnOpenCanvasActivatesTheStage),
+		.init("split axis follows the preferred aspect", testSplitAxisFollowsThePreferredAspect),
+		.init("activation without Accessibility never prompts", testActivationWithoutAccessibilityNeverPrompts),
+		.init("an explicit Stop survives later activation", testAnExplicitStopSurvivesLaterActivation),
+		.init("no canvas means no stage", testNoCanvasMeansNoStage),
+		.init("two-stage focus minimizes only the second time", testTwoStageFocusMinimizesOnlyTheSecondTime),
+		.init("focus restores only what Teaser minimized", testFocusRestoresOnlyWhatTeaserMinimized),
+		.init("a refused minimize is reported and does not abort", testARefusedMinimizeIsReportedAndDoesNotAbort),
 		.init("qualified drag adopts an empty Panel", testQualifiedDragAdoptsEmptyPanel),
 		.init("highlight follows the pointer across Panels", testHighlightFollowsThePointerAcrossPanels),
 		.init("every occupied edge highlights its own split", testEveryOccupiedEdgeHighlightsItsOwnSplit),
@@ -1408,7 +1610,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	try harness.adopt(window, into: rightPanelID)
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: rightPanelID),
+			== .init(panelID: rightPanelID),
 		"an adoption must focus the Panel the window landed in"
 	)
 
@@ -1422,7 +1624,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	let adoptedPanelID: PanelID = .init("adopted-1")
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: adoptedPanelID),
+			== .init(panelID: adoptedPanelID),
 		"a split must focus the Panel it created"
 	)
 
@@ -1435,7 +1637,7 @@ private func testDropsMoveVirtualFocusToWhereTheWindowLanded() throws {
 	harness.dropWindow(third, at: try harness.center(of: adoptedPanelID))
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: testWorkspaceID, panelID: adoptedPanelID),
+			== .init(panelID: adoptedPanelID),
 		"a rejected drop must not move Virtual Focus"
 	)
 }
@@ -1450,8 +1652,8 @@ private func testWindowMovedAcrossWorkspacesFollowsItsFocus() throws {
 	let destination: CGPoint = try harness.center(of: betaPanelID)
 	harness.beginDrag(window, to: destination)
 	try expect(
-		harness.orchestrator.dropHighlight?.workspaceID == betaWorkspaceID,
-		"a highlight in another Workspace must name that Workspace"
+		harness.orchestrator.dropHighlight?.panelID == betaPanelID,
+		"a highlight over another group's Panel must name that Panel"
 	)
 	harness.releasePointer(at: destination)
 
@@ -1461,8 +1663,8 @@ private func testWindowMovedAcrossWorkspacesFollowsItsFocus() throws {
 	)
 	try expect(
 		harness.orchestrator.presentation.virtualFocus
-			== .init(workspaceID: betaWorkspaceID, panelID: betaPanelID),
-		"moving across Workspaces must move Workspace focus with the window"
+			== .init(panelID: betaPanelID),
+		"moving across groups must move Virtual Focus with the window"
 	)
 	try expect(
 		harness.log.bindCount(for: window.identity) == 1
