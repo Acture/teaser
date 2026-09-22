@@ -640,7 +640,376 @@ private func testShowcaseFitsLaptopDisplays() throws {
 	}
 }
 
+// MARK: - Workspace contours
+
+/// The gutters the solver will use. A same-group pair sits `panelGap` apart and
+/// their inflated rectangles meet exactly; a between-group pair sits `groupGap`
+/// apart and stays two fragments.
+private let panelGap: Double = 4
+private let groupGap: Double = 16
+private let contourInflation: Double = panelGap / 2
+
+private func contourInput(
+	_ panelID: String,
+	_ workspaceID: String,
+	_ displayID: String = "canvas-1",
+	x: Double,
+	y: Double,
+	width: Double = 100,
+	height: Double = 100
+) -> ContourInput {
+	.init(
+		panelID: .init(panelID),
+		workspaceID: .init(workspaceID),
+		displayID: .init(displayID),
+		frame: .init(x: x, y: y, width: width, height: height)
+	)
+}
+
+private func contour(
+	_ contours: [WorkspaceContour],
+	_ workspaceID: String
+) throws -> WorkspaceContour {
+	try unwrap(
+		contours.first { $0.workspaceID == .init(workspaceID) },
+		"missing contour for \(workspaceID)"
+	)
+}
+
+private func solveContours(_ inputs: [ContourInput]) -> [WorkspaceContour] {
+	WorkspaceContourGeometry.contours(
+		inputs,
+		canvasOrder: [.init("canvas-1"), .init("canvas-2")],
+		inflation: contourInflation
+	)
+}
+
+/// Two Panels of one Workspace across a `panelGap` gutter are one continuous
+/// boundary, not two boxes: the whole point of a group contour.
+private func testAdjacentMembersTraceOneLoop() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("a2", "alpha", x: 100 + panelGap, y: 0),
+	])
+	try expect(contours.count == 1, "one Workspace must yield one contour")
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "adjacent members are one fragment")
+	let outer: ContourLoop = alpha.fragments[0].outer
+	try expect(
+		outer.vertices.count == 4,
+		"an adjacent pair is a rectangle, got \(outer.vertices.count) vertices"
+	)
+	try expect(!outer.isHole, "an outer boundary must wind counter-clockwise")
+	try expect(
+		alpha.fragments[0].panelIDs == [.init("a1"), .init("a2")],
+		"both members belong to the fragment"
+	)
+	let xs: [Double] = outer.vertices.map(\.x).sorted()
+	try expectApproximatelyEqual(xs.first ?? 0, -contourInflation, "left edge")
+	try expectApproximatelyEqual(
+		xs.last ?? 0,
+		100 + panelGap + 100 + contourInflation,
+		"right edge"
+	)
+}
+
+/// An L is six vertices. A naive bounding box would report four and swallow the
+/// corner the group does not occupy.
+private func testLShapedFragmentKeepsItsConcaveCorner() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("a2", "alpha", x: 100 + panelGap, y: 0),
+		contourInput("a3", "alpha", x: 0, y: 100 + panelGap),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "an L is one fragment")
+	try expect(
+		alpha.fragments[0].outer.vertices.count == 6,
+		"an L has six corners, got \(alpha.fragments[0].outer.vertices.count)"
+	)
+}
+
+/// A tall Panel facing two shorter ones is the case naive edge cancellation
+/// gets wrong: its right edge equals neither neighbour's left edge, so a
+/// divider line survives down the middle of one group.
+private func testPartialEdgeOverlapLeavesNoInternalSegment() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("tall", "alpha", x: 0, y: 0, height: 100 + panelGap + 100),
+		contourInput("low", "alpha", x: 100 + panelGap, y: 0),
+		contourInput("high", "alpha", x: 100 + panelGap, y: 100 + panelGap),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "the three members are one fragment")
+	try expect(
+		alpha.fragments[0].outer.vertices.count == 4,
+		"the union is a rectangle, got \(alpha.fragments[0].outer.vertices.count)"
+	)
+	try expect(alpha.fragments[0].holes.isEmpty, "a filled rectangle has no hole")
+}
+
+/// The case where partial overlap and a group boundary land on the same edge: a
+/// tall member faced by one member above and one other-group Panel below, so
+/// half of its right edge is interior and half is the group's outer edge. Edge
+/// cancellation gets this wrong even with interval splitting, because an
+/// interval has to cancel against membership rather than against geometry.
+private func testOneEdgeIsHalfInteriorHalfBoundary() throws {
+	let span: Double = 100 + panelGap + 100
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("tall", "alpha", x: 0, y: 0, height: span),
+		contourInput("above", "alpha", x: 100 + panelGap, y: 100 + panelGap),
+		contourInput("below", "beta", x: 100 + panelGap, y: 0),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "the two members stay one fragment")
+	let outer: ContourLoop = alpha.fragments[0].outer
+	// Spelled out, because the whole question is which half of the tall Panel's
+	// right edge survives: the lower half at x = 102 does, the upper half does
+	// not, and the boundary steps out to x = 206 only above y = 102.
+	let expected: [LayoutPoint] = [
+		.init(x: -contourInflation, y: -contourInflation),
+		.init(x: 100 + contourInflation, y: -contourInflation),
+		.init(x: 100 + contourInflation, y: 100 + contourInflation),
+		.init(x: span + contourInflation, y: 100 + contourInflation),
+		.init(x: span + contourInflation, y: span + contourInflation),
+		.init(x: -contourInflation, y: span + contourInflation),
+	]
+	try expect(
+		outer.vertices == expected,
+		"expected \(expected), got \(outer.vertices)"
+	)
+	let beta: WorkspaceContour = try contour(contours, "beta")
+	try expect(
+		beta.fragments.count == 1 && beta.fragments[0].outer.vertices.count == 4,
+		"the other group keeps its own rectangle"
+	)
+}
+
+/// A group interrupted by another group is two fragments of one identity, not
+/// one loop drawn around the intervening Panel.
+private func testInterruptedGroupSplitsIntoFragments() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("b1", "beta", x: 100 + groupGap, y: 0),
+		contourInput("a2", "alpha", x: 200 + 2 * groupGap, y: 0),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	let beta: WorkspaceContour = try contour(contours, "beta")
+	try expect(alpha.fragments.count == 2, "the interrupted group has two fragments")
+	try expect(beta.fragments.count == 1, "the intervening group has one")
+	try expect(
+		alpha.fragments.map(\.ordinal) == [1, 2],
+		"fragments of one group are numbered across the whole group"
+	)
+	// The proof that no fragment swallows the other group: beta's Panel is
+	// outside both of alpha's loops.
+	for fragment: WorkspaceContourFragment in alpha.fragments {
+		let xs: [Double] = fragment.outer.vertices.map(\.x)
+		let minimum: Double = xs.min() ?? 0
+		let maximum: Double = xs.max() ?? 0
+		try expect(
+			maximum <= 100 + groupGap || minimum >= 100 + groupGap + 100,
+			"an alpha fragment must not span beta's Panel"
+		)
+	}
+}
+
+/// A same-group pair facing each other across the wider between-group gutter
+/// stays two fragments. Deliberate: one loop there would have to swallow the
+/// gutter that marks a group boundary. Pinned so it is on record.
+private func testGroupGapSeparatesEvenSameGroupMembers() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("a2", "alpha", x: 100 + groupGap, y: 0),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(
+		alpha.fragments.count == 2,
+		"a group-width gutter does not merge two members"
+	)
+}
+
+/// A group ringing another group's Panel strokes the inner edge too: leaving it
+/// bare reads as if the enclosed Panel were a member.
+private func testEnclosedOtherGroupBecomesAHole() throws {
+	var inputs: [ContourInput] = []
+	for column: Int in 0 ..< 3 {
+		for row: Int in 0 ..< 3 {
+			let isCentre: Bool = column == 1 && row == 1
+			inputs.append(
+				contourInput(
+					"p\(column)\(row)",
+					isCentre ? "beta" : "alpha",
+					x: Double(column) * (100 + panelGap),
+					y: Double(row) * (100 + panelGap)
+				)
+			)
+		}
+	}
+	let contours: [WorkspaceContour] = solveContours(inputs)
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "the ring is one fragment")
+	let fragment: WorkspaceContourFragment = alpha.fragments[0]
+	try expect(fragment.outer.vertices.count == 4, "the ring's outside is a rectangle")
+	try expect(fragment.holes.count == 1, "the enclosed Panel is one hole")
+	try expect(fragment.holes[0].isHole, "a hole must wind clockwise")
+	try expect(
+		fragment.holes[0].vertices.count == 4,
+		"the hole around one Panel is a rectangle"
+	)
+}
+
+/// Two members touching only at a corner are two fragments sharing a vertex,
+/// never one pinched loop. A diagonal neighbour is not a neighbour.
+private func testDiagonalTouchIsNotAdjacency() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("a2", "alpha", x: 100 + panelGap, y: 100 + panelGap),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(
+		alpha.fragments.count == 2,
+		"a corner touch is not adjacency"
+	)
+}
+
+/// The contour is drawn in the gutter, so it can never cover a Panel's content
+/// and can never be mistaken for the Panel's own edge.
+private func testContoursStayOutOfEveryPanel() throws {
+	let inputs: [ContourInput] = [
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("a2", "alpha", x: 100 + panelGap, y: 0),
+		contourInput("b1", "beta", x: 0, y: 100 + groupGap),
+		contourInput("b2", "beta", x: 100 + panelGap, y: 100 + groupGap),
+	]
+	for loop: ContourLoop in solveContours(inputs).flatMap({
+		$0.fragments.flatMap { [$0.outer] + $0.holes }
+	}) {
+		for vertex: LayoutPoint in loop.vertices {
+			for input: ContourInput in inputs {
+				let frame: LayoutRect = input.frame
+				try expect(
+					!(vertex.x > frame.minX && vertex.x < frame.maxX
+						&& vertex.y > frame.minY && vertex.y < frame.maxY),
+					"a contour vertex landed inside \(input.panelID.rawValue)"
+				)
+			}
+		}
+	}
+}
+
+/// One Workspace split over two canvases is one identity with numbered
+/// fragments, in canvas order.
+private func testOneGroupAcrossTwoCanvases() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", "canvas-1", x: 0, y: 0),
+		contourInput("a2", "alpha", "canvas-2", x: 0, y: 0),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 2, "one group, two canvases, two fragments")
+	try expect(
+		alpha.fragments.map(\.displayID) == [.init("canvas-1"), .init("canvas-2")],
+		"fragments follow canvas order"
+	)
+	try expect(alpha.fragments.map(\.ordinal) == [1, 2], "ordinals run group-wide")
+}
+
+private func testContoursAreDeterministic() throws {
+	let inputs: [ContourInput] = [
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("b1", "beta", x: 100 + groupGap, y: 0),
+		contourInput("a2", "alpha", x: 0, y: 100 + panelGap),
+	]
+	try expect(
+		solveContours(inputs) == solveContours(inputs.reversed()),
+		"contours must not depend on input order"
+	)
+}
+
+private func testDegenerateFramesAreDropped() throws {
+	let contours: [WorkspaceContour] = solveContours([
+		contourInput("a1", "alpha", x: 0, y: 0),
+		contourInput("zero", "alpha", x: 200, y: 0, width: 0),
+		contourInput("nan", "alpha", x: .nan, y: 0),
+	])
+	let alpha: WorkspaceContour = try contour(contours, "alpha")
+	try expect(alpha.fragments.count == 1, "a degenerate frame draws nothing")
+	try expect(
+		alpha.fragments[0].panelIDs == [.init("a1")],
+		"a degenerate frame joins no fragment"
+	)
+}
+
+/// The palette exists to be told apart from the focus ring and the drop
+/// highlight, which are both systemBlue.
+private func testPaletteStaysClearOfTheFocusBlue() throws {
+	let focusBlue: WorkspaceContourColor = .init(red: 0, green: 0.478, blue: 1)
+	try expect(WorkspaceContourPalette.colors.count == 10, "ten hues")
+	for color: WorkspaceContourColor in WorkspaceContourPalette.colors {
+		let distance: Double = (
+			pow(color.red - focusBlue.red, 2)
+				+ pow(color.green - focusBlue.green, 2)
+				+ pow(color.blue - focusBlue.blue, 2)
+		).squareRoot()
+		try expect(
+			distance >= 0.6,
+			"\(color) is only \(distance) from the focus blue"
+		)
+	}
+}
+
+/// A Workspace keeps its colour across launches and across clients, so the
+/// hash cannot be Swift's per-process-seeded one.
+private func testColourAssignmentIsStableAndOrderIndependent() throws {
+	let ids: [WorkspaceID] = ["alpha", "beta", "gamma", "delta"].map {
+		WorkspaceID($0)
+	}
+	let assignment: [WorkspaceID: WorkspaceContourColor] =
+		WorkspaceContourPalette.assignment(for: ids)
+	try expect(
+		assignment == WorkspaceContourPalette.assignment(for: ids.reversed()),
+		"assignment must not depend on input order"
+	)
+	try expect(
+		Set(assignment.values).count == ids.count,
+		"four Workspaces must not share a hue"
+	)
+	// FNV-1a over the ID's own bytes. Recomputing the constant here is the guard
+	// against the primitive being swapped for a seeded hash, which would repaint
+	// every canvas on each launch and never agree between two clients.
+	var expected: UInt64 = 0xcbf2_9ce4_8422_2325
+	for byte: UInt8 in Array("alpha".utf8) {
+		expected ^= UInt64(byte)
+		expected = expected &* 0x0000_0100_0000_01b3
+	}
+	expected ^= expected >> 32
+	try expect(
+		WorkspaceContourPalette.hash(.init("alpha")) == expected,
+		"the palette hash must stay FNV-1a over the ID's bytes"
+	)
+	for id: WorkspaceID in ids {
+		try expect(
+			WorkspaceContourPalette.baseIndex(id)
+				< WorkspaceContourPalette.colors.count,
+			"a base index must land inside the palette"
+		)
+	}
+}
+
 private func run() throws {
+	try testAdjacentMembersTraceOneLoop()
+	try testLShapedFragmentKeepsItsConcaveCorner()
+	try testPartialEdgeOverlapLeavesNoInternalSegment()
+	try testOneEdgeIsHalfInteriorHalfBoundary()
+	try testInterruptedGroupSplitsIntoFragments()
+	try testGroupGapSeparatesEvenSameGroupMembers()
+	try testEnclosedOtherGroupBecomesAHole()
+	try testDiagonalTouchIsNotAdjacency()
+	try testContoursStayOutOfEveryPanel()
+	try testOneGroupAcrossTwoCanvases()
+	try testContoursAreDeterministic()
+	try testDegenerateFramesAreDropped()
+	try testPaletteStaysClearOfTheFocusBlue()
+	try testColourAssignmentIsStableAndOrderIndependent()
 	try testShowcaseFitsLaptopDisplays()
 	try testShowcaseFillsWithoutOverlap()
 	try testLayoutIsDeterministic()
