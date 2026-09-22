@@ -766,6 +766,10 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					screenFrame: canvasFrame,
 					presentation: presentation,
 					layout: layout,
+					// Which Panels actually hold a window, so the canvas can say
+					// so out loud. A lease is runtime state, not geometry, and
+					// adoption is never inferred from a rectangle.
+					adoptedPanelIDs: .init(orchestrator.panelAssignments.keys),
 					arrangeMode: orchestrator.isArrangeModeEnabled,
 					dragActive: orchestrator.isDragging,
 					dropHighlight: dropHighlight(on: displayID),

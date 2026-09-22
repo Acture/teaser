@@ -14,7 +14,7 @@ The baseline contains:
 - `crates/teaser-core`: pure typed identities, membership, task references,
   content-neutral bindings, size profiles, and atomic revisioned transitions.
 - `app/macos`: the retained Swift/AppKit implementation, explicit JSON client,
-  and ten headless test harnesses. The client projects the server graph into
+  and eleven headless test harnesses. The client projects the server graph into
   native tiling; interactive terminal rendering is not connected yet.
 - `prototypes/attachment-runtime`: the previous self-built PTY runtime, outside
   the active workspace. Its protocol and native Ghostty experiment are preserved
@@ -68,6 +68,12 @@ fragments use the same color, and an enclosed other-group Panel is a stroked
 hole. Do not draw a giant bounding box around intervening groups, and draw
 nothing on a canvas showing a single group. A Panel below its minimum is still
 placed and is reported with the size it needs.
+
+Colour is not the only channel that carries group identity. The canvas also
+publishes an accessibility element per placed Panel, naming the group, the
+fragment when the group has more than one, the binding, and the shortfall — so
+a fluorescent hue chosen for normal colour vision is a second way to read the
+same fact, never the only one.
 
 Share topology, constraints, ratios, and commands where meaningful. Native pixel
 geometry and TUI cell geometry remain separate projections. Terminal resize
@@ -141,10 +147,14 @@ is valid and it remains at the frame last applied by Teaser.
 
 The retained code uses public AX/CG APIs plus the isolated read-only
 `_AXUIElementGetWindow` declaration for exact identity, following AeroSpace's
-approach. KeyboardShortcuts remains a pinned native dependency; SplitView went
-with the Layout Editor window it was the only user of. Neither embeds windows or
-solves native fullscreen coexistence. Swindler remains an optional probe, not a
-fork-migration dependency.
+approach. That is the client half of accessibility, and the half the
+Accessibility service gates. The canvas also publishes its own tree — one
+`AXGroup` per placed Panel under the canvas view — which is the server half:
+it needs no permission, touches no other process, and is built in a headless
+harness without prompting. KeyboardShortcuts remains a pinned native dependency;
+SplitView went with the Layout Editor window it was the only user of. Neither
+embeds windows or solves native fullscreen coexistence. Swindler remains an
+optional probe, not a fork-migration dependency.
 
 Fullscreen transitions, Spaces, permissions, and real-window coexistence remain
 native implementation work. Do not promise arbitrary reparenting, forced

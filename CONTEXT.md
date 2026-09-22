@@ -42,7 +42,9 @@ canvases does not implicitly change Workspace membership.
 members, derived from solved Panel rectangles. Separate fragments use the same
 group identity/color; an enclosed other-group Panel is a stroked hole. It is not
 a background, title bar, or mandatory rectangular container, and a canvas
-showing one group draws none: there is nothing to tell apart.
+showing one group draws none: there is nothing to tell apart. Colour is not the
+only channel: the same membership is published in the canvas's accessibility
+tree, where the group is named and its fragments are numbered.
 
 **Layout**: Unequal tiling, split, move, resize, focus, and undo. One flat Panel
 tree per canvas: a Workspace is a label on its Panels, never a region. A split

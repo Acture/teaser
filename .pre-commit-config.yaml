@@ -143,6 +143,14 @@ repos:
         files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
+      - id: swift-test-canvas-accessibility
+        name: TeaserCanvasAccessibilityTests
+        entry: swift run TeaserCanvasAccessibilityTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        stages: [pre-push]
+
       - id: swift-test-herdr
         name: TeaserHerdrTests
         entry: swift run TeaserHerdrTests

@@ -333,6 +333,93 @@ projection. The Rust core is unchanged.
   light and dark wallpapers in both appearances; the frosted backdrop; adoption
   by Control-Option-A against a real provider; and the full pre-push gate.
 
+### Canvas accessibility tree slice
+
+This slice implements the readable half of TASK-030 (P-698) on the contour
+slice. It publishes the canvas's own accessibility tree; it does not deliver
+remappable shortcuts, Reduce Motion / Reduce Transparency responses, a contrast
+audit of the fluorescent palette, or reading a canvas that is on another Space.
+No Rust, no wire format and no organization state changes.
+
+#### One element per placed Panel
+
+- The canvas view is an `AXGroup` under its window, and each Panel with a
+  solved frame is an `AXGroup` under the canvas. `AXTitle` is the title the
+  canvas draws, provider prefix included, so what is shown and what is spoken
+  are one string. `AXDescription` names the group, numbers the fragment when
+  the group has more than one, and says what the Panel is bound to. `AXHelp`
+  carries an unsatisfied minimum size. The Panel's own identity is the
+  `AXIdentifier`, so an automated read addresses a Panel without matching on a
+  title a provider is free to change.
+- Group identity stops being a colour and nothing else. The contour's ten hues
+  are spaced for normal colour vision, which is not everyone's, and a hue is
+  inaudible to all of them; the element says "Alpha" where the contour only
+  showed a shade. The fragment ordinal is group-wide, so a group split across
+  canvases reads 1 of 2 here and 2 of 2 there. A group in one piece is not
+  numbered 1 of 1, and a canvas showing one group still names it: suppressing
+  the contour is a drawing rule, not a naming rule.
+- Binding state is read from the live lease and from `nativeContent`, never
+  from geometry: a provider hint the server holds is not an adopted window.
+  A Panel below its minimum names the deficit on each axis that is actually
+  short, because `LayoutQuality` records a shortfall when either one is, and a
+  deficit under a point says so rather than rounding to "0 pt short". The
+  minimum named is the Panel's own: an adopted window that refuses to shrink
+  writes its size onto that Panel, so it is not a fact about the kind.
+- `AXFocused` is Virtual Focus, which is one Panel for the whole presentation,
+  so at most one element in the whole tree reports it. Only `.layoutChanged` is
+  posted. `.focusedUIElementChanged` never is: announcing a layout selection as
+  the application's focused element would pull a reader's cursor into a window
+  that does not hold the keyboard, which is the implicit redirect REQ-014
+  forbids.
+- The canvas element reports how many Panels it holds, in how many Workspaces,
+  and which focus stage it is in. It says Workspace rather than group, because
+  the menu bar already does and a person hearing both must not have to work out
+  that they are the same thing. Counts describe the published tree: an exclusive
+  focus prunes the others out of the solve, and claiming a group nothing in the
+  tree can be read about would be a second lie about the same canvas.
+- Everything derives from `WorkspacePresentation` plus `PresentationLayout` in
+  the same step that builds the drawn snapshot, so the tree cannot disagree
+  with the pixels and there is no second store. Elements are cached per Panel
+  and mutated in place — handing a reader a new object on every solve would
+  drop its cursor out of the canvas whenever a divider moved — and an unchanged
+  projection is not republished, because the snapshot is rebuilt several times
+  per drag frame.
+- Publishing a tree is the server half of accessibility and needs no
+  permission. It is the opposite of adopting a provider window, which reads
+  another application's elements and does require the Accessibility service.
+  SEC-003 still holds unchanged: nothing here prompts, and no harness does.
+- Elements are informational, and `accessibilityHitTest(_:)` is left to AppKit.
+  A Panel's element must not become a third thing that can stand between a
+  pointer and a provider's window, any more than a contour may.
+
+#### Known boundaries
+
+- Teaser-owned Notes content keeps publishing its own editable subtree beside
+  the canvas element rather than inside its Panel's group. The Panel's group
+  still says the Panel is bound to Notes; nesting a live view under a published
+  element would give it two parents.
+- A canvas that is not on the active Space reports no window at all through
+  Accessibility, so nothing under it can be read either. This slice delivers
+  "present but not frontmost"; reading across Spaces is not solved here.
+
+#### Evidence
+
+- `TeaserCanvasAccessibilityTests` covers the group name and its identifier
+  fallback, fragment numbering across two canvases, a single-group canvas that
+  draws no contour and still names its group, the three binding states and a
+  provider hint that is not a lease, Virtual Focus marking exactly one element,
+  canvas-relative frames inside the canvas, the canvas summary for a blank
+  canvas and for both focus stages, the shortfall sentence on one axis, on both,
+  and under a point, one published `AXGroup` per Panel with its role,
+  identifier, title, label, help, focus, parent and frame, element identity
+  surviving a solve and leaving with its Panel, and an unchanged projection not
+  being republished. It shows no window, installs no
+  monitor and requests no Accessibility.
+- Authorized native checks, all unrun: a real VoiceOver pass naming each
+  Panel's group on a live canvas; the same tree read without a screenshot while
+  the canvas is on the active Space but not frontmost; and the full pre-push
+  gate.
+
 ## 3. Alternatives
 
 - **ALT-001**: Stock Herdr plus App/plugins cannot by itself implement the chosen

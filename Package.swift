@@ -70,5 +70,6 @@ let package: Package = Package(
 		testExecutable("TeaserWindowAdoptionTests"),
 		testExecutable("TeaserHerdrTests"),
 		testExecutable("TeaserCanvasLifecycleTests"),
+		testExecutable("TeaserCanvasAccessibilityTests"),
 	]
 )
