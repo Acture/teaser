@@ -255,6 +255,53 @@ final class DesktopStageOrchestrator {
 		adaptPresentationToDisplays()
 	}
 
+	/// A canvas the person just opened with no server behind it still has to be
+	/// usable: it gets one empty Panel — the thing a window is dragged into, and
+	/// the thing a split divides — rather than a surface that accepts nothing.
+	///
+	/// The host calls this when a canvas actually opens, not on every display
+	/// change, so merely knowing about a display never invents a Panel. It never
+	/// runs in shared mode: there the projection owns every canvas, and seeding
+	/// here would make the client a second writer of membership.
+	func seedCanvasIfUnconnected(_ displayID: DisplayID) {
+		guard !isSharedOrganization, presentation.canvases[displayID] == nil else {
+			return
+		}
+		// Each canvas starts its own group. Membership stays per Panel: a split
+		// keeps the group, and moving a Panel to another canvas would not change
+		// it.
+		let workspaceID: WorkspaceID = .init("local-\(displayID.rawValue)")
+		let panelID: PanelID = identifiers.makePanelID(prefix: "panel")
+		presentation.canvases[displayID] = .init(displayID: displayID)
+		if presentation.workspaces[workspaceID] == nil {
+			presentation.workspaces[workspaceID] = .init(
+				id: workspaceID,
+				title: "Canvas",
+				detail: ""
+			)
+		}
+		do {
+			try presentation.seedPanel(
+				.init(
+					id: panelID,
+					title: "Empty",
+					workspaceID: workspaceID,
+					kindID: .generic,
+					providerHint: nil,
+					profileOverride: nil,
+					nativeContent: .none
+				),
+				onCanvas: displayID
+			)
+			// A split needs a target, so the first Panel takes Virtual Focus.
+			if presentation.virtualFocus.panelID == nil {
+				try presentation.setVirtualFocus(panelID)
+			}
+		} catch {
+			setStatus(error.localizedDescription)
+		}
+	}
+
 	func startStage() throws {
 		guard !isStageActive else { return }
 		isStageActive = true

@@ -212,6 +212,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		canvas.show(space: currentSpace())
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
+		// With no server connected there is nothing to project, so the canvas
+		// would otherwise open with nothing to drag a window into.
+		orchestrator.seedCanvasIfUnconnected(.init(canvas: id))
 		if fill == .fillScreen {
 			setFill(.fillScreen, on: canvas)
 		}

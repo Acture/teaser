@@ -680,9 +680,82 @@ private func testProjectionKeepsEachCanvasItsOwnWorkspaces() throws {
 	)
 }
 
+/// Without a server there is nothing to project, but a canvas still has to be
+/// usable: it opens with one empty Panel to drag a window into and to split.
+@MainActor
+private func testAnUnconnectedCanvasOpensWithOneEmptyPanel() throws {
+	let harness: Harness = .init(presentation: try emptyCanvasPresentation())
+	harness.orchestrator.setDisplays([canvasADisplay])
+	try expect(
+		harness.orchestrator.presentation.canvases.isEmpty,
+		"merely knowing about a display must not invent a Panel"
+	)
+	harness.orchestrator.seedCanvasIfUnconnected(displayA)
+	let seeded: [PanelID] = harness.orchestrator.presentation.panelIDs(onCanvas: displayA)
+	try expect(seeded.count == 1, "an unconnected canvas opens with exactly one Panel")
+	let panelID: PanelID = try unwrap(seeded.first, "the seeded Panel")
+	try expect(
+		harness.orchestrator.presentation.workspaceID(of: panelID) != nil,
+		"the seeded Panel must belong to a group so it can be outlined"
+	)
+	try expect(
+		harness.orchestrator.presentation.virtualFocus.panelID == panelID,
+		"the seeded Panel takes Virtual Focus so a split has a target"
+	)
+
+	// Opening a second canvas seeds that one too, and leaves the first alone.
+	let before: CanvasLayout = try unwrap(
+		harness.orchestrator.presentation.canvases[displayA],
+		"canvas A"
+	)
+	harness.orchestrator.setDisplays([canvasADisplay, canvasBDisplay])
+	harness.orchestrator.seedCanvasIfUnconnected(displayB)
+	try expect(
+		harness.orchestrator.presentation.panelIDs(onCanvas: displayB).count == 1,
+		"a second canvas opens with its own Panel"
+	)
+	try expect(
+		harness.orchestrator.presentation.canvases[displayA] == before,
+		"seeding a new canvas must not disturb one that already exists"
+	)
+	try expect(
+		harness.orchestrator.presentation.workspaceID(of: panelID)
+			!= harness.orchestrator.presentation.workspaceID(
+				of: try unwrap(
+					harness.orchestrator.presentation.panelIDs(onCanvas: displayB).first,
+					"canvas B's Panel"
+				)
+			),
+		"each canvas starts its own group"
+	)
+}
+
+/// In shared mode the projection owns every canvas. Seeding a Panel here would
+/// make the client a second writer of membership.
+@MainActor
+private func testSharedModeNeverSeedsAPanel() throws {
+	let harness: Harness = .init(presentation: try emptyCanvasPresentation())
+	harness.orchestrator.useSharedOrganization()
+	harness.orchestrator.setDisplays([canvasADisplay])
+	harness.orchestrator.seedCanvasIfUnconnected(displayA)
+	try expect(
+		harness.orchestrator.presentation.panels.isEmpty
+			&& harness.orchestrator.presentation.canvases.isEmpty,
+		"shared mode must accept its canvases from the projection alone"
+	)
+}
+
 @MainActor
 func canvasIsolationCases() -> [TestCase] {
 	[
+		.init(
+			"an unconnected canvas opens with one empty Panel",
+			testAnUnconnectedCanvasOpensWithOneEmptyPanel
+		),
+		.init(
+			"shared mode never seeds a Panel",
+			testSharedModeNeverSeedsAPanel
+		),
 		.init(
 			"closing a canvas releases only its own windows",
 			testClosingACanvasReleasesOnlyItsOwnWindows
