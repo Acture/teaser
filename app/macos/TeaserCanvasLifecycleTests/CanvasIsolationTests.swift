@@ -735,13 +735,24 @@ private func testAnUnconnectedCanvasOpensWithOneEmptyPanel() throws {
 @MainActor
 private func testSharedModeNeverSeedsAPanel() throws {
 	let harness: Harness = .init(presentation: try emptyCanvasPresentation())
+	// A session exists from app start, so this alone must not suppress seeding:
+	// gating on it is what left every canvas empty.
 	harness.orchestrator.useSharedOrganization()
 	harness.orchestrator.setDisplays([canvasADisplay])
 	harness.orchestrator.seedCanvasIfUnconnected(displayA)
 	try expect(
-		harness.orchestrator.presentation.panels.isEmpty
-			&& harness.orchestrator.presentation.canvases.isEmpty,
-		"shared mode must accept its canvases from the projection alone"
+		harness.orchestrator.presentation.panelIDs(onCanvas: displayA).count == 1,
+		"a session with no projection yet must still seed a usable canvas"
+	)
+
+	// Once an authoritative projection lands, the server owns every canvas.
+	try harness.orchestrator.reconcileOrganization(
+		try twoCanvasPresentation(), retaining: [], adoptable: [], notes: [:]
+	)
+	harness.orchestrator.seedCanvasIfUnconnected(.init("fresh-canvas"))
+	try expect(
+		harness.orchestrator.presentation.canvases[.init("fresh-canvas")] == nil,
+		"after a projection, canvases come from the server alone"
 	)
 }
 
@@ -753,7 +764,7 @@ func canvasIsolationCases() -> [TestCase] {
 			testAnUnconnectedCanvasOpensWithOneEmptyPanel
 		),
 		.init(
-			"shared mode never seeds a Panel",
+			"seeding stops once a projection owns the presentation",
 			testSharedModeNeverSeedsAPanel
 		),
 		.init(

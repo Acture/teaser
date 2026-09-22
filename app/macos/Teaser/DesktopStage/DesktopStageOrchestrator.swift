@@ -132,6 +132,11 @@ final class DesktopStageOrchestrator {
 	private(set) var isArrangeModeEnabled: Bool = false
 	private(set) var dropHighlight: DesktopOverlayDropHighlight?
 	private(set) var isSharedOrganization: Bool = false
+	/// Whether an authoritative projection has ever arrived. `isSharedOrganization`
+	/// only means a session object exists — it is switched on when the client is
+	/// constructed, long before anything connects — so it cannot answer "does the
+	/// server own this presentation yet".
+	private(set) var hasAuthoritativeProjection: Bool = false
 	private var sharedAdoptablePanels: Set<PanelID> = []
 	var onSharedKindChange: ((PanelID, PanelKindID) -> Void)?
 	var onSharedSplit: ((DesktopStageSplitIntent) -> Void)?
@@ -220,6 +225,7 @@ final class DesktopStageOrchestrator {
 		}
 		discardUndoHistory()
 		presentation = next; notes = nextNotes; sharedAdoptablePanels = adoptable
+		hasAuthoritativeProjection = true
 		relayout(synchronously: isStageActive)
 		host?.orchestratorDidChangeState(self)
 	}
@@ -267,9 +273,12 @@ final class DesktopStageOrchestrator {
 	/// runs in shared mode: there the projection owns every canvas, and seeding
 	/// here would make the client a second writer of membership.
 	func seedCanvasIfUnconnected(_ displayID: DisplayID) {
-		guard !isSharedOrganization, presentation.canvases[displayID] == nil else {
-			return
-		}
+		// Gated on a projection having arrived, not on a session existing: the
+		// session switches `isSharedOrganization` on at construction, so gating
+		// on that seeded nothing, ever, and every canvas opened empty.
+		guard !hasAuthoritativeProjection,
+			presentation.canvases[displayID] == nil
+		else { return }
 		// Each canvas starts its own group. Membership stays per Panel: a split
 		// keeps the group, and moving a Panel to another canvas would not change
 		// it.
