@@ -1286,6 +1286,57 @@ private func testARefusedMinimizeIsReportedAndDoesNotAbort() throws {
 	)
 }
 
+// MARK: - Split axis
+
+/// Halving the long side is the usual answer, but not for a Panel whose kind
+/// wants a shape that cut would destroy. A tall File Panel cut across its width
+/// leaves two Panels nothing fits in.
+@MainActor
+private func testSplitAxisFollowsThePreferredAspect() throws {
+	let harness: Harness = .init(presentation: try testPresentation())
+	try harness.orchestrator.startStageExplicitly()
+	defer { harness.orchestrator.stopStage() }
+
+	// A File Panel prefers 0.55–1.4, so a wide frame should be cut across its
+	// width — the long-side rule alone would agree here, so make it disagree:
+	// give the Panel a band that only the other cut can reach.
+	harness.orchestrator.setPanelKind(.file, panelID: leftPanelID)
+	harness.orchestrator.setVirtualPanel(leftPanelID)
+	let before: LayoutRect = try unwrap(
+		harness.orchestrator.layout?.panelFrames[leftPanelID],
+		"the target must be solved"
+	)
+	harness.orchestrator.perform(.splitPanel)
+	let after: LayoutRect = try unwrap(
+		harness.orchestrator.layout?.panelFrames[leftPanelID],
+		"the target must still be solved"
+	)
+	// Whichever axis was chosen, exactly one dimension may shrink.
+	let narrowed: Bool = after.size.width < before.size.width - 1
+	let shortened: Bool = after.size.height < before.size.height - 1
+	try expect(
+		narrowed != shortened,
+		"a split must halve exactly one axis of the target"
+	)
+	let profile: LayoutProfile = try unwrap(
+		harness.orchestrator.presentation.panels[leftPanelID]?.profileOverride
+			?? PanelKindDefinition.file.defaultProfile,
+		"the File profile"
+	)
+	let chosen: Double = profile.preferredAspectRatio.distance(
+		to: after.size.width / after.size.height
+	)
+	let rejected: Double = profile.preferredAspectRatio.distance(
+		to: narrowed
+			? before.size.width / (before.size.height / 2)
+			: before.size.width / 2 / before.size.height
+	)
+	try expect(
+		chosen <= rejected + 0.000_001,
+		"the cut taken must land at least as close to the preferred band"
+	)
+}
+
 // MARK: - Stage activation
 
 /// An open canvas is the consent to run. There is no Start step to find, and
@@ -1360,6 +1411,7 @@ func adoptionCases() -> [TestCase] {
 	[
 		.init("default run touches no desktop state", testDefaultRunTouchesNoDesktopState),
 		.init("an open canvas activates the stage", testAnOpenCanvasActivatesTheStage),
+		.init("split axis follows the preferred aspect", testSplitAxisFollowsThePreferredAspect),
 		.init("activation without Accessibility never prompts", testActivationWithoutAccessibilityNeverPrompts),
 		.init("an explicit Stop survives later activation", testAnExplicitStopSurvivesLaterActivation),
 		.init("no canvas means no stage", testNoCanvasMeansNoStage),

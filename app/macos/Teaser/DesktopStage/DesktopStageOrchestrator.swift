@@ -1123,9 +1123,10 @@ final class DesktopStageOrchestrator {
 			setStatus(DesktopStageOrchestratorError.layoutUnavailable.localizedDescription)
 			return
 		}
+		let axis: LayoutAxis = splitAxis(for: targetPanelID, frame: targetFrame)
 		if isSharedOrganization {
 			onSharedSplit?(.init(target: targetPanelID,
-				edge: targetFrame.size.width >= targetFrame.size.height ? .trailing : .bottom,
+				edge: axis == .horizontal ? .trailing : .bottom,
 				handle: nil, bundleID: nil))
 			return
 		}
@@ -1148,6 +1149,7 @@ final class DesktopStageOrchestrator {
 					with: panel,
 					onCanvas: canvasID,
 					targetFrame: targetFrame,
+					forcedAxis: axis,
 					splitID: identifiers.makeSplitID(prefix: "command")
 				)
 				try presentation.setVirtualFocus(panelID)
@@ -1156,6 +1158,35 @@ final class DesktopStageOrchestrator {
 		} catch {
 			setStatus(error.localizedDescription)
 		}
+	}
+
+	/// Which way to cut a Panel in two. Halving the long side is the usual
+	/// answer, but it is the wrong one for a Panel whose kind wants a shape the
+	/// long side would destroy — a tall File Panel cut across its width leaves
+	/// two Panels nothing fits in. Whichever cut leaves the target closer to its
+	/// preferred proportions wins; a tie keeps the long-side rule.
+	///
+	/// Local and one-shot: no ratio anywhere depends on this, so the layout
+	/// stays deterministic. A drop is never affected — the person aimed it.
+	private func splitAxis(for panelID: PanelID, frame: LayoutRect) -> LayoutAxis {
+		let longSide: LayoutAxis = frame.size.width >= frame.size.height
+			? .horizontal
+			: .vertical
+		guard let panel: PanelDescriptor = presentation.panels[panelID],
+			let profile: LayoutProfile = panel.profileOverride
+				?? presentation.panelKinds.definition(for: panel.kindID)?.defaultProfile,
+			frame.size.width > 0, frame.size.height > 0
+		else { return longSide }
+		// Halving one axis leaves the target at half that dimension.
+		let horizontal: Double = profile.preferredAspectRatio.distance(
+			to: frame.size.width / 2 / frame.size.height
+		)
+		let vertical: Double = profile.preferredAspectRatio.distance(
+			to: frame.size.width / (frame.size.height / 2)
+		)
+		if horizontal < vertical { return .horizontal }
+		if vertical < horizontal { return .vertical }
+		return longSide
 	}
 
 	func handInputToVirtualPanel() {
