@@ -463,7 +463,77 @@ private func testTransactionErrorsRetainInputs() throws {
 	)
 }
 
+// MARK: - Qualification diagnostics
+
+/// The gate is silent by design, which makes a drag that never lands impossible
+/// to explain. Each criterion must name itself, and the numbers must be real.
+private func testQualificationFailureNamesItsCriterion() throws {
+	let origin: CGRect = .init(x: 100, y: 100, width: 800, height: 600)
+	func sample(mouse: CGPoint, window: CGRect) -> ExternalWindowDragSample {
+		.init(mouseAppKitScreenLocation: mouse, windowAppKitScreenFrame: window)
+	}
+	let initial: ExternalWindowDragSample = sample(
+		mouse: .init(x: 200, y: 200), window: origin
+	)
+
+	// A qualifying drag names nothing.
+	try expect(
+		externalWindowDragQualificationFailure(
+			initial: initial,
+			current: sample(
+				mouse: .init(x: 260, y: 200),
+				window: origin.offsetBy(dx: 60, dy: 0)
+			)
+		) == nil,
+		"a real window drag must report no failure"
+	)
+
+	// Barely moved: the mouse criterion.
+	try expect(
+		externalWindowDragQualificationFailure(
+			initial: initial,
+			current: sample(mouse: .init(x: 202, y: 200), window: origin)
+		)?.contains("mouse moved") == true,
+		"a press that hardly moved must name the mouse criterion"
+	)
+
+	// Content drag: pointer moves, window does not.
+	try expect(
+		externalWindowDragQualificationFailure(
+			initial: initial,
+			current: sample(mouse: .init(x: 300, y: 200), window: origin)
+		)?.contains("window moved") == true,
+		"a content drag must name the window-movement criterion"
+	)
+
+	// The window follows, but far behind the pointer.
+	try expect(
+		externalWindowDragQualificationFailure(
+			initial: initial,
+			current: sample(
+				mouse: .init(x: 400, y: 200),
+				window: origin.offsetBy(dx: 40, dy: 0)
+			)
+		)?.contains("lagged") == true,
+		"a window trailing the pointer must name the lag criterion"
+	)
+
+	// Stage Manager scales a window as it moves; that must be nameable too.
+	try expect(
+		externalWindowDragQualificationFailure(
+			initial: initial,
+			current: sample(
+				mouse: .init(x: 260, y: 200),
+				window: .init(x: 160, y: 100, width: 700, height: 600)
+			)
+		)?.contains("resized") == true,
+		"a window that changed size must name the size criterion"
+	)
+}
+
+
 do {
+	try testQualificationFailureNamesItsCriterion()
 	try testCoordinateConversion()
 	try testWindowIdentitySelectsOneExactWindowID()
 	try testPickerRowsOrderAndDescribeCandidates()
