@@ -13,6 +13,9 @@ struct LayoutDivider: Codable, Equatable, Hashable, Sendable {
 	let axis: LayoutAxis
 	let containerFrame: LayoutRect
 	let frame: LayoutRect
+	/// Whether this divider separates Panels of different groups. It is the
+	/// wider gutter, and the one a group contour is drawn in.
+	let crossesGroups: Bool
 }
 
 struct LayoutQuality: Codable, Equatable, Sendable {
@@ -71,11 +74,32 @@ extension LayoutSize {
 /// Workspace is not a layout container: it never gets a rectangle here, and the
 /// contour pass derives its outline from the Panel frames afterwards.
 struct ConstrainedLayoutSolver: Sendable {
+	/// Between Panels of one group.
 	let panelGap: Double
+	/// Between Panels of different groups, and between the outermost Panels and
+	/// the canvas edge. Wide enough that two facing contours stay visibly apart
+	/// while same-group neighbours' contours meet and merge.
+	let groupGap: Double
 
-	init(panelGap: Double = 4) {
+	init(panelGap: Double = 4, groupGap: Double = 16) {
 		precondition(panelGap >= 0)
+		// The contour pass inflates each Panel by panelGap / 2, so same-group
+		// neighbours touch and merge. A group gutter must stay wider than two of
+		// those inflations plus a stroke, or two groups' contours would merge
+		// into one and the boundary would disappear.
+		precondition(groupGap >= 3 * panelGap)
 		self.panelGap = panelGap
+		self.groupGap = groupGap
+	}
+
+	/// The rectangle Panels are actually laid out in: the canvas inset by one
+	/// group gutter, so a contour around an outermost Panel has room to be drawn
+	/// instead of being clipped at the canvas edge. A canvas too small for the
+	/// inset keeps its whole rectangle rather than collapsing.
+	func layoutFrame(inCanvas frame: LayoutRect) -> LayoutRect {
+		guard frame.size.width > 2 * groupGap, frame.size.height > 2 * groupGap
+		else { return frame }
+		return frame.insetBy(dx: groupGap, dy: groupGap)
 	}
 
 	static func solve(
@@ -108,7 +132,7 @@ struct ConstrainedLayoutSolver: Sendable {
 			}
 			let solution: TreeSolution = try solveTreeNode(
 				tree,
-				in: displayFrame,
+				in: layoutFrame(inCanvas: displayFrame),
 				displayID: displayID,
 				presentation: presentation
 			)
@@ -206,6 +230,39 @@ struct ConstrainedLayoutSolver: Sendable {
 		)
 	}
 
+	/// The one group every leaf of this subtree belongs to, or nil when it holds
+	/// more than one. This is what decides a split's gutter, so the spacing
+	/// reads as hierarchy: tight inside a group, open between groups.
+	private func commonWorkspace(
+		_ tree: LayoutTree<PanelID>,
+		presentation: WorkspacePresentation
+	) -> WorkspaceID? {
+		var common: WorkspaceID?
+		for panelID: PanelID in tree.leaves {
+			guard let workspaceID: WorkspaceID = presentation.workspaceID(of: panelID)
+			else { return nil }
+			if let common {
+				guard common == workspaceID else { return nil }
+			} else {
+				common = workspaceID
+			}
+		}
+		return common
+	}
+
+	/// A split is inside one group only when both sides are that same group. A
+	/// subtree mixing groups always takes the wide gutter.
+	private func gap(
+		between first: LayoutTree<PanelID>,
+		and second: LayoutTree<PanelID>,
+		presentation: WorkspacePresentation
+	) -> Double {
+		let left: WorkspaceID? = commonWorkspace(first, presentation: presentation)
+		guard let left, left == commonWorkspace(second, presentation: presentation)
+		else { return groupGap }
+		return panelGap
+	}
+
 	private func treeMetrics(
 		_ tree: LayoutTree<PanelID>,
 		presentation: WorkspacePresentation
@@ -222,11 +279,18 @@ struct ConstrainedLayoutSolver: Sendable {
 				second,
 				presentation: presentation
 			)
+			// The same gutter the placing pass will use, or a minimum computed
+			// here would not be the minimum actually honoured there.
+			let nodeGap: Double = gap(
+				between: first,
+				and: second,
+				presentation: presentation
+			)
 			let size: LayoutSize
 			switch axis {
 			case .horizontal:
 				size = .init(
-					width: firstMetrics.minimumSize.width + panelGap
+					width: firstMetrics.minimumSize.width + nodeGap
 						+ secondMetrics.minimumSize.width,
 					height: max(
 						firstMetrics.minimumSize.height,
@@ -239,7 +303,7 @@ struct ConstrainedLayoutSolver: Sendable {
 						firstMetrics.minimumSize.width,
 						secondMetrics.minimumSize.width
 					),
-					height: firstMetrics.minimumSize.height + panelGap
+					height: firstMetrics.minimumSize.height + nodeGap
 						+ secondMetrics.minimumSize.height
 				)
 			}
@@ -274,9 +338,14 @@ struct ConstrainedLayoutSolver: Sendable {
 				second,
 				presentation: presentation
 			)
+			let nodeGap: Double = gap(
+				between: first,
+				and: second,
+				presentation: presentation
+			)
 			let available: Double = axis == .horizontal
-				? frame.size.width - panelGap
-				: frame.size.height - panelGap
+				? frame.size.width - nodeGap
+				: frame.size.height - nodeGap
 			let firstMinimum: Double = axis == .horizontal
 				? firstMetrics.minimumSize.width
 				: firstMetrics.minimumSize.height
@@ -284,7 +353,7 @@ struct ConstrainedLayoutSolver: Sendable {
 				? secondMetrics.minimumSize.width
 				: secondMetrics.minimumSize.height
 			// A region too narrow for its gap drops the gap rather than failing.
-			let splitGap: Double = available > 0 ? panelGap : 0
+			let splitGap: Double = available > 0 ? nodeGap : 0
 			let usable: Double = available > 0
 				? available
 				: (axis == .horizontal ? frame.size.width : frame.size.height)
@@ -306,9 +375,16 @@ struct ConstrainedLayoutSolver: Sendable {
 			let ratio: Double
 			if usable > 0, firstMinimum + secondMinimum <= usable {
 				// Room for both minimums: honour the requested ratio within them.
-				ratio = desired.clamped(
-					to: (firstMinimum / usable) ... (1 - secondMinimum / usable)
-				)
+				// When the two sides fit exactly, `firstMinimum / usable` and
+				// `1 - secondMinimum / usable` are the same number in exact
+				// arithmetic but can land one ULP apart in the wrong order, which
+				// would trap forming the range. Splitting the difference is the
+				// same answer without the trap.
+				let lower: Double = firstMinimum / usable
+				let upper: Double = 1 - secondMinimum / usable
+				ratio = upper >= lower
+					? desired.clamped(to: lower ... upper)
+					: (lower + upper) / 2
 			} else if firstMinimum + secondMinimum > 0 {
 				// Not enough room: both sides shrink in proportion to what they
 				// need, so the layout adapts to the space it has rather than
@@ -358,7 +434,8 @@ struct ConstrainedLayoutSolver: Sendable {
 						splitID: splitID,
 						axis: axis,
 						containerFrame: frame,
-						frame: frames.divider
+						frame: frames.divider,
+						crossesGroups: nodeGap != panelGap
 					),
 				] + firstSolution.dividers + secondSolution.dividers,
 				effectiveRatios: ratios

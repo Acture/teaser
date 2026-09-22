@@ -80,8 +80,8 @@ private func testShowcaseFillsWithoutOverlap() throws {
 	let dividerArea: Double = layout.dividers.reduce(0) { $0 + $1.frame.size.area }
 	try expectApproximatelyEqual(
 		panelArea + dividerArea,
-		displayFrame.size.area,
-		"Panels and gutters must exactly fill the canvas"
+		ConstrainedLayoutSolver().layoutFrame(inCanvas: displayFrame).size.area,
+		"Panels and gutters must exactly fill the canvas inside its gutter"
 	)
 
 	for (panelID, frame): (PanelID, LayoutRect) in layout.panelFrames {
@@ -262,8 +262,15 @@ private func testEachCanvasSolvesInsideItsOwnRectangle() throws {
 		presentation: presentation,
 		displayFrames: [canvasA: frameA, canvasB: frameB]
 	)
-	try expect(layout.panelFrames[.init("first")] == frameA, "canvas A fills its own rectangle")
-	try expect(layout.panelFrames[.init("second")] == frameB, "canvas B fills its own rectangle")
+	let solver: ConstrainedLayoutSolver = .init()
+	try expect(
+		layout.panelFrames[.init("first")] == solver.layoutFrame(inCanvas: frameA),
+		"canvas A fills its own rectangle inside the gutter"
+	)
+	try expect(
+		layout.panelFrames[.init("second")] == solver.layoutFrame(inCanvas: frameB),
+		"canvas B fills its own rectangle inside the gutter"
+	)
 
 	// A Panel the presentation still knows but no open canvas places is not an
 	// error: its canvas is closed.
@@ -273,7 +280,8 @@ private func testEachCanvasSolvesInsideItsOwnRectangle() throws {
 		displayFrames: [canvasA: frameA]
 	)
 	try expect(
-		partial.panelFrames.count == 1 && partial.panelFrames[.init("first")] == frameA,
+		partial.panelFrames.count == 1
+			&& partial.panelFrames[.init("first")] == solver.layoutFrame(inCanvas: frameA),
 		"a Panel on a closed canvas must not fail the solve"
 	)
 }
@@ -565,6 +573,152 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 	try expect(
 		preference.userRatio == 0.95,
 		"the clamped solve must not overwrite the stored proportion"
+	)
+}
+
+// MARK: - Gap hierarchy
+
+/// Three Panels in a row where only the outer two share a group, so one split
+/// is inside a group and the other crosses one.
+private func gapPresentation() throws -> WorkspacePresentation {
+	func panel(_ id: String, _ group: String) -> PanelDescriptor {
+		.init(
+			id: .init(id),
+			title: id,
+			workspaceID: .init(group),
+			kindID: .generic,
+			providerHint: nil,
+			profileOverride: .init(
+				minimumSize: .init(width: 10, height: 10),
+				preferredAspectRatio: .init(0.1, 10),
+				growthWeight: 1
+			),
+			nativeContent: .none
+		)
+	}
+	let members: [PanelDescriptor] = [
+		panel("a1", "alpha"), panel("a2", "alpha"), panel("b1", "beta"),
+	]
+	return .init(
+		canvases: [
+			weightedDisplayID: .init(
+				displayID: weightedDisplayID,
+				panelTree: .split(
+					id: .init("root"),
+					axis: .horizontal,
+					preference: .user(0.5),
+					first: .split(
+						id: .init("inner"),
+						axis: .horizontal,
+						preference: .user(0.5),
+						first: .leaf(.init("a1")),
+						second: .leaf(.init("a2"))
+					),
+					second: .leaf(.init("b1"))
+				)
+			),
+		],
+		workspaces: [
+			.init("alpha"): .init(id: .init("alpha"), title: "Alpha", detail: ""),
+			.init("beta"): .init(id: .init("beta"), title: "Beta", detail: ""),
+		],
+		panels: Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) }),
+		panelKinds: try .init()
+	)
+}
+
+/// Spacing carries the hierarchy: tight inside a group, open between groups.
+/// Without this every gutter is the same width and the only thing separating
+/// two groups is the contour itself.
+private func testGroupGapAppliesOnlyBetweenGroups() throws {
+	let solver: ConstrainedLayoutSolver = .init()
+	let layout: PresentationLayout = try solver.solve(
+		presentation: try gapPresentation(),
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+		]
+	)
+	let inner: LayoutDivider = try unwrap(
+		layout.dividers.first { $0.splitID == .init("inner") },
+		"the within-group divider must be solved"
+	)
+	let root: LayoutDivider = try unwrap(
+		layout.dividers.first { $0.splitID == .init("root") },
+		"the cross-group divider must be solved"
+	)
+	try expect(!inner.crossesGroups, "a split inside one group must not be marked")
+	try expect(root.crossesGroups, "a split between two groups must be marked")
+	try expectApproximatelyEqual(
+		inner.frame.size.width, solver.panelGap, "within-group gutter"
+	)
+	try expectApproximatelyEqual(
+		root.frame.size.width, solver.groupGap, "between-group gutter"
+	)
+	try expect(
+		solver.groupGap > solver.panelGap,
+		"the hierarchy only reads if the gutters actually differ"
+	)
+}
+
+/// A subtree holding more than one group takes the wide gutter, because there
+/// is no single group for it to be "inside".
+private func testMixedSubtreeTakesTheWideGutter() throws {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	presentation.panels[.init("a2")]?.workspaceID = .init("beta")
+	let solver: ConstrainedLayoutSolver = .init()
+	let layout: PresentationLayout = try solver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+		]
+	)
+	try expect(
+		layout.dividers.allSatisfy(\.crossesGroups),
+		"every divider here separates groups once a2 changes group"
+	)
+}
+
+/// The measuring pass and the placing pass must agree on each gutter, or a
+/// Panel's minimum is computed against a gap it is never actually given.
+private func testGapAgreesWithMinimums() throws {
+	let solver: ConstrainedLayoutSolver = .init()
+	let layout: PresentationLayout = try solver.solve(
+		presentation: try gapPresentation(),
+		// Exactly the width three 10 pt minimums plus one narrow and one wide
+		// gutter need, so any disagreement overflows or underfills visibly.
+		displayFrames: [
+			weightedDisplayID: .init(
+				x: 0,
+				y: 0,
+				width: 30 + solver.panelGap + solver.groupGap + 2 * solver.groupGap,
+				height: 200
+			),
+		]
+	)
+	try assertNoOverlap(layout.panelFrames, "a tight canvas must not overlap Panels")
+	let total: Double = layout.panelFrames.values.reduce(0) { $0 + $1.size.width }
+		+ layout.dividers.reduce(0) { $0 + $1.frame.size.width }
+	try expectApproximatelyEqual(
+		total,
+		30 + solver.panelGap + solver.groupGap,
+		"Panels and both gutters must exactly fill the laid-out width"
+	)
+}
+
+/// A canvas too small for the inset keeps its whole rectangle rather than
+/// collapsing, so a tiny canvas still lays every Panel out.
+private func testUndersizedCanvasSkipsTheInset() throws {
+	let solver: ConstrainedLayoutSolver = .init()
+	let tiny: LayoutRect = .init(x: 0, y: 0, width: 20, height: 20)
+	try expect(
+		solver.layoutFrame(inCanvas: tiny) == tiny,
+		"a canvas narrower than two gutters must not be inset away"
+	)
+	let roomy: LayoutRect = .init(x: 0, y: 0, width: 400, height: 300)
+	try expect(
+		solver.layoutFrame(inCanvas: roomy)
+			== roomy.insetBy(dx: solver.groupGap, dy: solver.groupGap),
+		"a roomy canvas is inset by exactly one group gutter"
 	)
 }
 
@@ -924,6 +1078,10 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testGroupGapAppliesOnlyBetweenGroups()
+	try testMixedSubtreeTakesTheWideGutter()
+	try testGapAgreesWithMinimums()
+	try testUndersizedCanvasSkipsTheInset()
 	try testMoveChangesPlacementNotMembership()
 	try testMovingTheLastPanelLeavesTheCanvasBlank()
 	try testEachCanvasSolvesInsideItsOwnRectangle()

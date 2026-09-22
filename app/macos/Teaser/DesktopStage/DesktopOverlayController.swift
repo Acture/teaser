@@ -170,7 +170,10 @@ final class DesktopOverlayView: NSView {
 		let pixel: CGFloat = backingPixel
 		for divider: LayoutDivider in snapshot.dividers {
 			let rect: NSRect = localRect(divider.frame)
-			NSColor.separatorColor.withAlphaComponent(0.48).setFill()
+			// A group boundary reads heavier than a divider inside one group.
+			NSColor.separatorColor.withAlphaComponent(
+				divider.crossesGroups ? 0.75 : 0.48
+			).setFill()
 
 			let line: NSRect
 			switch divider.axis {
