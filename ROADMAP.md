@@ -51,6 +51,14 @@ automation under Teaser ownership. No implicit upstream release publishing.
 ## Deferred
 
 Native Windows App, custom terminal renderer, replacement task databases, GUI
-reparenting/capture proxies, and custom roaming infrastructure are not prerequisites
-for this demo. Inherited cross-platform runtime capability is not evidence of a
-completed cross-platform Teaser App.
+reparenting, input-accepting capture proxies, and custom roaming infrastructure
+are not prerequisites for this demo. Inherited cross-platform runtime capability
+is not evidence of a completed cross-platform Teaser App.
+
+A read-only window preview is not a capture proxy and is in scope: a Panel may
+show a provider window it cannot adopt — one in native fullscreen, on another
+Space, or off-stage — and hand off on an explicit click. It requires screen
+recording alongside Accessibility, and degrades to an honest reference rather
+than a blank or an imitation when that is refused. Routing input into a
+background window remains out: REQ-008 bans synthetic input, and a preview that
+accepted it would be the proxy this excludes.
