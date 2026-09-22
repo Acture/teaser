@@ -576,6 +576,104 @@ private func testClampedUserRatioIsNotWrittenBack() throws {
 	)
 }
 
+// MARK: - Contours in the solved layout
+
+/// The solver is the one place that sees every canvas, so it is where the
+/// contours and the session-wide colour assignment come from.
+private func testSolvedLayoutCarriesContours() throws {
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: try focusPresentation(), displayFrames: focusFrames()
+	)
+	let alpha: WorkspaceContour = try unwrap(
+		layout.contours.first { $0.workspaceID == .init("alpha") },
+		"alpha must have a contour"
+	)
+	// alpha holds a1 and a2 adjacent on one canvas, plus b-solo on the other.
+	try expect(
+		alpha.fragments.count == 2,
+		"one group across two canvases is two fragments, got \(alpha.fragments.count)"
+	)
+	try expect(
+		Set(alpha.fragments.map(\.displayID))
+			== [weightedDisplayID, .init("canvas-b")],
+		"the fragments must name the canvases they are on"
+	)
+	try expect(alpha.fragments.map(\.ordinal) == [1, 2], "ordinals run group-wide")
+	try expect(
+		layout.contourColors[.init("alpha")] != layout.contourColors[.init("beta")],
+		"two groups must not share a colour"
+	)
+}
+
+/// The contour is drawn in the gutter. If a vertex landed inside a Panel it
+/// would cover that Panel's content — and, under a real adopted window, be
+/// invisible anyway.
+private func testSolvedContoursStayOutOfEveryPanel() throws {
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: try focusPresentation(), displayFrames: focusFrames()
+	)
+	for loop: ContourLoop in layout.contours.flatMap({
+		$0.fragments.flatMap { [$0.outer] + $0.holes }
+	}) {
+		for vertex: LayoutPoint in loop.vertices {
+			for (panelID, frame): (PanelID, LayoutRect) in layout.panelFrames {
+				try expect(
+					!(vertex.x > frame.minX && vertex.x < frame.maxX
+						&& vertex.y > frame.minY && vertex.y < frame.maxY),
+					"a contour vertex landed inside \(panelID.rawValue)"
+				)
+			}
+		}
+	}
+}
+
+/// Adjacent members of one group produce a single loop rather than one box per
+/// Panel — the whole point of a group contour.
+private func testAdjacentMembersShareOneSolvedLoop() throws {
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: try gapPresentation(),
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+		]
+	)
+	let alpha: WorkspaceContour = try unwrap(
+		layout.contours.first { $0.workspaceID == .init("alpha") },
+		"alpha must have a contour"
+	)
+	try expect(alpha.fragments.count == 1, "a1 and a2 are adjacent, so one fragment")
+	try expect(
+		alpha.fragments[0].outer.vertices.count == 4,
+		"two adjacent Panels in a row outline one rectangle"
+	)
+	try expect(
+		alpha.fragments[0].panelIDs == [.init("a1"), .init("a2")],
+		"the fragment must name both members"
+	)
+}
+
+/// An exclusive focus leaves the other group unframed, so it has no contour
+/// either: an outline with nothing inside it would be a lie.
+private func testExclusiveFocusLeavesNoContourForHiddenGroups() throws {
+	var presentation: WorkspacePresentation = try gapPresentation()
+	presentation.focusWorkspace(
+		.init("alpha"), onCanvas: weightedDisplayID, exclusive: true
+	)
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: 1_000, height: 400),
+		]
+	)
+	try expect(
+		!layout.contours.contains { $0.workspaceID == .init("beta") },
+		"a group with no framed Panel must not be outlined"
+	)
+	try expect(
+		layout.contours.contains { $0.workspaceID == .init("alpha") },
+		"the focused group is still outlined"
+	)
+}
+
 // MARK: - Focus
 
 private func focusPresentation() throws -> WorkspacePresentation {
@@ -1301,6 +1399,10 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testSolvedLayoutCarriesContours()
+	try testSolvedContoursStayOutOfEveryPanel()
+	try testAdjacentMembersShareOneSolvedLoop()
+	try testExclusiveFocusLeavesNoContourForHiddenGroups()
 	try testEmphasisGrowsWithoutHidingAnything()
 	try testExclusivePrunesTheSolveNotTheTree()
 	try testFocusOnlyChangesItsOwnCanvas()

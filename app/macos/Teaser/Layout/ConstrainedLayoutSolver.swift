@@ -34,6 +34,14 @@ struct PresentationLayout: Codable, Equatable, Sendable {
 	let dividers: [LayoutDivider]
 	let effectiveRatios: [LayoutSplitReference: Double]
 	let quality: LayoutQuality
+	/// The outer boundary of each locally adjacent run of each group, derived
+	/// from the solved frames. A Workspace owns no rectangle, so this is the
+	/// only place its shape exists.
+	let contours: [WorkspaceContour]
+	/// One colour per Workspace for the whole session, computed here because
+	/// this is the one place that sees every canvas at once: a fragment on
+	/// another canvas has to be the same colour or the contour means nothing.
+	let contourColors: [WorkspaceID: WorkspaceContourColor]
 }
 
 enum ConstrainedLayoutError: Error, Equatable, LocalizedError, Sendable {
@@ -179,6 +187,9 @@ struct ConstrainedLayoutSolver: Sendable {
 			}
 		}
 
+		let canvasOrder: [DisplayID] = presentation.canvases.keys.sorted {
+			$0.rawValue < $1.rawValue
+		}
 		return .init(
 			panelFrames: panelFrames,
 			dividers: dividers.sorted(by: dividerSort),
@@ -186,6 +197,20 @@ struct ConstrainedLayoutSolver: Sendable {
 			quality: try layoutQuality(
 				panelFrames: panelFrames,
 				presentation: presentation
+			),
+			contours: WorkspaceContourGeometry.contours(
+				presentation.contourInputs(frames: panelFrames),
+				canvasOrder: canvasOrder,
+				// Half the within-group gutter, so same-group neighbours' bands
+				// meet exactly and merge into one continuous boundary.
+				inflation: panelGap / 2
+			),
+			contourColors: WorkspaceContourPalette.assignment(
+				for: Array(
+					Set(presentation.workspaces.keys).union(
+						presentation.panels.values.map(\.workspaceID)
+					)
+				)
 			)
 		)
 	}

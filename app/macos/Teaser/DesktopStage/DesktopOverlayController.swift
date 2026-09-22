@@ -65,6 +65,9 @@ final class DesktopOverlayView: NSView {
 	override func draw(_ dirtyRect: NSRect) {
 		super.draw(dirtyRect)
 
+		// Contours first: they sit in the gutters, under everything that marks a
+		// single Panel, so a focus ring or a drop highlight always reads on top.
+		drawGroupContours()
 		drawDividers()
 		if snapshot.arrangeMode || snapshot.dragActive {
 			drawPanelOutlinesAndLabels()
@@ -165,6 +168,57 @@ final class DesktopOverlayView: NSView {
 		}
 	}
 
+
+	/// The fluorescent outer boundary of each group fragment. Adjacent members
+	/// share one continuous loop; a group split by another group's Panel, or
+	/// spread across canvases, gets one loop per fragment in the same colour.
+	/// A hole is stroked too: the inner edge of a ring is as much the group's
+	/// boundary as its outer edge, and leaving it bare would read as if the
+	/// enclosed Panel were a member.
+	///
+	/// Drawing is all this does. No hit region and no cursor rect is registered
+	/// for a contour, so it can never intercept input meant for a window.
+	private func drawGroupContours() {
+		let width: CGFloat = 2.5
+		for contour: DesktopOverlayContour in snapshot.contours {
+			let color: NSColor = .init(
+				srgbRed: CGFloat(contour.color.red),
+				green: CGFloat(contour.color.green),
+				blue: CGFloat(contour.color.blue),
+				alpha: 1
+			)
+			for loop: ContourLoop in [contour.fragment.outer] + contour.fragment.holes {
+				guard let path: NSBezierPath = contourPath(loop) else { continue }
+				// A dark keyline under the hue, so a bright colour stays legible
+				// over a pale wallpaper as well as a dark one.
+				path.lineWidth = width + 2
+				NSColor.black.withAlphaComponent(0.55).setStroke()
+				path.stroke()
+				path.lineWidth = width
+				color.withAlphaComponent(0.95).setStroke()
+				path.stroke()
+			}
+		}
+	}
+
+	private func contourPath(_ loop: ContourLoop) -> NSBezierPath? {
+		guard loop.vertices.count >= 4 else { return nil }
+		let path: NSBezierPath = .init()
+		path.move(to: localPoint(loop.vertices[0]))
+		for vertex: LayoutPoint in loop.vertices.dropFirst() {
+			path.line(to: localPoint(vertex))
+		}
+		path.close()
+		path.lineJoinStyle = .miter
+		return path
+	}
+
+	private func localPoint(_ point: LayoutPoint) -> NSPoint {
+		.init(
+			x: CGFloat(point.x - snapshot.screenFrame.minX),
+			y: CGFloat(point.y - snapshot.screenFrame.minY)
+		)
+	}
 
 	private func drawDividers() {
 		let pixel: CGFloat = backingPixel

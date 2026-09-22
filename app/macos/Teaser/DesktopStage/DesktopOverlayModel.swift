@@ -15,6 +15,14 @@ struct DesktopOverlayPanel: Equatable, Identifiable, Sendable {
 	let frame: LayoutRect
 }
 
+/// One fragment of one group on this canvas, with the colour that identifies
+/// the group everywhere it appears.
+struct DesktopOverlayContour: Equatable, Sendable {
+	let workspaceID: WorkspaceID
+	let color: WorkspaceContourColor
+	let fragment: WorkspaceContourFragment
+}
+
 struct DesktopOverlayDropHighlight: Equatable, Sendable {
 	let panelID: PanelID
 	let edge: LayoutEdge?
@@ -38,6 +46,7 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 	let displayID: DisplayID
 	let screenFrame: LayoutRect
 	let panels: [DesktopOverlayPanel]
+	let contours: [DesktopOverlayContour]
 	let dividers: [LayoutDivider]
 	let virtualFocus: VirtualFocusState
 	let arrangeMode: Bool
@@ -49,6 +58,7 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 		displayID: DisplayID,
 		screenFrame: LayoutRect,
 		panels: [DesktopOverlayPanel],
+		contours: [DesktopOverlayContour] = [],
 		dividers: [LayoutDivider],
 		virtualFocus: VirtualFocusState,
 		arrangeMode: Bool,
@@ -59,6 +69,7 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 		self.displayID = displayID
 		self.screenFrame = screenFrame
 		self.panels = panels
+		self.contours = contours
 		self.dividers = dividers
 		self.virtualFocus = virtualFocus
 		self.arrangeMode = arrangeMode
@@ -94,6 +105,18 @@ struct DesktopOverlaySnapshot: Equatable, Sendable {
 					kindID: panel.kindID,
 					frame: frame
 				)
+			},
+			contours: layout.contours.flatMap { contour in
+				contour.fragments
+					.filter { $0.displayID == displayID }
+					.map {
+						DesktopOverlayContour(
+							workspaceID: contour.workspaceID,
+							color: layout.contourColors[contour.workspaceID]
+								?? WorkspaceContourPalette.colors[0],
+							fragment: $0
+						)
+					}
 			},
 			dividers: layout.dividers.filter { $0.displayID == displayID },
 			virtualFocus: presentation.virtualFocus,
