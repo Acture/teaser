@@ -419,7 +419,7 @@ private func testFocusIsScopedToItsOwnDisplay() throws {
 		workspaceTree: .split(
 			id: secondarySplitID,
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.45),
+			preference: .user(0.45),
 			first: .leaf(ShowcasePreset.paperWorkspaceID),
 			second: .leaf(ShowcasePreset.sortAndPourWorkspaceID)
 		)
@@ -638,6 +638,210 @@ private func testShowcaseFitsLaptopDisplays() throws {
 			"laptop displays must expose all six workspaces and nine drop targets")
 		try assertNoOverlap(layout.panelFrames, "laptop targets must not overlap")
 	}
+}
+
+// MARK: - Unequal sizing
+
+private let weightedDisplayID: DisplayID = .init("canvas-1")
+private let weightedWorkspaceID: WorkspaceID = .init("alpha")
+private let weightedRootReference: LayoutSplitReference = .init(
+	scope: .workspace(weightedWorkspaceID),
+	splitID: .init("root")
+)
+
+/// Two Panels whose kinds ask to grow by different amounts, in one split whose
+/// proportion the caller chooses. Minimums are deliberately tiny unless a case
+/// wants them to bite, so a test about weights is not really a test about
+/// minimums.
+private func weightedPresentation(
+	firstWeight: Double,
+	secondWeight: Double,
+	preference: SplitPreference = .derived,
+	secondMinimum: LayoutSize = .init(width: 10, height: 10)
+) throws -> WorkspacePresentation {
+	func panel(_ id: String, _ weight: Double, _ minimum: LayoutSize) -> PanelDescriptor {
+		.init(
+			id: .init(id),
+			title: id,
+			kindID: .generic,
+			providerHint: nil,
+			profileOverride: .init(
+				minimumSize: minimum,
+				preferredAspectRatio: .init(0.1, 10),
+				growthWeight: weight
+			),
+			nativeContent: .none
+		)
+	}
+	let first: PanelDescriptor = panel("first", firstWeight, .init(width: 10, height: 10))
+	let second: PanelDescriptor = panel("second", secondWeight, secondMinimum)
+	return .init(
+		mode: .tiled,
+		virtualFocus: .none,
+		displayLayouts: [
+			weightedDisplayID: .init(
+				displayID: weightedDisplayID,
+				workspaceTree: .leaf(weightedWorkspaceID)
+			),
+		],
+		workspaces: [
+			weightedWorkspaceID: .init(
+				id: weightedWorkspaceID,
+				title: "Alpha",
+				detail: "",
+				displayAffinity: weightedDisplayID,
+				panelTree: .split(
+					id: .init("root"),
+					axis: .horizontal,
+					preference: preference,
+					first: .leaf(first.id),
+					second: .leaf(second.id)
+				),
+				panels: [first.id: first, second.id: second]
+			),
+		],
+		panelKinds: try .init()
+	)
+}
+
+private func solvedRootRatio(
+	_ presentation: WorkspacePresentation,
+	width: Double = 1_000,
+	height: Double = 500
+) throws -> Double {
+	let layout: PresentationLayout = try ConstrainedLayoutSolver.solve(
+		presentation: presentation,
+		displayFrames: [
+			weightedDisplayID: .init(x: 0, y: 0, width: width, height: height),
+		]
+	)
+	return try unwrap(
+		layout.effectiveRatios[weightedRootReference],
+		"the root split must be solved"
+	)
+}
+
+/// The behaviour the ticket asks for: a split nobody has dragged is sized by the
+/// Panels inside it. Before this, every split was created at exactly one half
+/// and `growthWeight` was computed and discarded, which is what produced the
+/// equal-width dashboard.
+private func testDerivedRatioFollowsGrowthWeight() throws {
+	let ratio: Double = try solvedRootRatio(
+		try weightedPresentation(firstWeight: 1, secondWeight: 3)
+	)
+	try expectApproximatelyEqual(ratio, 0.25, "one against three must take a quarter")
+	try expect(abs(ratio - 0.5) > 0.2, "a derived split must not fall back to halves")
+
+	let even: Double = try solvedRootRatio(
+		try weightedPresentation(firstWeight: 2, secondWeight: 2)
+	)
+	try expectApproximatelyEqual(even, 0.5, "equal weights still split evenly")
+}
+
+private func testUserRatioBeatsWeights() throws {
+	let ratio: Double = try solvedRootRatio(
+		try weightedPresentation(
+			firstWeight: 1,
+			secondWeight: 3,
+			preference: .user(0.8)
+		)
+	)
+	try expectApproximatelyEqual(ratio, 0.8, "a dragged divider outranks the weights")
+}
+
+/// Adding a Panel elsewhere must not disturb a proportion the person chose.
+private func testUserRatioSurvivesInsertElsewhere() throws {
+	var presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1,
+		preference: .user(0.8)
+	)
+	try presentation.insertPanel(
+		.init(
+			id: .init("third"),
+			title: "third",
+			kindID: .generic,
+			providerHint: nil,
+			profileOverride: .init(
+				minimumSize: .init(width: 10, height: 10),
+				preferredAspectRatio: .init(0.1, 10),
+				growthWeight: 5
+			),
+			nativeContent: .none
+		),
+		in: weightedWorkspaceID,
+		at: .trailing,
+		of: .init("second"),
+		splitID: .init("added")
+	)
+	try expectApproximatelyEqual(
+		try solvedRootRatio(presentation),
+		0.8,
+		"an insert below a dragged divider must not move it"
+	)
+}
+
+/// The mirror image: a split nobody has touched is allowed to re-proportion when
+/// the Panels under it change, which is what "adjacency is a preference" needs.
+private func testDerivedAncestorReproportionsOnInsert() throws {
+	var presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1
+	)
+	try expectApproximatelyEqual(
+		try solvedRootRatio(presentation),
+		0.5,
+		"two equal Panels start even"
+	)
+	try presentation.insertPanel(
+		.init(
+			id: .init("third"),
+			title: "third",
+			kindID: .generic,
+			providerHint: nil,
+			profileOverride: .init(
+				minimumSize: .init(width: 10, height: 10),
+				preferredAspectRatio: .init(0.1, 10),
+				growthWeight: 1
+			),
+			nativeContent: .none
+		),
+		in: weightedWorkspaceID,
+		at: .trailing,
+		of: .init("second"),
+		splitID: .init("added")
+	)
+	try expectApproximatelyEqual(
+		try solvedRootRatio(presentation),
+		1.0 / 3.0,
+		"a derived root follows the Panels that arrived under it"
+	)
+}
+
+/// A proportion the canvas is currently too small to honour must survive in the
+/// model. Writing the clamped value back would quietly make the person's choice
+/// permanent at whatever the smallest window happened to allow.
+private func testClampedUserRatioIsNotWrittenBack() throws {
+	let presentation: WorkspacePresentation = try weightedPresentation(
+		firstWeight: 1,
+		secondWeight: 1,
+		preference: .user(0.95),
+		secondMinimum: .init(width: 400, height: 10)
+	)
+	let solved: Double = try solvedRootRatio(presentation)
+	try expect(
+		solved < 0.95,
+		"a minimum must clamp the solve, got \(solved)"
+	)
+	guard case .split(_, _, let preference, _, _) = presentation
+		.workspaces[weightedWorkspaceID]?.panelTree
+	else {
+		throw TestFailure.assertion("the fixture must have a root split")
+	}
+	try expect(
+		preference.userRatio == 0.95,
+		"the clamped solve must not overwrite the stored proportion"
+	)
 }
 
 // MARK: - Workspace contours
@@ -996,6 +1200,11 @@ private func testColourAssignmentIsStableAndOrderIndependent() throws {
 }
 
 private func run() throws {
+	try testDerivedRatioFollowsGrowthWeight()
+	try testUserRatioBeatsWeights()
+	try testUserRatioSurvivesInsertElsewhere()
+	try testDerivedAncestorReproportionsOnInsert()
+	try testClampedUserRatioIsNotWrittenBack()
 	try testAdjacentMembersTraceOneLoop()
 	try testLShapedFragmentKeepsItsConcaveCorner()
 	try testPartialEdgeOverlapLeavesNoInternalSegment()

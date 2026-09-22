@@ -108,7 +108,7 @@ enum OrganizationProjection {
 		for leaf: Leaf in leaves where result?.contains(leaf) != true {
 			if let existing: LayoutTree<Leaf> = result {
 				result = .split(id: .init("local-\(UUID().uuidString)"), axis: .horizontal,
-					preference: .init(desiredRatio: 0.5), first: existing, second: .leaf(leaf))
+					preference: .derived, first: existing, second: .leaf(leaf))
 			} else { result = .leaf(leaf) }
 		}
 		return result
@@ -130,7 +130,7 @@ struct OrganizationLocalScope: Codable {
 		panelFrames = Dictionary(uniqueKeysWithValues: (layout?.panelFrames ?? [:]).map { ($0.key.rawValue, $0.value) })
 		func collect<Leaf>(_ tree: LayoutTree<Leaf>) where Leaf: Codable & Hashable & Sendable {
 			if case .split(let id, _, let preference, let first, let second) = tree {
-				dividerRatios[id.rawValue] = preference.desiredRatio
+				if let userRatio: Double = preference.userRatio { dividerRatios[id.rawValue] = userRatio }
 				collect(first); collect(second)
 			}
 		}

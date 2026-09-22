@@ -29,21 +29,32 @@ enum LayoutEdge: String, Codable, Equatable, Hashable, Sendable {
 }
 
 struct SplitPreference: Codable, Equatable, Hashable, Sendable {
-	var desiredRatio: Double
-	var effectiveRatio: Double?
+	/// The proportion the person set by dragging this divider. `nil` means the
+	/// divider has never been dragged, so the solver keeps deriving it from the
+	/// growth weights of the two subtrees and the split follows the Panels
+	/// inside it rather than halving whatever it is given.
+	///
+	/// A solve clamped by a minimum is never written back here, so a proportion
+	/// the canvas is currently too small to honour returns intact once the room
+	/// does.
+	fileprivate(set) var userRatio: Double?
 
-	init(desiredRatio: Double, effectiveRatio: Double? = nil) {
-		precondition(desiredRatio > 0 && desiredRatio < 1)
-		if let effectiveRatio {
-			precondition(effectiveRatio > 0 && effectiveRatio < 1)
+	init(userRatio: Double? = nil) {
+		if let userRatio {
+			precondition(userRatio > 0 && userRatio < 1)
 		}
-		self.desiredRatio = desiredRatio
-		self.effectiveRatio = effectiveRatio
+		self.userRatio = userRatio
 	}
 
-	var renderedRatio: Double {
-		effectiveRatio ?? desiredRatio
+	/// Sized by the Panels inside it. Everything that is not a person dragging a
+	/// divider creates a split this way.
+	static let derived: SplitPreference = .init()
+
+	static func user(_ ratio: Double) -> SplitPreference {
+		.init(userRatio: ratio)
 	}
+
+	var isUserSet: Bool { userRatio != nil }
 }
 
 enum LayoutTreeEditError: Error, Equatable, LocalizedError, Sendable {
@@ -102,7 +113,9 @@ where Leaf: Codable & Hashable & Sendable {
 		leaves.contains(leaf)
 	}
 
-	mutating func setDesiredRatio(
+	/// Records a proportion a person chose. From here on this split ignores its
+	/// subtrees' growth weights: the ratio is theirs until they clear it.
+	mutating func setUserRatio(
 		_ ratio: Double,
 		for splitID: LayoutSplitID
 	) throws {
@@ -110,39 +123,20 @@ where Leaf: Codable & Hashable & Sendable {
 			throw LayoutTreeEditError.invalidRatio
 		}
 		let didUpdate: Bool = updateSplit(splitID, update: { preference in
-			preference.desiredRatio = ratio
-			preference.effectiveRatio = nil
+			preference.userRatio = ratio
 		})
 		guard didUpdate else {
 			throw LayoutTreeEditError.splitNotFound
 		}
 	}
 
-	mutating func applyEffectiveRatios(
-		_ ratios: [LayoutSplitID: Double]
-	) {
-		for (splitID, ratio): (LayoutSplitID, Double) in ratios {
-			_ = updateSplit(splitID) { preference in
-				preference.effectiveRatio = ratio
-			}
-		}
-	}
-
-	mutating func clearEffectiveRatios() {
-		switch self {
-		case .leaf:
-			return
-		case .split(let id, let axis, var preference, var first, var second):
-			preference.effectiveRatio = nil
-			first.clearEffectiveRatios()
-			second.clearEffectiveRatios()
-			self = .split(
-				id: id,
-				axis: axis,
-				preference: preference,
-				first: first,
-				second: second
-			)
+	/// Hands one split back to the growth weights.
+	mutating func clearUserRatio(for splitID: LayoutSplitID) throws {
+		let didUpdate: Bool = updateSplit(splitID, update: { preference in
+			preference.userRatio = nil
+		})
+		guard didUpdate else {
+			throw LayoutTreeEditError.splitNotFound
 		}
 	}
 
@@ -151,7 +145,7 @@ where Leaf: Codable & Hashable & Sendable {
 		at edge: LayoutEdge,
 		of target: Leaf,
 		splitID: LayoutSplitID,
-		desiredRatio: Double = 0.5
+		preference: SplitPreference = .derived
 	) throws {
 		guard !contains(newLeaf) else {
 			throw LayoutTreeEditError.duplicateLeaf
@@ -161,7 +155,7 @@ where Leaf: Codable & Hashable & Sendable {
 			at: edge,
 			of: target,
 			splitID: splitID,
-			desiredRatio: desiredRatio
+			preference: preference
 		) else {
 			throw LayoutTreeEditError.targetNotFound
 		}
@@ -239,7 +233,7 @@ where Leaf: Codable & Hashable & Sendable {
 		at edge: LayoutEdge,
 		of target: Leaf,
 		splitID: LayoutSplitID,
-		desiredRatio: Double
+		preference: SplitPreference
 	) -> Bool {
 		switch self {
 		case .leaf(let leaf):
@@ -249,18 +243,21 @@ where Leaf: Codable & Hashable & Sendable {
 			self = .split(
 				id: splitID,
 				axis: edge.axis,
-				preference: .init(desiredRatio: desiredRatio),
+				preference: preference,
 				first: edge.insertsBeforeTarget ? newTree : oldTree,
 				second: edge.insertsBeforeTarget ? oldTree : newTree
 			)
 			return true
-		case .split(let id, let axis, let preference, var first, var second):
+		// `existing` is this node's own preference. Binding it as `preference`
+		// would shadow the one being inserted, and every leaf that landed below
+		// the root would silently take its parent's proportion.
+		case .split(let id, let axis, let existing, var first, var second):
 			let insertedFirst: Bool = first.insertUnchecked(
 				newLeaf,
 				at: edge,
 				of: target,
 				splitID: splitID,
-				desiredRatio: desiredRatio
+				preference: preference
 			)
 			let insertedSecond: Bool = insertedFirst
 				? false
@@ -269,12 +266,12 @@ where Leaf: Codable & Hashable & Sendable {
 					at: edge,
 					of: target,
 					splitID: splitID,
-					desiredRatio: desiredRatio
+					preference: preference
 				)
 			self = .split(
 				id: id,
 				axis: axis,
-				preference: preference,
+				preference: existing,
 				first: first,
 				second: second
 			)

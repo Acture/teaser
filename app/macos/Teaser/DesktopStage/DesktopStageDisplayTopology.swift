@@ -226,7 +226,7 @@ enum DesktopStageDisplayTopology {
 			id: .init("display-topology.\(display.id.rawValue).\(path)"),
 			axis: axis,
 			preference: .init(
-				desiredRatio: Double(firstIDs.count) / Double(workspaceIDs.count)
+				userRatio: Double(firstIDs.count) / Double(workspaceIDs.count)
 			),
 			first: balancedTree(
 				firstIDs,

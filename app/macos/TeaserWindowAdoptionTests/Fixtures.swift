@@ -728,7 +728,7 @@ func testPresentation() throws -> WorkspacePresentation {
 		panelTree: .split(
 			id: .init("alpha-root"),
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.5),
+			preference: .user(0.5),
 			first: .leaf(leftPanelID),
 			second: .leaf(rightPanelID)
 		),
@@ -789,7 +789,7 @@ func testPresentationWithTwoWorkspaces() throws -> WorkspacePresentation {
 		workspaceTree: .split(
 			id: .init("display-root"),
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.5),
+			preference: .user(0.5),
 			first: .leaf(testWorkspaceID),
 			second: .leaf(betaWorkspaceID)
 		)

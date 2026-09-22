@@ -24,6 +24,10 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 
 	struct State: Equatable {
 		var presentation: WorkspacePresentation
+		/// The solved layout, so a divider handle renders where the canvas
+		/// actually put it rather than where the person asked before a minimum
+		/// clamped it.
+		var layout: PresentationLayout?
 		var active: Bool = false
 		var assignedPanels: Set<PanelID> = []
 		var hasRetainedLeases: Bool = false
@@ -61,6 +65,7 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 	func update(from orchestrator: DesktopStageOrchestrator) {
 		let next: State = .init(
 			presentation: orchestrator.presentation,
+			layout: orchestrator.layout,
 			active: orchestrator.isStageActive,
 			assignedPanels: Set(orchestrator.panelAssignments.keys),
 			hasRetainedLeases: orchestrator.hasRetainedLeases,
@@ -80,7 +85,11 @@ final class DesktopStageLayoutEditorModel: ObservableObject {
 		for reference: LayoutSplitReference, axis: LayoutAxis, preference: SplitPreference
 	) -> FractionHolder {
 		let generation: UInt = revision
-		return .init(LayoutEditorCoordinates.primaryFraction(firstRatio: preference.renderedRatio, axis: axis), setter: {
+		// Before the first solve there is no solved ratio; a proportion the
+		// person chose is the next best answer, and an even split after that.
+		let rendered: Double = state.layout?.effectiveRatios[reference]
+			?? preference.userRatio ?? 0.5
+		return .init(LayoutEditorCoordinates.primaryFraction(firstRatio: rendered, axis: axis), setter: {
 			[weak self] fraction in
 			guard let self, self.revision == generation, self.canEdit else { return }
 			if let ratio: Double = LayoutEditorCoordinates.firstRatio(primaryFraction: fraction, axis: axis) {

@@ -595,7 +595,7 @@ final class DesktopStageOrchestrator {
 						at: edge,
 						of: targetPanelID,
 						splitID: identifiers.makeSplitID(prefix: "drop"),
-						desiredRatio: 0.5
+						preference: .derived
 					)
 					if let sourcePanelID {
 						panelAssignments.removeValue(forKey: sourcePanelID)
@@ -981,7 +981,7 @@ final class DesktopStageOrchestrator {
 		let key: String = "\(scope)-\(splitID.rawValue)"
 		let before: DesktopStageStateSnapshot = stateSnapshot()
 		do {
-			try presentation.setDesiredRatio(ratio, for: splitID, in: scope)
+			try presentation.setUserRatio(ratio, for: splitID, in: scope)
 			try solveAndApply(synchronously: true)
 			if undoCoalescingKey != key {
 				prepareForNewUndo()
@@ -1202,7 +1202,6 @@ final class DesktopStageOrchestrator {
 		} else {
 			applyCoalesced(nextLayout)
 		}
-		presentation.applyEffectiveRatios(nextLayout.effectiveRatios)
 		layout = nextLayout
 		if isStageActive {
 			host?.orchestrator(self, didSolve: nextLayout)

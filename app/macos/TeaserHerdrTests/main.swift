@@ -204,7 +204,7 @@ let cases: [TestCase] = [
 		var old: WorkspacePresentation = try project(value)
 		let workspaceID: WorkspaceID = .init(value.workspaces[0].id)
 		let splitID: LayoutSplitID = old.workspaces[workspaceID]!.panelTree.splitIDs[0]
-		try old.setDesiredRatio(0.7, for: splitID, in: .workspace(workspaceID))
+		try old.setUserRatio(0.7, for: splitID, in: .workspace(workspaceID))
 		value.panels[0].title = "Renamed"
 		let renamed: WorkspacePresentation = try project(value, previous: old)
 		try expect(renamed.workspaces[workspaceID]!.panelTree == old.workspaces[workspaceID]!.panelTree, "pixel placement survives rename")

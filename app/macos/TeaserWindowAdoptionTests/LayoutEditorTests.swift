@@ -42,7 +42,7 @@ private func testEditorResizesThroughRealOrchestrator() throws {
 	try expect(harness.log.applies(for: window.identity).count == applyCount + 1,
 		"one editor commit must apply the actual provider exactly once")
 	try expect(window.appKitScreenFrame.width > before.width, "the provider must actually resize")
-	try expect(try rootPreference(harness).desiredRatio == 0.65, "editor writes the shared layout tree")
+	try expect(try rootPreference(harness).userRatio == 0.65, "editor writes the shared layout tree")
 	model.update(from: harness.orchestrator)
 	try expect(model.canUndo, "a committed editor drag offers Undo")
 	model.undo()
@@ -88,9 +88,19 @@ private func testEditorCoordinatesAndEffectiveRatio() throws {
 	}
 	let harness: Harness = .init(presentation: try testPresentation())
 	let model: DesktopStageLayoutEditorModel = makeEditor(harness)
+	// A resize solves, so the model then has a layout to read the divider's real
+	// position from. The handle must follow that, not the stored proportion: a
+	// minimum can clamp a solve, and a handle drawn where the person asked
+	// rather than where the canvas put it cannot be dragged back accurately.
+	model.fractionHolder(for: rootReference, axis: .horizontal,
+		preference: try rootPreference(harness)).value = 0.7
+	model.update(from: harness.orchestrator)
+	let solved: Double = try unwrap(harness.orchestrator.layout?.effectiveRatios[rootReference],
+		"a resize must produce a solved ratio")
 	let holder: FractionHolder = model.fractionHolder(for: rootReference, axis: .vertical,
-		preference: .init(desiredRatio: 0.4, effectiveRatio: 0.7))
-	try expect(abs(holder.value - 0.3) < 0.000_001, "vertical primary is top and displays the effective ratio")
+		preference: .user(0.4))
+	try expect(abs(holder.value - (1 - solved)) < 0.000_001,
+		"vertical primary is top and the handle renders the solved ratio")
 }
 
 @MainActor
@@ -102,11 +112,11 @@ private func testStoppedEditorDoesNotTouchDesktop() throws {
 	let savesBefore: Int = harness.host.saveRequests
 	model.fractionHolder(for: rootReference, axis: .horizontal, preference: try rootPreference(harness)).value = 0.6
 	model.update(from: harness.orchestrator)
-	try expect(try rootPreference(harness).desiredRatio == 0.6, "stopped layout remains editable")
+	try expect(try rootPreference(harness).userRatio == 0.6, "stopped layout remains editable")
 	try expect(harness.host.saveRequests == savesBefore + 1, "an offline editor commit requests exactly one save")
 	try expect(model.canUndo, "an offline edit without retained windows can be undone")
 	model.undo()
-	try expect(try rootPreference(harness).desiredRatio == 0.5, "offline Undo restores the saved proportion")
+	try expect(try rootPreference(harness).userRatio == 0.5, "offline Undo restores the saved proportion")
 	try expect(harness.log.operations.isEmpty, "offline editing and Undo must not observe or move windows")
 	try expect(harness.service.promptCount == 0, "offline editing must not prompt for Accessibility")
 	try expect(editor.window.level == .normal && editor.window.styleMask.contains(.closable),
@@ -154,7 +164,7 @@ private func testStoppedEditorRefreshesAfterDisplayChange() throws {
 	let harness: Harness = .init(presentation: try testPresentationWithTwoWorkspaces())
 	let model: DesktopStageLayoutEditorModel = makeEditor(harness)
 	let stale: FractionHolder = model.fractionHolder(for: .init(scope: .display(testDisplayID),
-		splitID: .init("display-root")), axis: .horizontal, preference: .init(desiredRatio: 0.5))
+		splitID: .init("display-root")), axis: .horizontal, preference: .user(0.5))
 	stale.value = 0.6
 	try expect(harness.orchestrator.canUndo, "the offline edit before the display change is undoable")
 	let changesBefore: Int = harness.host.stateChanges
@@ -182,13 +192,13 @@ private func testEditorDisplayAndVerticalResize() throws {
 	let oldWidth: CGFloat = displayWindow.appKitScreenFrame.width
 	let displayEditor: DesktopStageLayoutEditorModel = makeEditor(displayHarness)
 	displayEditor.fractionHolder(for: .init(scope: .display(testDisplayID), splitID: .init("display-root")),
-		axis: .horizontal, preference: .init(desiredRatio: 0.5)).value = 0.65
+		axis: .horizontal, preference: .user(0.5)).value = 0.65
 	try expect(displayWindow.appKitScreenFrame.width > oldWidth,
 		"display-scoped edits must resize Workspaces and their actual provider panels")
 
 	var presentation: WorkspacePresentation = try testPresentation()
 	presentation.workspaces[testWorkspaceID]?.panelTree = .split(id: .init("alpha-root"), axis: .vertical,
-		preference: .init(desiredRatio: 0.5), first: .leaf(leftPanelID), second: .leaf(rightPanelID))
+		preference: .user(0.5), first: .leaf(leftPanelID), second: .leaf(rightPanelID))
 	let verticalHarness: Harness = .init(presentation: presentation)
 	try verticalHarness.orchestrator.startStage()
 	defer { verticalHarness.orchestrator.stopStage() }
@@ -200,7 +210,12 @@ private func testEditorDisplayAndVerticalResize() throws {
 		preference: try rootPreference(verticalHarness)).value = 0.65
 	try expect(bottomWindow.appKitScreenFrame.height < oldHeight,
 		"growing SplitView's top child must shrink Teaser's first/bottom provider")
-	try expect(abs(try rootPreference(verticalHarness).desiredRatio - 0.35) < 0.000_001,
+	// Dragging is the one thing that sets a user ratio, so this must be non-nil:
+	// a committed drag that left the split derived would silently hand the
+	// proportion back to the growth weights on the next solve.
+	let committed: Double = try unwrap(try rootPreference(verticalHarness).userRatio,
+		"a committed drag must record the person's proportion")
+	try expect(abs(committed - 0.35) < 0.000_001,
 		"vertical commits must invert the upstream primary fraction")
 }
 

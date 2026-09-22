@@ -70,7 +70,7 @@ private func twoCanvasPresentation(
 		panelTree: .split(
 			id: .init("alpha-root"),
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.5),
+			preference: .user(0.5),
 			first: .leaf(aLeftPanelID),
 			second: .leaf(aRightPanelID)
 		),
@@ -95,7 +95,7 @@ private func twoCanvasPresentation(
 		panelTree: .split(
 			id: .init("delta-root"),
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.5),
+			preference: .user(0.5),
 			first: .leaf(bLeftPanelID),
 			second: .leaf(bRightPanelID)
 		),
@@ -113,7 +113,7 @@ private func twoCanvasPresentation(
 				workspaceTree: .split(
 					id: .init("canvas-a-root"),
 					axis: .vertical,
-					preference: .init(desiredRatio: 0.5),
+					preference: .user(0.5),
 					first: .leaf(alphaWorkspaceID),
 					second: .leaf(gammaWorkspaceID)
 				)

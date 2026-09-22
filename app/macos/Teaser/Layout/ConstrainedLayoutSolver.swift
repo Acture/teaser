@@ -448,8 +448,19 @@ struct ConstrainedLayoutSolver: Sendable {
 			let usable: Double = available > 0
 				? available
 				: (axis == .horizontal ? frame.size.width : frame.size.height)
-			let desired: Double = preference.desiredRatio.isFinite
-				? preference.desiredRatio : 0.5
+			// A divider the person has dragged keeps their proportion. One they
+			// have not follows the Panels inside it: a subtree holding more
+			// Panels, or Panels whose kind asks to grow, takes proportionally
+			// more of the axis. Halving every split regardless is what collapses
+			// a canvas into equal columns.
+			let totalWeight: Double = firstMetrics.growthWeight
+				+ secondMetrics.growthWeight
+			let derived: Double = totalWeight.isFinite && totalWeight > 0
+				? (firstMetrics.growthWeight / totalWeight).clamped(to: 0.05 ... 0.95)
+				: 0.5
+			let desired: Double = preference.userRatio.flatMap {
+				$0.isFinite ? $0 : nil
+			} ?? derived
 			let ratio: Double
 			if usable > 0, firstMinimum + secondMinimum <= usable {
 				// Room for both minimums: honour the requested ratio within them.

@@ -94,7 +94,7 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 		at edge: LayoutEdge,
 		of targetPanelID: PanelID,
 		splitID: LayoutSplitID,
-		desiredRatio: Double = 0.5
+		preference: SplitPreference = .derived
 	) throws {
 		guard !workspaces.values.contains(where: { $0.panels[panel.id] != nil }) else {
 			throw WorkspacePresentationError.duplicatePanel(panel.id)
@@ -110,7 +110,7 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 			at: edge,
 			of: targetPanelID,
 			splitID: splitID,
-			desiredRatio: desiredRatio
+			preference: preference
 		)
 		workspace.panels[panel.id] = panel
 		workspaces[workspaceID] = workspace
@@ -144,7 +144,7 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 		workspaces[workspaceID] = workspace
 	}
 
-	mutating func setDesiredRatio(
+	mutating func setUserRatio(
 		_ ratio: Double,
 		for splitID: LayoutSplitID,
 		in scope: LayoutScope
@@ -154,31 +154,14 @@ struct WorkspacePresentation: Codable, Equatable, Sendable {
 			guard var layout: DisplayWorkspaceLayout = displayLayouts[displayID] else {
 				throw WorkspacePresentationError.displayNotFound(displayID)
 			}
-			try layout.workspaceTree.setDesiredRatio(ratio, for: splitID)
+			try layout.workspaceTree.setUserRatio(ratio, for: splitID)
 			displayLayouts[displayID] = layout
 		case .workspace(let workspaceID):
 			guard var workspace: WorkspaceDescriptor = workspaces[workspaceID] else {
 				throw WorkspacePresentationError.workspaceNotFound(workspaceID)
 			}
-			try workspace.panelTree.setDesiredRatio(ratio, for: splitID)
+			try workspace.panelTree.setUserRatio(ratio, for: splitID)
 			workspaces[workspaceID] = workspace
-		}
-	}
-
-	mutating func applyEffectiveRatios(
-		_ ratios: [LayoutSplitReference: Double]
-	) {
-		for (reference, ratio): (LayoutSplitReference, Double) in ratios {
-			switch reference.scope {
-			case .display(let displayID):
-				displayLayouts[displayID]?.workspaceTree.applyEffectiveRatios([
-					reference.splitID: ratio,
-				])
-			case .workspace(let workspaceID):
-				workspaces[workspaceID]?.panelTree.applyEffectiveRatios([
-					reference.splitID: ratio,
-				])
-			}
 		}
 	}
 }

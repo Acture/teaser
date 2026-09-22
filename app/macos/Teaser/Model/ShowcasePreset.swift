@@ -95,28 +95,28 @@ enum ShowcasePreset {
 		.split(
 			id: .init("workspace-root"),
 			axis: .horizontal,
-			preference: .init(desiredRatio: 0.62),
+			preference: .user(0.62),
 			first: .split(
 				id: .init("workspace-left-stack"),
 				axis: .vertical,
-				preference: .init(desiredRatio: 0.65),
+				preference: .user(0.65),
 				first: .leaf(teaserWorkspaceID),
 				second: .leaf(researchWorkspaceID)
 			),
 			second: .split(
 				id: .init("workspace-right-foch"),
 				axis: .vertical,
-				preference: .init(desiredRatio: 0.40),
+				preference: .user(0.40),
 				first: .leaf(fochWorkspaceID),
 				second: .split(
 					id: .init("workspace-right-ark"),
 					axis: .vertical,
-					preference: .init(desiredRatio: 0.35),
+					preference: .user(0.35),
 					first: .leaf(arkSolverWorkspaceID),
 					second: .split(
 						id: .init("workspace-right-bottom"),
 						axis: .horizontal,
-						preference: .init(desiredRatio: 0.37),
+						preference: .user(0.37),
 						first: .leaf(paperWorkspaceID),
 						second: .leaf(sortAndPourWorkspaceID)
 					)
@@ -156,12 +156,12 @@ enum ShowcasePreset {
 			panelTree: .split(
 				id: .init("teaser-zed-column"),
 				axis: .horizontal,
-				preference: .init(desiredRatio: 0.56),
+				preference: .user(0.56),
 				first: .leaf(zedPanelID),
 				second: .split(
 					id: .init("teaser-tools-stack"),
 					axis: .vertical,
-					preference: .init(desiredRatio: 0.47),
+					preference: .user(0.47),
 					first: .leaf(linearPanelID),
 					second: .leaf(codexPanelID)
 				)
@@ -198,7 +198,7 @@ enum ShowcasePreset {
 			panelTree: .split(
 				id: .init("research-panels"),
 				axis: .horizontal,
-				preference: .init(desiredRatio: 0.54),
+				preference: .user(0.54),
 				first: .leaf(notionPanelID),
 				second: .leaf(notesPanelID)
 			),
