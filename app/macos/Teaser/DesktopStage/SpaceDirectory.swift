@@ -52,6 +52,51 @@ struct SpaceSnapshot: Equatable, Sendable {
 		monitor(hosting: space)?.index(of: space)
 	}
 
+	/// What Mission Control calls this Space, so anything naming a Space names
+	/// it the way the person will see it there.
+	///
+	/// macOS's own label is readable — the Dock publishes each Spaces-bar
+	/// button with an `AXDescription` of "Exit to Desktop 2", localized — but
+	/// only while Mission Control is on screen. Measured on 2026-09-23: with
+	/// Mission Control closed the Dock's whole Accessibility tree is one
+	/// `AXList` of `AXDockItem`s, with no Mission Control group and no Spaces
+	/// bar, so `spacesBarList()` throws. Reading the real label would mean
+	/// taking over the screen, which naming a Space must never do. The number
+	/// below is therefore derived, and derived to agree with that label.
+	///
+	/// Desktops are numbered across every monitor in the order the preferences
+	/// list them, not restarted per monitor: on one display the two rules agree,
+	/// and on several, restarting would hand two Spaces the same name. Only
+	/// desktops are counted, because a fullscreen Space shows its application
+	/// in the bar and takes no desktop number.
+	///
+	/// A fullscreen Space is named by its own `ManagedSpaceID`, because "a
+	/// full-screen Space" stops identifying anything the moment two
+	/// applications are in full screen, and the application's name is only
+	/// readable through the Dock's Accessibility tree — a permission this path
+	/// must never reach for. The ID matches nothing on screen, but it is macOS's
+	/// own and it is unique.
+	///
+	/// The live record is re-read by `managedID` rather than trusting the
+	/// caller's copy, because a Space that has since become or stopped being
+	/// fullscreen keeps its ID while its type changes. A Space the preferences
+	/// no longer describe resolves to nothing rather than to a wrong number.
+	func name(of space: SpaceIdentity) -> String? {
+		let bars: [SpaceIdentity] = monitors.flatMap(\.spaces)
+		guard let live: SpaceIdentity = bars.first(where: {
+			$0.managedID == space.managedID
+		})
+		else { return nil }
+		guard !live.isFullScreen else {
+			return "full-screen Space \(live.managedID)"
+		}
+		guard let position: Int = bars
+			.filter({ !$0.isFullScreen })
+			.firstIndex(where: { $0.managedID == live.managedID })
+		else { return nil }
+		return "Desktop \(position + 1)"
+	}
+
 	/// macOS leaves the first desktop of every monitor without a UUID, so an
 	/// empty one identifies no single Space and resolves to nothing.
 	func space(uuid: String) -> SpaceIdentity? {

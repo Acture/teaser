@@ -546,8 +546,55 @@ private func testUnrequestedTransitionClosesTheGate() throws {
 	)
 }
 
+/// A canvas keeps the Space it opened on until something establishes
+/// otherwise, and macOS publishes no way to ask a window which Space it is on.
+/// Being seen while a Space is current is that establishment, and it changes
+/// nothing else: no frame, no phase, no transition, so it drives no effect.
+@MainActor
+private func testSeeingACanvasEstablishesItsSpace() throws {
+	let lifecycle: CanvasLifecycle = .init()
+	let frame: LayoutRect = .init(x: 0, y: 0, width: 1_200, height: 800)
+	let opened: SpaceIdentity = .init(managedID: 1, uuid: "", isFullScreen: false)
+	let moved: SpaceIdentity = .init(managedID: 328, uuid: "b", isFullScreen: false)
+	_ = lifecycle.handle(.opened(canvasA, frame: frame, space: opened))
+	_ = lifecycle.handle(.opened(canvasB, frame: frame, space: opened))
+	try expect(
+		lifecycle.state(of: canvasA)?.space == opened,
+		"a canvas starts on the Space it opened on"
+	)
+
+	let effects: [CanvasEffect] = lifecycle.handle(.spaceChanged(canvasA, moved))
+	try expect(effects.isEmpty, "which Space a canvas is on drives no effect")
+	try expect(
+		lifecycle.state(of: canvasA)?.space == moved,
+		"seeing a canvas on another Space is what updates it"
+	)
+	try expect(
+		lifecycle.state(of: canvasB)?.space == opened,
+		"a canvas nobody saw keeps what it was last seen on"
+	)
+	try expect(
+		lifecycle.displayFrames[.init(canvas: canvasA)] == frame
+			&& lifecycle.state(of: canvasA)?.phase == .windowed,
+		"a Space change touches no frame and no transition phase"
+	)
+
+	// A canvas that has closed is not somewhere; it is nowhere.
+	_ = lifecycle.handle(.closeRequested(canvasB))
+	_ = lifecycle.handle(.windowClosed(canvasB))
+	_ = lifecycle.handle(.spaceChanged(canvasB, moved))
+	try expect(
+		lifecycle.state(of: canvasB) == nil,
+		"a closed canvas gains no state from a Space change"
+	)
+}
+
 private func canvasLifecycleCases() -> [TestCase] {
 	[
+		.init(
+			"seeing a canvas establishes which Space it is on",
+			testSeeingACanvasEstablishesItsSpace
+		),
 		.init(
 			"one gate serializes two canvases",
 			testGateSerializesTwoCanvases

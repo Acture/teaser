@@ -32,7 +32,9 @@ Teaser is an independent fork, not an official or endorsed Herdr distribution.
   not application-specific subclasses.
 - Panels tile at unequal sizes. Same-Workspace adjacency is a preference, not a
   rectangular-container constraint. A fluorescent outer contour expresses the
-  group without adding a Workspace card or title bar.
+  group without adding a Workspace card or title bar. The canvas also publishes
+  an accessibility element per Panel, so the group, the binding and an
+  unsatisfied minimum size can be read or spoken rather than only seen.
 - The native App hosts several canvas windows. Each can fill its screen, which
   keeps it on its Space where adopted windows tile above it, or enter macOS
   green-button fullscreen, which gives it a Space of its own that only Teaser's
@@ -121,8 +123,8 @@ fish scripts/app.fish --build-only
 ```
 
 `--build-only` produces `target/macos/Teaser.app` without launching it and requires
-`TEASER_CODESIGN_IDENTITY`. The ten Swift suites are executable harnesses, not
-`swift test` targets. Headless tests must not create windows, install global
+`TEASER_CODESIGN_IDENTITY`. The eleven Swift suites are executable harnesses,
+not `swift test` targets. Headless tests must not create windows, install global
 monitors, request Accessibility, or move user windows.
 
 The full gate is:

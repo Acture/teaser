@@ -37,6 +37,14 @@ final class DesktopOverlayView: NSView {
 	private let callbacks: DesktopOverlayCallbacks
 	private var snapshot: DesktopOverlaySnapshot
 	private var dividerDrag: DividerDrag?
+	/// The canvas's other output. Everything `draw(_:)` paints is also derived
+	/// here as elements, so the canvas can be read without a screenshot and a
+	/// group can be named rather than only coloured. Lazy because the tree hangs
+	/// off this view and cannot be built before `super.init`.
+	private lazy var accessibilityTree: CanvasAccessibilityTree = .init(
+		parent: self,
+		value: snapshot.accessibility
+	)
 
 	init(
 		frame frameRect: NSRect,
@@ -60,6 +68,38 @@ final class DesktopOverlayView: NSView {
 		self.snapshot = snapshot
 		needsDisplay = true
 		window?.invalidateCursorRects(for: self)
+		guard accessibilityTree.update(snapshot.accessibility) else { return }
+		// `.layoutChanged` tells a reader the shapes moved and to re-read them.
+		// Never `.focusedUIElementChanged`: Virtual Focus is a layout selection,
+		// and announcing it as the application's focused element would pull a
+		// screen reader's cursor into a window that does not hold the keyboard
+		// — the implicit redirect REQ-014 forbids. There is nothing to post
+		// before the canvas has a window, and nothing listening either.
+		guard window != nil else { return }
+		NSAccessibility.post(element: self, notification: .layoutChanged)
+	}
+
+	// MARK: - Published accessibility tree
+
+	/// The canvas is a group under its window, and each placed Panel is a group
+	/// under the canvas. `accessibilityHitTest(_:)` is left to AppKit, which
+	/// resolves it from the children's frames: a Panel's element must not become
+	/// a third thing that can stand between a pointer and a provider's window,
+	/// any more than a contour may.
+	override func isAccessibilityElement() -> Bool { true }
+
+	override func accessibilityRole() -> NSAccessibility.Role? { .group }
+
+	override func accessibilityRoleDescription() -> String? {
+		CanvasAccessibilityWording.canvasRoleDescription
+	}
+
+	override func accessibilityLabel() -> String? {
+		accessibilityTree.value.description
+	}
+
+	override func accessibilityChildren() -> [Any]? {
+		accessibilityTree.children
 	}
 
 	override func draw(_ dirtyRect: NSRect) {

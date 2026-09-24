@@ -295,6 +295,77 @@ private func testClassifiesSpacesBarButtonsInBothLocalizations() throws {
 	)
 }
 
+/// A Space has to be nameable the way the person sees it in Mission Control,
+/// or naming it sends them looking for something that is not there. Desktops
+/// count only desktops: the fullscreen Space sits between them in the bar and
+/// takes no desktop number, so the desktop after it is Desktop 2, not 3.
+@MainActor
+private func testNamesSpacesTheWayMissionControlDoes() throws {
+	let snapshot: SpaceSnapshot = try SpacePreferences.snapshot(from: makeFixture())
+	try expect(
+		snapshot.name(of: .init(managedID: 1, uuid: "", isFullScreen: false))
+			== "Desktop 1",
+		"the first desktop, which macOS leaves without a UUID, is Desktop 1"
+	)
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 328, uuid: secondDesktopUUID, isFullScreen: false)
+		) == "Desktop 2",
+		"a fullscreen Space in bar order must not consume a desktop number"
+	)
+	// A fullscreen Space has a ManagedSpaceID like any other, and saying only
+	// that it is fullscreen identifies nothing once two applications are.
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 280, uuid: fullScreenUUID, isFullScreen: true)
+		) == "full-screen Space 280",
+		"a fullscreen Space is named by its own ID, not merely as fullscreen"
+	)
+	// Numbering runs on across monitors rather than restarting. On one display
+	// that is the same answer; on several it is the only one that does not hand
+	// two Spaces the same name.
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 27, uuid: otherMonitorDesktopUUID, isFullScreen: false)
+		) == "Desktop 3",
+		"a second monitor's desktop continues the numbering, never restarts it"
+	)
+	try expect(
+		Set(
+			snapshot.monitors
+				.flatMap(\.spaces)
+				.compactMap { snapshot.name(of: $0) }
+		).count == snapshot.monitors.flatMap(\.spaces).count,
+		"no two Spaces in the whole configuration may share a name"
+	)
+}
+
+/// The caller's copy of a Space can be out of date — a Space keeps its ID
+/// while becoming or ceasing to be fullscreen — so the live record decides,
+/// and a Space macOS no longer describes is named nothing rather than wrongly.
+@MainActor
+private func testSpaceNamingReadsTheLiveRecord() throws {
+	let snapshot: SpaceSnapshot = try SpacePreferences.snapshot(from: makeFixture())
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 280, uuid: fullScreenUUID, isFullScreen: false)
+		) == "full-screen Space 280",
+		"a stale fullscreen flag must not turn a fullscreen Space into a desktop"
+	)
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 9_999, uuid: "", isFullScreen: false)
+		) == nil,
+		"a Space the preferences no longer describe is named nothing"
+	)
+	try expect(
+		snapshot.name(
+			of: .init(managedID: 171, uuid: "C9F9FE6A-B772-4C96-B1E1-E69DD9E3139E", isFullScreen: false)
+		) == nil,
+		"a collapsed monitor shows no bar, so its Space has no position to name"
+	)
+}
+
 func spaceDirectoryCases() -> [TestCase] {
 	[
 		.init(
@@ -320,6 +391,14 @@ func spaceDirectoryCases() -> [TestCase] {
 		.init(
 			"malformed Space entries name the field that failed",
 			testMalformedSpaceEntriesReportTheirOwnField
+		),
+		.init(
+			"Spaces are named the way Mission Control names them",
+			testNamesSpacesTheWayMissionControlDoes
+		),
+		.init(
+			"Space naming reads the live record, not the caller's copy",
+			testSpaceNamingReadsTheLiveRecord
 		),
 		.init(
 			"Spaces bar buttons classify in both localizations",

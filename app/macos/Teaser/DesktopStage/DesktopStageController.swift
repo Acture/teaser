@@ -61,6 +61,13 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 	private var isRunning: Bool = false
 	private var permissionTask: Task<Void, Never>?
 	private var newSpaceTask: Task<Void, Never>?
+	/// The Spaces bar as macOS last described it, and which Space was current
+	/// when it was read. Cached because both are one preferences read and the
+	/// chrome refresh runs many times per drag. It is a copy of the system's
+	/// own state, refreshed when that state can have changed, never a second
+	/// record of anything Teaser owns.
+	private var spaceSnapshot: SpaceSnapshot?
+	private var currentSpaceIdentity: SpaceIdentity?
 	private var lastPermissionStatus: ExternalWindowPermissionStatus?
 	private var lastLoggedStatusMessage: String?
 
@@ -169,6 +176,9 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		guard !isRunning else { return }
 		isRunning = true
 		installSystemObservers()
+		// No Space switch has happened yet, so the bar is read once up front:
+		// the first canvas opens on whatever Space is already current.
+		readSpaces()
 		// Launch opens an ordinary window. Filling the screen is immersive and
 		// covers everything the person might want to drag in, so it is something
 		// they ask for (View › Fill Screen) rather than what they land in.
@@ -210,7 +220,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 		if let frame: LayoutRect = closed?.frame {
 			canvas.setFrame(frame)
 		}
-		canvas.show(space: currentSpace())
+		// Opening is the moment this canvas's Space is first established, and a
+		// rare enough one to re-read: a read that failed earlier must not leave
+		// every canvas of the session unplaced.
+		readSpaces()
+		canvas.show(space: currentSpaceIdentity)
 		lastKeyCanvasID = id
 		organization.setTargetDisplay(.init(canvas: id))
 		// With no server connected there is nothing to project, so the canvas
@@ -732,6 +746,60 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 			name: NSApplication.didChangeScreenParametersNotification,
 			object: nil
 		)
+		// Switching Space is the one moment a canvas's Space can be established
+		// without asking macOS a question it does not answer: whatever is on
+		// screen afterwards is on the Space that is now current.
+		NSWorkspace.shared.notificationCenter.addObserver(
+			self,
+			selector: #selector(activeSpaceDidChange(_:)),
+			name: NSWorkspace.activeSpaceDidChangeNotification,
+			object: nil
+		)
+	}
+
+	@objc
+	private func activeSpaceDidChange(_ notification: Notification) {
+		readSpaces()
+		// `updateChrome` stamps what is now visible; re-reading first is what
+		// makes the stamp the new Space rather than the old one.
+		updateChrome()
+	}
+
+	/// One read of `com.apple.spaces`: the bar, so a Space can be named by the
+	/// position the person sees in Mission Control, and which Space is current,
+	/// so a visible canvas can be stamped without reading again.
+	private func readSpaces() {
+		spaceSnapshot = try? spaces.snapshot()
+		currentSpaceIdentity = currentSpace()
+	}
+
+	/// Whatever is on screen is on the current Space. That is the only way to
+	/// establish where a canvas is — macOS answers no such question about a
+	/// window — so it is done every time the chrome refreshes rather than only
+	/// when Spaces change: a canvas must never still be waiting to find out
+	/// where it is once somebody has seen it.
+	///
+	/// Cheap by construction: it reads the cached current Space and writes only
+	/// when the answer changed. Nothing here touches the preferences, which are
+	/// re-read at the moments they can have changed — launch, opening a canvas,
+	/// and a Space switch — rather than several times per drag frame. A canvas
+	/// that is not on this Space keeps what it was last seen on.
+	private func stampVisibleCanvases() {
+		guard let current: SpaceIdentity = currentSpaceIdentity else { return }
+		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases
+		where canvas.isVisible && canvas.isOnActiveSpace
+			&& lifecycle.state(of: id)?.space != current {
+			_ = lifecycle.handle(.spaceChanged(id, current))
+		}
+	}
+
+	/// What to call the Space a canvas was last seen on. The Spaces bar gives
+	/// the name the person recognises; a Space the preferences no longer
+	/// describe still has its own ID, which beats saying nothing.
+	private func spaceName(of canvas: CanvasID) -> String? {
+		guard let space: SpaceIdentity = lifecycle.state(of: canvas)?.space
+		else { return nil }
+		return spaceSnapshot?.name(of: space) ?? "Space \(space.managedID)"
 	}
 
 	private func removeSystemObservers() {
@@ -752,9 +820,27 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 
 	private func updateChrome() {
 		guard isRunning else { return }
+		stampVisibleCanvases()
 		let presentation: WorkspacePresentation = orchestrator.presentation
 		let layout: PresentationLayout? = orchestrator.layout
 		windowPickerModel.update(from: orchestrator)
+		// Where every open canvas is, so a Panel whose group continues on
+		// another one can say which, and whether reaching it means switching
+		// Space. Read here because it is live AppKit state, not geometry.
+		let placements: [DisplayID: CanvasPlacement] = .init(
+			uniqueKeysWithValues: canvases.map { id, canvas in
+				let displayID: DisplayID = .init(canvas: id)
+				return (
+					displayID,
+					CanvasPlacement(
+						displayID: displayID,
+						title: canvas.window.title,
+						isOnActiveSpace: canvas.isOnActiveSpace,
+						spaceName: self.spaceName(of: id)
+					)
+				)
+			}
+		)
 		for (id, canvas): (CanvasID, DesktopCanvasWindow) in canvases {
 			let displayID: DisplayID = .init(canvas: id)
 			let canvasFrame: LayoutRect = lifecycle.state(of: id)?.settledFrame ?? canvas.canvasFrame
@@ -766,6 +852,11 @@ final class DesktopStageController: NSObject, DesktopStageOrchestratorHost {
 					screenFrame: canvasFrame,
 					presentation: presentation,
 					layout: layout,
+					// Which Panels actually hold a window, so the canvas can say
+					// so out loud. A lease is runtime state, not geometry, and
+					// adoption is never inferred from a rectangle.
+					adoptedPanelIDs: .init(orchestrator.panelAssignments.keys),
+					canvases: placements,
 					arrangeMode: orchestrator.isArrangeModeEnabled,
 					dragActive: orchestrator.isDragging,
 					dropHighlight: dropHighlight(on: displayID),
