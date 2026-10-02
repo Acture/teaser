@@ -126,7 +126,7 @@ git diff --submodule=log -- notes
 ```
 
 Review that the checkout still contains `teaser/README.md`. The explicit remote
-update follows `project/teaser` and leaves detached HEAD. To deliver the reviewed
+update follows `project/teaser` and can leave detached HEAD. To deliver the reviewed
 version, commit the pointer in the parent repository:
 
 ```fish
