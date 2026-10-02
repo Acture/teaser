@@ -2,8 +2,9 @@
 
 The active server/TUI is the Herdr source fork in `runtime/herdr`; its embedded
 libghostty-vt and portable-pty provenance stays inside that tree. See
-`runtime/upstream.toml` and `docs/architecture.md` for the fork baseline and update
-policy. The root `vendor/ghostty` submodule and patches below belong to the
+`runtime/upstream.toml` and
+[Architecture](../notes/teaser/docs/architecture.md) for the fork baseline and
+update policy. The root `vendor/ghostty` submodule and patches below belong to the
 retired attachment-runtime experiment, not the new server integration path.
 
 ## Ghostty

@@ -58,6 +58,7 @@ geometry tests.
 | `runtime/upstream.toml` | Exact imported baseline and provenance |
 | `crates/teaser-core` | Shared organization model and atomic transitions |
 | `app/macos` and `Package.swift` | Native App, adapters, and headless harnesses |
+| `notes/teaser` | Canonical project documents in the Obsidian vault submodule |
 | `prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
 | `vendor/ghostty` and `patches/ghostty` | Retained native attachment experiment |
 
@@ -65,9 +66,115 @@ The fork uses a history-preserving Git subtree, not an installed Herdr binary or
 a read-only submodule. It keeps the `Acture/teaser` repository and macOS history.
 This does not change GitHub's fork-network metadata.
 
-See [Architecture](docs/architecture.md), [Terminology](CONTEXT.md),
-[Protocol](docs/ipc.md), and the [implementation contract](plan/architecture-teaser-platform-1.md).
+See the [documentation index](notes/teaser/README.md),
+[Architecture](notes/teaser/docs/architecture.md),
+[Terminology](notes/teaser/CONTEXT.md), [Protocol](notes/teaser/docs/ipc.md),
+[delivery outcomes](notes/teaser/ROADMAP.md), and the
+[implementation contract](notes/teaser/plan/architecture-teaser-platform-1.md).
 Execution status and dependencies live in [Linear](https://linear.app/acturea/project/teaser-efe303ae636d).
+
+## Documentation workflow
+
+`notes/` references the existing
+[Acture/obsidian-vault](https://github.com/Acture/obsidian-vault) repository on
+`project/teaser`; edit only `notes/teaser/**` on that branch. The parent repository
+pins an exact commit. `.gitmodules` selects the branch for explicit remote
+updates, not automatic synchronization. GitHub readers can open the
+[project branch index](https://github.com/Acture/obsidian-vault/blob/project/teaser/teaser/README.md).
+
+The vault requires access to the private repository. Notes are not needed to
+build Teaser. README, agent instructions, source, licenses/notices, and vendored
+documentation remain here. The original documents and their history remain in
+Teaser's pre-migration commits; the vault also retains extracted document history
+and its source mapping. There was no `doc` branch; `master` was the migration
+source. No existing branch was removed or rewritten.
+
+### Clone and initialize
+
+Clone with just the notes submodule (the retained Ghostty experiment is separate):
+
+```fish
+git clone --recurse-submodules=notes https://github.com/Acture/teaser.git
+cd teaser
+```
+
+For an existing clone or a new worktree, from the Teaser root:
+
+```fish
+git submodule sync -- notes
+git submodule update --init -- notes
+git -C notes rev-parse HEAD
+```
+
+This retrieves the recorded commit, normally with detached HEAD. After pulling
+code, run the same initialization command to restore that code revision's notes.
+It does not fetch the newest project-branch content. A code-only clone can omit
+submodule initialization; see [vendor instructions](vendor/README.md) when the
+Ghostty experiment is needed.
+
+### Update the pinned notes version
+
+Start with clean parent and notes worktrees. Stop if either status contains
+uncommitted work; do not reset or overwrite it. Update only `notes`, not every
+submodule:
+
+```fish
+git status --short
+git -C notes status --short
+git submodule update --init --remote --checkout -- notes
+git diff --submodule=log -- notes
+```
+
+Review that the checkout still contains `teaser/README.md`. The explicit remote
+update follows `project/teaser` and leaves detached HEAD. To deliver the reviewed
+version, commit the pointer in the parent repository:
+
+```fish
+git add -- notes
+git commit -m "docs: update Teaser notes reference"
+git push
+```
+
+### Edit and submit notes
+
+Initialize first. With clean worktrees, switch to the writable project branch
+(Git creates its tracking branch from `origin` on a fresh clone):
+
+```fish
+git -C notes fetch origin
+git -C notes switch project/teaser
+git -C notes merge --ff-only origin/project/teaser
+```
+
+If local history has diverged, stop and reconcile it; do not force or reset it.
+Master/project aggregation follows the vault's
+[existing workflow](notes/Workflow/研究工作流.md), not a new sync service here.
+Build commands and code paths in the documents refer to the Teaser checkout.
+
+After editing files under `notes/teaser/`, review and deliver in this order:
+
+```fish
+git -C notes diff --check
+git -C notes diff -- teaser
+git -C notes add -- teaser
+git -C notes commit -m "docs(teaser): update project documentation"
+git -C notes push origin HEAD:refs/heads/project/teaser
+```
+
+Only after that push succeeds, confirm remote reachability and update the parent:
+
+```fish
+git -C notes fetch origin project/teaser
+git -C notes merge-base --is-ancestor HEAD origin/project/teaser
+git diff --submodule=log -- notes
+git add -- notes
+git commit -m "docs: update Teaser notes reference"
+git push
+```
+
+Run the last steps only if the ancestry check succeeds. Never commit a gitlink
+to an unpublished local notes commit, edit on detached HEAD, or recreate a
+second editable copy at the retired document paths.
 
 ## Development
 
@@ -190,8 +297,8 @@ recovery. The old `presentation.json` is left intact, not silently migrated.
 ## Fork maintenance and licensing
 
 Follow the explicit subtree update procedure in
-[Architecture](docs/architecture.md#upstream-maintenance); never automatically
-follow upstream master or activate its release automation.
+[Architecture](notes/teaser/docs/architecture.md#upstream-maintenance); never
+automatically follow upstream master or activate its release automation.
 
 Teaser-owned code retains [AGPL-3.0-or-later](LICENSE). Inherited Herdr code retains
 [Apache-2.0](runtime/herdr/LICENSE); vendored dependencies retain their own

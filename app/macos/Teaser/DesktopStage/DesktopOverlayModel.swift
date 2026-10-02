@@ -5,7 +5,7 @@ import Foundation
 // desktop.
 
 /// What a Panel is bound to right now: the three states the canvas can tell
-/// apart today. `CONTEXT.md`'s Panel binding also names a session and a
+/// apart today. `notes/teaser/CONTEXT.md`'s Panel binding also names a session and a
 /// task/file reference, which nothing on `PanelDescriptor` records yet.
 /// Neither a drawn outline nor a contour colour can say which of these it is,
 /// so the canvas carries it as its own field rather than leaving it inferred.

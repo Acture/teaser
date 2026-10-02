@@ -11,16 +11,45 @@ Task providers retain task authority. Native input remains provider-owned.
 One current-state source per concern:
 
 - `README.md`: public scope and implemented boundary.
-- `CONTEXT.md`: canonical domain terminology.
-- `docs/architecture.md`: architecture and upstream maintenance.
-- `docs/ipc.md`: current protocol boundary and planned extensions.
+- `notes/teaser/CONTEXT.md`: canonical domain terminology.
+- `notes/teaser/docs/architecture.md`: architecture and upstream maintenance.
+- `notes/teaser/docs/ipc.md`: current protocol boundary and planned extensions.
 - `runtime/upstream.toml`: exact fork provenance.
-- `ROADMAP.md`: delivery outcomes and exit gates, not a second status tracker.
-- `plan/architecture-teaser-platform-1.md`: implementation/test contracts.
+- `notes/teaser/ROADMAP.md`: delivery outcomes and exit gates, not a second tracker.
+- `notes/teaser/plan/architecture-teaser-platform-1.md`: implementation contracts.
 - Linear: active tasks, dependencies, blockers, and execution status.
 
 Do not add ADRs or another parallel plan. Update canonical documents and Linear
 when decisions change. Preserve `LICENSE`, `NOTICE`, and third-party licenses.
+
+## Project documentation
+
+The existing `https://github.com/Acture/obsidian-vault.git` repository is the
+`notes/` submodule, configured for `project/teaser`. Its project entry is
+`notes/teaser/README.md`. Read it alongside Linear and the code before planning.
+Only edit `notes/teaser/**` on this project branch; leave other projects and
+vault configuration unchanged. Do not add another notes repository or sync layer.
+
+Follow README's documentation workflow. For a new clone/worktree, run
+`git submodule update --init -- notes` to retrieve the parent's fixed commit.
+To follow the configured branch deliberately, inspect clean worktrees first and
+run `git submodule update --init --remote --checkout -- notes`, then review and
+commit the parent pointer. Never update all submodules as a notes-sync shortcut.
+
+Initialization/remote update may detach HEAD. Before editing, fetch in `notes`,
+switch to `project/teaser`, and fast-forward from `origin/project/teaser`.
+Stop on dirty worktrees or diverged history; do not reset, force, or silently
+choose a side. Commit and push the notes branch first. Confirm that notes HEAD
+is reachable from the fetched remote project branch before staging the parent
+gitlink. An unpublished notes commit must never become a delivered dependency.
+
+The code repository retains README, this instruction file and its symlinks,
+licenses/notices, source, build instructions and upstream/vendor documentation.
+Notes access is not a build prerequisite. The five migrated documents have one
+editable home in the vault; their original history remains in Teaser and the
+extracted path history is recorded in the vault. No `doc` branch existed; the
+approved migration source was `master`. Do not remove existing branches as part
+of this workflow.
 
 ## Source structure
 
