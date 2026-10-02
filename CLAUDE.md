@@ -30,11 +30,20 @@ The existing `https://github.com/Acture/obsidian-vault.git` repository is the
 Only edit `notes/teaser/**` on this project branch; leave other projects and
 vault configuration unchanged. Do not add another notes repository or sync layer.
 
-Follow README's documentation workflow. For a new clone/worktree, run
-`git submodule update --init -- notes` to retrieve the parent's fixed commit.
-To follow the configured branch deliberately, inspect clean worktrees first and
-run `git submodule update --init --remote --checkout -- notes`, then review and
-commit the parent pointer. Never update all submodules as a notes-sync shortcut.
+Daily work defaults to the latest `origin/project/teaser`, not the parent's
+recorded gitlink. At the start of a session and after pulling code, refresh notes
+before reading them. Follow README's safety checks first: refuse dirty notes,
+fetch the project branch, and confirm notes HEAD is its ancestor so unpublished
+commits are not abandoned. Then run
+`git submodule update --init --remote --checkout -- notes`. For uninitialized
+notes, run that command directly. If the fetch fails, report the failure; cached
+content must not be described as current. Preserve unrelated parent changes.
+
+New clones use `--recurse-submodules=notes --remote-submodules`. A newer notes
+gitlink is expected and should be reviewed and recorded, not hidden or reset to
+the old pin. Git still stores a commit; omit `--remote` only when explicitly
+reproducing that historical version. Never update all submodules as a notes-sync
+shortcut. Do not install implicit hooks, background sync or network-on-cd logic.
 
 Initialization/remote update may detach HEAD. Before editing, fetch in `notes`,
 switch to `project/teaser`, and fast-forward from `origin/project/teaser`.

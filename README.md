@@ -77,9 +77,12 @@ Execution status and dependencies live in [Linear](https://linear.app/acturea/pr
 
 `notes/` references the existing
 [Acture/obsidian-vault](https://github.com/Acture/obsidian-vault) repository on
-`project/teaser`; edit only `notes/teaser/**` on that branch. The parent repository
-pins an exact commit. `.gitmodules` selects the branch for explicit remote
-updates, not automatic synchronization. GitHub readers can open the
+`project/teaser`; edit only `notes/teaser/**` on that branch. Daily work defaults
+to the latest fetched commit on that branch, not the parent's older gitlink.
+Git still records an exact commit for provenance and historical reproduction.
+The commands below explicitly request the configured remote branch; ordinary
+Git clone/update without the remote flags does not automatically follow it.
+GitHub readers can open the
 [project branch index](https://github.com/Acture/obsidian-vault/blob/project/teaser/teaser/README.md).
 
 The vault requires access to the private repository. Notes are not needed to
@@ -91,43 +94,51 @@ source. No existing branch was removed or rewritten.
 
 ### Clone and initialize
 
-Clone with just the notes submodule (the retained Ghostty experiment is separate):
+Clone with the latest notes branch (the retained Ghostty experiment is separate):
 
 ```fish
-git clone --recurse-submodules=notes https://github.com/Acture/teaser.git
+git clone --recurse-submodules=notes --remote-submodules https://github.com/Acture/teaser.git
 cd teaser
 ```
 
-For an existing clone or a new worktree, from the Teaser root:
+For a new worktree or an uninitialized notes submodule, from the Teaser root:
 
 ```fish
 git submodule sync -- notes
-git submodule update --init -- notes
+git submodule update --init --remote --checkout -- notes
 git -C notes rev-parse HEAD
 ```
 
-This retrieves the recorded commit, normally with detached HEAD. After pulling
-code, run the same initialization command to restore that code revision's notes.
-It does not fetch the newest project-branch content. A code-only clone can omit
-submodule initialization; see [vendor instructions](vendor/README.md) when the
-Ghostty experiment is needed.
+This fetches `project/teaser` and retrieves its current tip. After pulling code,
+and before reading notes at the start of a session, use the refresh workflow
+below. A changed `notes` gitlink is expected when the branch has advanced; do not
+hide it with an ignore setting. If fetching fails, report that the notes could
+not be refreshed instead of calling the cached checkout "latest". A code-only
+clone can omit notes; see [vendor instructions](vendor/README.md) for Ghostty.
 
-### Update the pinned notes version
+### Refresh notes before daily work
 
-Start with clean parent and notes worktrees. Stop if either status contains
-uncommitted work; do not reset or overwrite it. Update only `notes`, not every
-submodule:
+Preserve unrelated parent changes. For initialized notes, first check for local
+edits and unpublished commits. Stop if notes status is nonempty, fetching fails,
+or the ancestry check fails; do not reset or abandon local work:
 
 ```fish
 git status --short
 git -C notes status --short
+git -C notes fetch origin refs/heads/project/teaser:refs/remotes/origin/project/teaser
+git -C notes merge-base --is-ancestor HEAD origin/project/teaser
+```
+
+Only after those checks succeed, update `notes` (not all submodules):
+
+```fish
 git submodule update --init --remote --checkout -- notes
 git diff --submodule=log -- notes
 ```
 
 Review that the checkout still contains `teaser/README.md`. The explicit remote
-update follows `project/teaser` and can leave detached HEAD. To deliver the reviewed
-version, commit the pointer in the parent repository:
+update follows `project/teaser` and can leave detached HEAD. To record the reviewed
+version after the branch has advanced, commit the pointer in the parent repository:
 
 ```fish
 git add -- notes
@@ -135,9 +146,20 @@ git commit -m "docs: update Teaser notes reference"
 git push
 ```
 
+### Reproduce a recorded documentation version
+
+Only when explicitly reproducing an older code/documentation pair, after the
+same local-work safety checks, omit `--remote`:
+
+```fish
+git submodule update --init --checkout -- notes
+```
+
+This restores the parent's fixed commit. It is not the daily-work default.
+
 ### Edit and submit notes
 
-Initialize first. With clean worktrees, switch to the writable project branch
+Refresh first. With clean notes, switch to the writable project branch
 (Git creates its tracking branch from `origin` on a fresh clone):
 
 ```fish
