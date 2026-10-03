@@ -11,12 +11,12 @@ Task providers retain task authority. Native input remains provider-owned.
 One current-state source per concern:
 
 - `README.md`: public scope and implemented boundary.
-- `notes/teaser/CONTEXT.md`: canonical domain terminology.
-- `notes/teaser/docs/architecture.md`: architecture and upstream maintenance.
-- `notes/teaser/docs/ipc.md`: current protocol boundary and planned extensions.
+- `notes/CONTEXT.md`: canonical domain terminology.
+- `notes/docs/architecture.md`: architecture and upstream maintenance.
+- `notes/docs/ipc.md`: current protocol boundary and planned extensions.
 - `runtime/upstream.toml`: exact fork provenance.
-- `notes/teaser/ROADMAP.md`: delivery outcomes and exit gates, not a second tracker.
-- `notes/teaser/plan/architecture-teaser-platform-1.md`: implementation contracts.
+- `notes/ROADMAP.md`: delivery outcomes and exit gates, not a second tracker.
+- `notes/plan/architecture-teaser-platform-1.md`: implementation contracts.
 - Linear: active tasks, dependencies, blockers, and execution status.
 
 Do not add ADRs or another parallel plan. Update canonical documents and Linear
@@ -26,8 +26,8 @@ when decisions change. Preserve `LICENSE`, `NOTICE`, and third-party licenses.
 
 The existing `https://github.com/Acture/obsidian-vault.git` repository is the
 `notes/` submodule, configured for `project/teaser`. Its project entry is
-`notes/teaser/README.md`. Read it alongside Linear and the code before planning.
-Only edit `notes/teaser/**` on this project branch; leave other projects and
+`notes/README.md`. Read it alongside Linear and the code before planning.
+Only edit `notes/**` on this project branch; leave other projects and
 vault configuration unchanged. Do not add another notes repository or sync layer.
 
 Daily work defaults to the latest `origin/project/teaser`, not the parent's
@@ -144,3 +144,19 @@ Root `CLAUDE.md` is the real instruction file; `AGENTS.md` and
 inherited project material, not Teaser hosting/release policy. Do not commit
 personal `.codex/` settings, runtime databases, credentials, or build products.
 Keep vendored source and license notices intact during dependency updates.
+
+
+## Project notes submission
+
+`docs/` is reserved for public documentation. Private research notes live in `notes/`, which tracks `project/teaser` in `Acture/obsidian-vault`; start at `notes/README.md`. This checkout's root contains only this project's notes. Master places these notes under `teaser/`. Keep automation and vault configuration on master. Preserve existing local edits when updating a checkout.
+
+Install or refresh the trusted submission tools in Git metadata, including in new clones:
+
+```fish
+git -C notes fetch origin refs/heads/master:refs/remotes/origin/master
+set notes_common_gitdir (git -C notes rev-parse --path-format=absolute --git-common-dir)
+git -C notes show origin/master:.github/scripts/install_push_hook.py > "$notes_common_gitdir/install_push_hook.py"
+python3 "$notes_common_gitdir/install_push_hook.py" --repo notes --source-ref origin/master
+```
+
+After committing specific note files, submit through `python3 "$notes_common_gitdir/hooks/notes-boundary/submit_project.py" --repo notes`. The remote requires `notes-boundary/root/teaser` from GitHub Actions. Only after successful submission should this repository commit and push the `notes` gitlink. See the central repository's `项目接入.md` for initialization, updates and conflict handling.

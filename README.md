@@ -58,7 +58,7 @@ geometry tests.
 | `runtime/upstream.toml` | Exact imported baseline and provenance |
 | `crates/teaser-core` | Shared organization model and atomic transitions |
 | `app/macos` and `Package.swift` | Native App, adapters, and headless harnesses |
-| `notes/teaser` | Canonical project documents in the Obsidian vault submodule |
+| `notes` | Canonical project documents in the Obsidian vault submodule |
 | `prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
 | `vendor/ghostty` and `patches/ghostty` | Retained native attachment experiment |
 
@@ -66,18 +66,18 @@ The fork uses a history-preserving Git subtree, not an installed Herdr binary or
 a read-only submodule. It keeps the `Acture/teaser` repository and macOS history.
 This does not change GitHub's fork-network metadata.
 
-See the [documentation index](notes/teaser/README.md),
-[Architecture](notes/teaser/docs/architecture.md),
-[Terminology](notes/teaser/CONTEXT.md), [Protocol](notes/teaser/docs/ipc.md),
-[delivery outcomes](notes/teaser/ROADMAP.md), and the
-[implementation contract](notes/teaser/plan/architecture-teaser-platform-1.md).
+See the [documentation index](notes/README.md),
+[Architecture](notes/docs/architecture.md),
+[Terminology](notes/CONTEXT.md), [Protocol](notes/docs/ipc.md),
+[delivery outcomes](notes/ROADMAP.md), and the
+[implementation contract](notes/plan/architecture-teaser-platform-1.md).
 Execution status and dependencies live in [Linear](https://linear.app/acturea/project/teaser-efe303ae636d).
 
 ## Documentation workflow
 
 `notes/` references the existing
 [Acture/obsidian-vault](https://github.com/Acture/obsidian-vault) repository on
-`project/teaser`; edit only `notes/teaser/**` on that branch. Daily work defaults
+`project/teaser`; edit only `notes/**` on that branch. Daily work defaults
 to the latest fetched commit on that branch, not the parent's older gitlink.
 Git still records an exact commit for provenance and historical reproduction.
 The commands below explicitly request the configured remote branch; ordinary
@@ -173,14 +173,14 @@ Master/project aggregation follows the vault's
 [existing workflow](notes/Workflow/研究工作流.md), not a new sync service here.
 Build commands and code paths in the documents refer to the Teaser checkout.
 
-After editing files under `notes/teaser/`, review and deliver in this order:
+After editing files under `notes/`, review and deliver in this order:
 
 ```fish
 git -C notes diff --check
 git -C notes diff -- teaser
-git -C notes add -- teaser
+git -C notes add README.md
 git -C notes commit -m "docs(teaser): update project documentation"
-git -C notes push origin HEAD:refs/heads/project/teaser
+python3 (git -C notes rev-parse --path-format=absolute --git-common-dir)/hooks/notes-boundary/submit_project.py --repo notes
 ```
 
 Only after that push succeeds, confirm remote reachability and update the parent:
@@ -319,7 +319,7 @@ recovery. The old `presentation.json` is left intact, not silently migrated.
 ## Fork maintenance and licensing
 
 Follow the explicit subtree update procedure in
-[Architecture](notes/teaser/docs/architecture.md#upstream-maintenance); never
+[Architecture](notes/docs/architecture.md#upstream-maintenance); never
 automatically follow upstream master or activate its release automation.
 
 Teaser-owned code retains [AGPL-3.0-or-later](LICENSE). Inherited Herdr code retains
