@@ -6,8 +6,8 @@ Source: <https://github.com/herdrdev/herdr>
 
 Baseline: `v0.9.1`, commit `065ef9d6a531c49fb8bee7e818ef837065b21ee9`.
 
-The Herdr contributors' source is maintained under `runtime/herdr`, with its
-complete history and Apache-2.0 license at `runtime/herdr/LICENSE`. This import
+The Herdr contributors' source is maintained under `src/runtime/herdr`, with its
+complete history and Apache-2.0 license at `src/runtime/herdr/LICENSE`. This import
 does not relicense the inherited code. Its vendored libghostty-vt and portable-pty
 retain their own embedded licenses and provenance records; preserve them when
 distributing the runtime. The root `LICENSE` continues to cover Teaser-owned
@@ -20,7 +20,9 @@ distribution notice inventory.
 
 ## Swift UI dependencies
 
-SplitView: <https://github.com/stevengharris/SplitView>, version `3.5.3`.
+Previously used SplitView: <https://github.com/stevengharris/SplitView>, version
+`3.5.3`. It is no longer linked by the current native App; its attribution is
+retained for the earlier implementation.
 
 Copyright (c) 2023 Steven G. Harris
 
@@ -29,8 +31,9 @@ version `3.1.0`.
 
 Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
 
-Both components use the following MIT License. Their original license files
-are also bundled under `Contents/Resources/ThirdPartyNotices` in `Teaser.app`.
+Both components use the following MIT License. This complete notice, including
+the copyright statements above, is bundled as
+`Contents/Resources/THIRD_PARTY_NOTICES.md` in `Teaser.app`.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -113,7 +116,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Ghostty includes additional third-party material. Its license files are present
-at their original paths when the `vendor/ghostty` submodule is initialized and
+at their original paths when the `src/vendor/ghostty` submodule is initialized and
 must be preserved in source and binary distributions.
 
 ## portable-pty

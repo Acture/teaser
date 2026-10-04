@@ -17,15 +17,15 @@ repos:
       # working tree against HEAD and so passed vacuously on a clean tree.
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-        exclude: ^(patches/|runtime/herdr/)
+        exclude: ^src/(patches/|runtime/herdr/)
       - id: end-of-file-fixer
-        exclude: ^(patches/|runtime/herdr/)
+        exclude: ^src/(patches/|runtime/herdr/)
       - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
         # Vendored upstream material keeps its own formatting; a clang-format
         # file is YAML that this hook cannot read as a single document.
-        exclude: ^runtime/herdr/vendor/
+        exclude: ^src/runtime/herdr/vendor/
 
   - repo: local
     hooks:
@@ -59,14 +59,14 @@ repos:
       # when only the gitlink changes; gitlinks do not have the `file` type.
       - id: ghostty-patches-apply
         name: Ghostty patches apply
-        entry: git apply --check --directory=vendor/ghostty
+        entry: git apply --check --directory=src/vendor/ghostty
         args:
-          - patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
-          - patches/ghostty/0002-external-surface-io.patch
+          - src/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
+          - src/patches/ghostty/0002-external-surface-io.patch
         language: system
         pass_filenames: false
         types: []
-        files: ^(patches/ghostty/.*\.patch|vendor/ghostty|\.gitmodules|\.pre-commit-config\.yaml)$
+        files: ^(src/patches/ghostty/.*\.patch|src/vendor/ghostty|\.gitmodules|\.pre-commit-config\.yaml)$
 
       # One hook per harness: each is a plain executable that exits non-zero on
       # failure. `swift run` builds incrementally, so a hook also works alone
@@ -76,7 +76,7 @@ repos:
         entry: swift run TeaserProbeTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-layout
@@ -84,7 +84,7 @@ repos:
         entry: swift run TeaserLayoutTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-presentation-store
@@ -92,7 +92,7 @@ repos:
         entry: swift run TeaserPresentationStoreTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-topology
@@ -100,7 +100,7 @@ repos:
         entry: swift run TeaserDesktopStageTopologyTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-controls
@@ -108,7 +108,7 @@ repos:
         entry: swift run TeaserDesktopStageControlsTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-safety
@@ -116,7 +116,7 @@ repos:
         entry: swift run TeaserDesktopStageSafetyTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-external-window
@@ -124,7 +124,7 @@ repos:
         entry: swift run TeaserExternalWindowTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-window-adoption
@@ -132,7 +132,7 @@ repos:
         entry: swift run TeaserWindowAdoptionTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-canvas-lifecycle
@@ -140,7 +140,7 @@ repos:
         entry: swift run TeaserCanvasLifecycleTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-canvas-accessibility
@@ -148,7 +148,7 @@ repos:
         entry: swift run TeaserCanvasAccessibilityTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/app/macos/TeaserPrivateAccessibility/|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: swift-test-herdr
@@ -156,16 +156,51 @@ repos:
         entry: swift run TeaserHerdrTests
         language: system
         pass_filenames: false
-        files: (\.swift$|^crates/teaser-core/|^runtime/herdr/src/api/schema|^runtime/herdr/docs/next/api/herdr-api\.schema\.json$|^Package\.(swift|resolved)$)
+        files: (\.swift$|^src/crates/teaser-core/|^src/runtime/herdr/src/api/schema|^src/runtime/herdr/docs/next/api/herdr-api\.schema\.json$|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
-      # SwiftPM does not assemble an .app bundle, so this stays a script.
-      - id: teaser-app-bundle
-        name: Teaser.app builds
-        entry: fish scripts/app.fish --build-only
+      # Generate the thin App target, then let Xcode own bundling and signing.
+      # The workspace shares the root SwiftPM lockfile through a symlink.
+      - id: teaser-xcode-project
+        name: XcodeGen project
+        entry: xcodegen generate --no-env
         language: system
         pass_filenames: false
-        files: (^app/macos/Teaser(Launcher|PrivateAccessibility)?/|^scripts/app\.fish$|^Package\.(swift|resolved)$|^(LICENSE|NOTICE|TRADEMARKS\.md|THIRD_PARTY_NOTICES\.md)$)
+        files: &native-app-files '(^src/app/macos/Teaser(Launcher|PrivateAccessibility)?/|^project\.yml$|^Teaser\.xcworkspace/|^Package\.(swift|resolved)$|^\.pre-commit-config\.yaml$|^(LICENSE|NOTICE|TRADEMARKS\.md|THIRD_PARTY_NOTICES\.md)$)'
+
+      - id: teaser-app-bundle
+        name: Teaser.app builds
+        entry: direnv exec . xcodebuild -workspace Teaser.xcworkspace -scheme Teaser -configuration Debug -destination platform=macOS -derivedDataPath target/xcode -clonedSourcePackagesDirPath .build -disableAutomaticPackageResolution -skipPackageUpdates build
+        language: system
+        pass_filenames: false
+        files: *native-app-files
+        stages: [pre-push]
+
+      - id: teaser-app-signature
+        name: Teaser.app signature
+        entry: >-
+          codesign --verify --deep --strict
+          -R '=anchor apple generic and identifier "com.acture.teaser"'
+          target/xcode/Build/Products/Debug/Teaser.app
+        language: system
+        pass_filenames: false
+        files: *native-app-files
+        stages: [pre-push]
+
+      - id: teaser-app-resources
+        name: Teaser.app resources (headless)
+        entry: target/xcode/Build/Products/Debug/Teaser.app/Contents/MacOS/Teaser --check-bundle-resources
+        language: system
+        pass_filenames: false
+        files: *native-app-files
+        stages: [pre-push]
+
+      - id: swift-test-bundle
+        name: TeaserBundleTests
+        entry: swift run TeaserBundleTests
+        language: system
+        pass_filenames: false
+        files: (\.swift$|^project\.yml$|^Package\.(swift|resolved)$)
         stages: [pre-push]
 
       - id: fish-syntax
@@ -180,4 +215,4 @@ repos:
         language: system
         files: \.fish$
         # Preserve vendored upstream formatting; fish-syntax still checks it.
-        exclude: ^runtime/herdr/vendor/
+        exclude: ^src/runtime/herdr/vendor/

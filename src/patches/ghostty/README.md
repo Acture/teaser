@@ -2,22 +2,22 @@
 
 These parent-owned patches target Ghostty `v1.3.1` at commit
 `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`. The repository keeps
-`vendor/ghostty` clean; apply patches only in a disposable checkout.
+`src/vendor/ghostty` clean; apply patches only in a disposable checkout.
 
 ## `0001`: Semantic Range Reflow
 
 This patch tests one prerequisite for block-native terminal UI: a semantic
 command-output range can be tracked while Ghostty reflows its screen.
 
-The repository keeps `vendor/ghostty` as a clean submodule. Verify that the
+The repository keeps `src/vendor/ghostty` as a clean submodule. Verify that the
 patch still applies with:
 
 ```fish
-git -C vendor/ghostty apply --check \
-	$PWD/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
+git -C src/vendor/ghostty apply --check \
+	$PWD/src/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
 ```
 
-The full probe commands are documented in `vendor/README.md`.
+The full probe commands are documented in `src/vendor/README.md`.
 
 ## Result and Boundary
 
@@ -51,7 +51,7 @@ Zig cache. Do not share that cache across concurrent builds; production
 integration should normalize private archive copies instead.
 
 With Metal Toolchain 17F109, the native Apple Silicon XCFramework builds and
-links. `app/macos/TeaserProbe` passes a synchronous Metal draw to a live
+links. `src/app/macos/TeaserProbe` passes a synchronous Metal draw to a live
 IOSurface-backed layer, full-screen readback, exact `probe\r` input forwarding,
 resize consistency, direct-child snapshots, and ordered surface/app/config
 teardown. It does not perform pixel capture or comparison.

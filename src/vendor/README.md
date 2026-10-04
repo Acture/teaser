@@ -1,10 +1,10 @@
 # Vendored Dependencies
 
-The active server/TUI is the Herdr source fork in `runtime/herdr`; its embedded
+The active server/TUI is the Herdr source fork in `src/runtime/herdr`; its embedded
 libghostty-vt and portable-pty provenance stays inside that tree. See
-`runtime/upstream.toml` and
-[Architecture](../notes/teaser/docs/architecture.md) for the fork baseline and
-update policy. The root `vendor/ghostty` submodule and patches below belong to the
+`src/runtime/upstream.toml` and
+[Architecture](../../notes/teaser/docs/architecture.md) for the fork baseline and
+update policy. The `src/vendor/ghostty` submodule and patches below belong to the
 retired attachment-runtime experiment, not the new server integration path.
 
 ## Ghostty
@@ -12,17 +12,17 @@ retired attachment-runtime experiment, not the new server integration path.
 - Upstream: <https://github.com/ghostty-org/ghostty>
 - Tag: `v1.3.1`
 - Commit: `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`
-- License: MIT; see `ghostty/LICENSE` and `../THIRD_PARTY_NOTICES.md`
+- License: MIT; see `ghostty/LICENSE` and `../../THIRD_PARTY_NOTICES.md`
 
-`vendor/ghostty` is a Git submodule pinned to the commit above. Initialize it
+`src/vendor/ghostty` is a Git submodule pinned to the commit above. Initialize it
 after cloning Teaser:
 
 ```fish
-git submodule update --init -- vendor/ghostty
+git submodule update --init -- src/vendor/ghostty
 ```
 
 The submodule must remain clean. Teaser-owned experiments and patches live in
-`patches/ghostty`; application code belongs outside the submodule.
+`src/patches/ghostty`; application code belongs outside the submodule.
 
 ### Verify the semantic-range test
 
@@ -41,11 +41,11 @@ or begin
 end
 mkdir -p $probe_dir
 or exit 1
-git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
+git clone --quiet --no-hardlinks src/vendor/ghostty $probe_dir/ghostty
 git -C $probe_dir/ghostty checkout --quiet --detach \
 	332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
 git -C $probe_dir/ghostty apply \
-	$PWD/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
+	$PWD/src/patches/ghostty/0001-test-tracked-semantic-output-reflow.patch
 cd $probe_dir/ghostty
 /opt/homebrew/opt/zig@0.15/bin/zig build test \
 	-Dapp-runtime=none \
@@ -72,11 +72,11 @@ or begin
 end
 mkdir -p $probe_dir
 or exit 1
-git clone --quiet --no-hardlinks vendor/ghostty $probe_dir/ghostty
+git clone --quiet --no-hardlinks src/vendor/ghostty $probe_dir/ghostty
 git -C $probe_dir/ghostty checkout --quiet --detach \
 	332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
 git -C $probe_dir/ghostty apply \
-	$PWD/patches/ghostty/0002-external-surface-io.patch
+	$PWD/src/patches/ghostty/0002-external-surface-io.patch
 cd $probe_dir/ghostty
 ```
 
@@ -118,10 +118,10 @@ mkdir -p $native_probe_dir
 set -lx CLANG_MODULE_CACHE_PATH $native_probe_dir/clang-module-cache
 set -lx SWIFT_MODULECACHE_PATH $native_probe_dir/swift-module-cache
 xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
-	app/macos/Teaser/Terminal/AttachmentClient.swift \
-	app/macos/Teaser/Terminal/TerminalAttachmentPump.swift \
-	app/macos/Teaser/Terminal/TerminalSurfaceAdapter.swift \
-	app/macos/TeaserProbe/main.swift \
+	src/app/macos/Teaser/Terminal/AttachmentClient.swift \
+	src/app/macos/Teaser/Terminal/TerminalAttachmentPump.swift \
+	src/app/macos/Teaser/Terminal/TerminalSurfaceAdapter.swift \
+	src/app/macos/TeaserProbe/main.swift \
 	-I $xc/Headers \
 	$xc/libghostty-fat.a \
 	-framework AppKit \
@@ -138,7 +138,7 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
 	-lproc \
 	-o $native_probe_dir/TeaserProbe
 
-cargo +1.94.0 build --manifest-path prototypes/attachment-runtime/Cargo.toml \
+cargo +1.94.0 build --manifest-path src/prototypes/attachment-runtime/Cargo.toml \
 	--locked --target-dir target/attachment-prototype -p teaserd
 set -lx GHOSTTY_RESOURCES_DIR $probe_dir/ghostty/zig-out/share/ghostty
 set -lx TEASERD_BIN $teaser_root/target/attachment-prototype/debug/teaserd

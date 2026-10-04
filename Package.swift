@@ -18,7 +18,7 @@ func testExecutable(_ name: String) -> Target {
 	.executableTarget(
 		name: name,
 		dependencies: ["TeaserKit"],
-		path: "app/macos/\(name)",
+		path: "src/app/macos/\(name)",
 		swiftSettings: strict
 	)
 }
@@ -28,6 +28,9 @@ let package: Package = Package(
 	// Matches `LSMinimumSystemVersion` in the application's Info.plist. Without
 	// it the availability annotations across AppKit and SwiftUI do not resolve.
 	platforms: [.macOS(.v14)],
+	products: [
+		.library(name: "TeaserKit", targets: ["TeaserKit"]),
+	],
 	dependencies: [
 		.package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", exact: "3.1.0"),
 	],
@@ -37,7 +40,7 @@ let package: Package = Package(
 		// other private declaration.
 		.target(
 			name: "TeaserPrivateAccessibility",
-			path: "app/macos/TeaserPrivateAccessibility",
+			path: "src/app/macos/TeaserPrivateAccessibility",
 			publicHeadersPath: "include"
 		),
 		.target(
@@ -46,7 +49,7 @@ let package: Package = Package(
 				.product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
 				.target(name: "TeaserPrivateAccessibility"),
 			],
-			path: "app/macos/Teaser",
+			path: "src/app/macos/Teaser",
 			exclude: [
 				"Info.plist",
 				// Imports `GhosttyKit`, which arrives with a built libghostty.
@@ -54,13 +57,8 @@ let package: Package = Package(
 			],
 			swiftSettings: strict
 		),
-		.executableTarget(
-			name: "Teaser",
-			dependencies: ["TeaserKit"],
-			path: "app/macos/TeaserLauncher",
-			swiftSettings: strict
-		),
 		testExecutable("TeaserProbeTests"),
+		testExecutable("TeaserBundleTests"),
 		testExecutable("TeaserLayoutTests"),
 		testExecutable("TeaserPresentationStoreTests"),
 		testExecutable("TeaserDesktopStageTopologyTests"),

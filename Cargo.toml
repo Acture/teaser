@@ -1,9 +1,9 @@
 [workspace]
-members = ["runtime/herdr", "crates/teaser-core"]
-exclude = ["prototypes/attachment-runtime"]
+members = ["src/runtime/herdr", "src/crates/teaser-core"]
+exclude = ["src/prototypes/attachment-runtime"]
 resolver = "2"
 
 # Cargo only applies patches from the workspace root. Keep this aligned with
 # the inherited Herdr manifest; its vendored PTY fixes are part of the fork.
 [patch.crates-io]
-portable-pty = { path = "runtime/herdr/vendor/portable-pty" }
+portable-pty = { path = "src/runtime/herdr/vendor/portable-pty" }

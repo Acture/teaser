@@ -13,7 +13,7 @@ fork.
 For deliberate maintenance of this prototype only, from the repository root:
 
 ```fish
-cargo +1.94.0 test --manifest-path prototypes/attachment-runtime/Cargo.toml --locked
+cargo +1.94.0 test --manifest-path src/prototypes/attachment-runtime/Cargo.toml --locked
 ```
 
 Run the native GUI probe only in an explicitly authorized desktop environment.

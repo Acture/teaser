@@ -5,6 +5,11 @@ import KeyboardShortcuts
 public enum TeaserMain {
 	public static func main() {
 		if Array(CommandLine.arguments.dropFirst()) == ["--check-bundle-resources"] {
+			let missing: [String] = AppBundleResources.missingFiles(in: Bundle.main.resourceURL)
+			guard missing.isEmpty else {
+				fputs("error: missing App resources: \(missing.joined(separator: ", "))\n", stderr)
+				Darwin.exit(1)
+			}
 			// Exercises the upstream localization accessor without NSApplication,
 			// global shortcuts, Accessibility, or desktop-window observation. A
 			// missing strings table silently yields the capitalized key instead.

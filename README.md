@@ -9,7 +9,7 @@ the same intended organization and runtime, not two separate products.
 Teaser builds on the server, TUI, terminal, and agent integration work of the
 [Herdr contributors](https://github.com/herdrdev/herdr/graphs/contributors).
 Our imported baseline is [Herdr v0.9.1](https://github.com/herdrdev/herdr/releases/tag/v0.9.1);
-the exact revision is recorded in [upstream provenance](runtime/upstream.toml).
+the exact revision is recorded in [upstream provenance](src/runtime/upstream.toml).
 Teaser is an independent fork, not an official or endorsed Herdr distribution.
 
 > Current state: the Herdr v0.9.1 server/TUI source and full history are imported.
@@ -52,19 +52,27 @@ geometry tests.
 
 ## Source layout
 
+Source code, retained experiments, and vendored dependencies live under `src/`.
+Root manifests remain the Cargo/SwiftPM entry points. `project.yml` declares the
+native App; `Teaser.xcworkspace` shares the root dependency lockfile. Run the
+commands below from the repository root.
+
 | Path | Role |
 | --- | --- |
-| `runtime/herdr` | Editable Herdr server/TUI fork, with upstream source and tests |
-| `runtime/upstream.toml` | Exact imported baseline and provenance |
-| `crates/teaser-core` | Shared organization model and atomic transitions |
-| `app/macos` and `Package.swift` | Native App, adapters, and headless harnesses |
+| `src/runtime/herdr` | Editable Herdr server/TUI fork, with upstream source and tests |
+| `src/runtime/upstream.toml` | Exact imported baseline and provenance |
+| `src/crates/teaser-core` | Shared organization model and atomic transitions |
+| `src/app/macos` and `Package.swift` | Shared native module, adapters, and headless harnesses |
+| `project.yml` and `Teaser.xcworkspace` | XcodeGen App target and shared dependency lock |
+| `src/probes` | Isolated dependency compatibility probes |
 | `notes` | Canonical project documents in the Obsidian vault submodule |
-| `prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
-| `vendor/ghostty` and `patches/ghostty` | Retained native attachment experiment |
+| `src/prototypes/attachment-runtime` | Retired self-built PTY runtime, outside the active workspace |
+| `src/vendor/ghostty` and `src/patches/ghostty` | Retained native attachment experiment |
 
 The fork uses a history-preserving Git subtree, not an installed Herdr binary or
 a read-only submodule. It keeps the `Acture/teaser` repository and macOS history.
-This does not change GitHub's fork-network metadata.
+The current subtree prefix is `src/runtime/herdr`; older `runtime/herdr` examples
+must use this new prefix. This does not change GitHub's fork-network metadata.
 
 See the [documentation index](notes/README.md),
 [Architecture](notes/docs/architecture.md),
@@ -114,7 +122,7 @@ and before reading notes at the start of a session, use the refresh workflow
 below. A changed `notes` gitlink is expected when the branch has advanced; do not
 hide it with an ignore setting. If fetching fails, report that the notes could
 not be refreshed instead of calling the cached checkout "latest". A code-only
-clone can omit notes; see [vendor instructions](vendor/README.md) for Ghostty.
+clone can omit notes; see [vendor instructions](src/vendor/README.md) for Ghostty.
 
 ### Refresh notes before daily work
 
@@ -201,8 +209,8 @@ second editable copy at the retired document paths.
 ## Development
 
 The runtime requires **Rust 1.96.1 and Zig 0.16.0**. Swift harnesses require
-Swift 6.2 or newer; App packaging also needs Xcode and a stable Apple Development
-or Developer ID signing identity.
+Swift 6.2 or newer; App packaging also needs Xcode, XcodeGen 2.46.0 or newer,
+direnv, and a stable Apple Development or Developer ID signing identity.
 
 Run production Cargo commands from the repository root:
 
@@ -224,7 +232,19 @@ explicitly applies the same vendored `portable-pty` patch. Root `Cargo.lock` is
 authoritative. The nested lockfile is retained upstream material, not a second
 Teaser dependency authority.
 
-Native checks and packaging remain separate:
+### Native App and tests
+
+SwiftPM owns `TeaserKit`, its C accessibility bridge, dependencies, and headless
+tests. XcodeGen declares only the native `Teaser` App target and its root notices.
+Xcode handles the App bundle, package resource bundles, Info.plist, and signing;
+there is no separate hand-written packaging script or SwiftPM App executable.
+
+Install XcodeGen with `brew install xcodegen`. Generate the ignored project with
+`xcodegen generate --no-env`; regenerate after changing `project.yml` or adding
+launcher files. Do not edit or commit `Teaser.xcodeproj`. Open
+`Teaser.xcworkspace`, not the generated project alone: its
+`xcshareddata/swiftpm/Package.resolved` is a symlink to the root lockfile, so Xcode
+and SwiftPM use one dependency version source. Do not replace it with a copy.
 
 Before packaging, put the signing identity in the local, Git-ignored `.env`.
 The checked-in `.envrc` loads it through direnv. For a new checkout, copy the
@@ -242,18 +262,47 @@ Never commit `.env` or a personal signing identity.
 
 With the fish direnv hook enabled, entering this directory loads `.env` and
 leaving restores the previous environment. If needed, enable the hook once in
-the fish configuration with `direnv hook fish | source`. Noninteractive commands
-can use `direnv exec . fish scripts/app.fish --build-only` without a shell hook.
-Then run the native checks or build:
+the fish configuration with `direnv hook fish | source`. `direnv exec` also works
+without a shell hook. Xcode expands `$(TEASER_CODESIGN_IDENTITY)` at build time;
+the generated project contains no personal identity. GUI builds need Xcode to
+inherit that environment too; the CLI command below is the reproducible entry.
+
+Run native tests independently, then explicitly build the App (no UI is opened):
 
 ```fish
 swift run TeaserWindowAdoptionTests
-fish scripts/app.fish --build-only
+swift run TeaserBundleTests
+xcodegen generate --no-env
+direnv exec . xcodebuild -workspace Teaser.xcworkspace -scheme Teaser \
+    -configuration Debug -destination 'platform=macOS' \
+    -derivedDataPath target/xcode -clonedSourcePackagesDirPath .build \
+    -disableAutomaticPackageResolution -skipPackageUpdates build
 ```
 
-`--build-only` produces `target/macos/Teaser.app` without launching it and requires
-`TEASER_CODESIGN_IDENTITY`. The eleven Swift suites are executable harnesses,
-not `swift test` targets. Headless tests must not create windows, install global
+The product is `target/xcode/Build/Products/Debug/Teaser.app`; the old
+`target/macos/Teaser.app` is not updated by this workflow. For Release builds, use
+`-configuration Release` and the sibling `Release` product directory. Neither
+command opens the App. Stable signing remains required; never pass
+`CODE_SIGNING_ALLOWED=NO` or an ad-hoc identity as a successful packaging check.
+
+Validate the signed product and exercise its bundled resources without creating
+NSApplication or observing the desktop:
+
+```fish
+codesign --verify --deep --strict \
+    -R '=anchor apple generic and identifier "com.acture.teaser"' \
+    target/xcode/Build/Products/Debug/Teaser.app
+target/xcode/Build/Products/Debug/Teaser.app/Contents/MacOS/Teaser --check-bundle-resources
+```
+
+The signature requirement rejects unsigned/ad-hoc code and a different bundle
+identifier, even if a local Xcode override allowed such a build. It does not
+replace notarization or guarantee that an identity change preserves existing
+Accessibility approval. Keep the same configured certificate.
+
+The resource check covers license/notices and the upstream KeyboardShortcuts
+localization accessor. The twelve Swift suites are executable harnesses, not
+`swift test` targets. Headless tests must not create windows, install global
 monitors, request Accessibility, or move user windows.
 
 The full gate is:
@@ -263,20 +312,21 @@ pre-commit install
 pre-commit run --all-files --hook-stage pre-push
 ```
 
-It includes runtime Rust checks, native harnesses, App packaging, and retained
-Ghostty patch applicability. Initialize the legacy Ghostty submodule only for its
-checks; see [dependency/probe instructions](vendor/README.md). First builds can
+It includes runtime Rust checks, native harnesses, XcodeGen generation, signed
+App packaging/resource checks, and retained Ghostty patch applicability.
+Initialize the legacy Ghostty submodule only for its checks; see
+[dependency/probe instructions](src/vendor/README.md). First builds can
 download and compile substantial dependencies. A manifest/format check is not a
 completed build.
 
 ### Isolated native integration session
 
 Use a disposable development server, not an installed Herdr session. Build the
-runtime and App explicitly; these commands may take time:
+App with the XcodeGen/Xcode command above, then build the runtime explicitly;
+these builds may take time:
 
 ```fish
 cargo build --locked -p herdr
-direnv exec . fish scripts/app.fish --build-only
 ```
 
 In one terminal, start the debug server with isolated configuration, state and
@@ -323,7 +373,7 @@ Follow the explicit subtree update procedure in
 automatically follow upstream master or activate its release automation.
 
 Teaser-owned code retains [AGPL-3.0-or-later](LICENSE). Inherited Herdr code retains
-[Apache-2.0](runtime/herdr/LICENSE); vendored dependencies retain their own
+[Apache-2.0](src/runtime/herdr/LICENSE); vendored dependencies retain their own
 licenses. Preserve [NOTICE](NOTICE), [third-party notices](THIRD_PARTY_NOTICES.md),
 and the [trademark policy](TRADEMARKS.md). Teaser is independent of Herdr; the
 import does not imply endorsement or relicense inherited code.

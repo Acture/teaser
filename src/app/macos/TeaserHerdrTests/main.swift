@@ -42,10 +42,10 @@ final class FixtureClient {
 }
 
 func fixture() throws -> OrganizationSnapshot {
-	let root: URL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+	let sourceRoot: URL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 		.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 	return try JSONDecoder().decode(OrganizationSnapshot.self,
-		from: Data(contentsOf: root.appendingPathComponent("crates/teaser-core/tests/fixtures/organization.json")))
+		from: Data(contentsOf: sourceRoot.appendingPathComponent("crates/teaser-core/tests/fixtures/organization.json")))
 }
 
 func revision(_ snapshot: OrganizationSnapshot, _ revision: UInt64) -> OrganizationSnapshot {

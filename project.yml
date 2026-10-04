@@ -1,0 +1,47 @@
+name: Teaser
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  TeaserModules:
+    path: .
+targets:
+  Teaser:
+    type: application
+    platform: macOS
+    sources:
+      - path: src/app/macos/TeaserLauncher
+      - path: LICENSE
+        buildPhase: resources
+      - path: NOTICE
+        buildPhase: resources
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
+      - path: TRADEMARKS.md
+        buildPhase: resources
+    dependencies:
+      - package: TeaserModules
+        product: TeaserKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.acture.teaser
+        INFOPLIST_FILE: src/app/macos/Teaser/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "$(TEASER_CODESIGN_IDENTITY)"
+        CODE_SIGNING_REQUIRED: YES
+        CODE_SIGNING_ALLOWED: YES
+        ENABLE_APP_SANDBOX: NO
+schemes:
+  Teaser:
+    build:
+      targets:
+        Teaser: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -2,7 +2,7 @@
 
 This describes the retired attachment-runtime prototype, not the Herdr fork.
 The following command is run from this prototype's workspace root
-(`prototypes/attachment-runtime`), never as the production Teaser server.
+(`src/prototypes/attachment-runtime`), never as the production Teaser server.
 Do not start it as a second session authority alongside Herdr.
 
 `teaserd` listens on

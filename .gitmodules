@@ -1,5 +1,5 @@
 [submodule "vendor/ghostty"]
-	path = vendor/ghostty
+	path = src/vendor/ghostty
 	url = https://github.com/ghostty-org/ghostty.git
 [submodule "notes"]
 	path = notes

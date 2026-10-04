@@ -14,7 +14,7 @@ One current-state source per concern:
 - `notes/CONTEXT.md`: canonical domain terminology.
 - `notes/docs/architecture.md`: architecture and upstream maintenance.
 - `notes/docs/ipc.md`: current protocol boundary and planned extensions.
-- `runtime/upstream.toml`: exact fork provenance.
+- `src/runtime/upstream.toml`: exact fork provenance.
 - `notes/ROADMAP.md`: delivery outcomes and exit gates, not a second tracker.
 - `notes/plan/architecture-teaser-platform-1.md`: implementation contracts.
 - Linear: active tasks, dependencies, blockers, and execution status.
@@ -62,19 +62,28 @@ of this workflow.
 
 ## Source structure
 
-`runtime/herdr` is an editable, full-history subtree of the pinned upstream. Root
-Cargo builds this runtime/TUI; its vendored portable-pty patch is repeated at the
-workspace root. The root lockfile is authoritative; nested lockfiles record the
-inherited source. Never activate upstream release automation for Teaser or push
-to the upstream remote. Follow the explicit subtree update procedure.
+Keep product source, probes, prototypes, vendored source, and their patches under
+`src/`. Root Cargo/SwiftPM manifests and `project.yml` remain build entry points.
+Do not restore old root-level source directories or compatibility symlinks.
 
-`crates/teaser-core` owns pure organization transitions; the runtime exposes
+`src/runtime/herdr` is an editable, full-history subtree of the pinned upstream.
+Root Cargo builds this runtime/TUI; its vendored portable-pty patch is repeated
+at the workspace root. The root lockfile is authoritative; nested lockfiles
+record the inherited source. Never activate upstream release automation for
+Teaser or push to the upstream remote. Follow the explicit subtree update
+procedure with prefix `src/runtime/herdr`, not the old `runtime/herdr` path.
+
+`src/crates/teaser-core` owns pure organization transitions; the runtime exposes
 revisioned JSON commands/events and persists that state. Inherited terminal
 workspace/tab containers are not Teaser logical groups; TUI projection is pending.
 
-`app/macos/Teaser` and `Package.swift` contain the Swift/AppKit client and
-eleven headless executable harnesses. Its Herdr connection is explicit, does not
-start a server or request Accessibility, and has no local organization fallback.
+`src/app/macos/Teaser` and `Package.swift` contain the Swift/AppKit client and
+twelve headless executable harnesses. `TeaserKit` is a SwiftPM library consumed
+by the thin XcodeGen App target; do not duplicate its source/dependency list in
+`project.yml` or add a second SwiftPM App executable. `Teaser.xcworkspace` links
+its resolved-package file to the root lockfile; preserve this single source.
+Its Herdr connection is explicit, does not start a server or request
+Accessibility, and has no local organization fallback.
 Publishing the canvas's own accessibility tree is the opposite direction and
 needs no permission; do not confuse it with requesting the service.
 Terminal bindings are metadata, not native interactive terminal rendering.
@@ -83,7 +92,7 @@ belongs to persistence. Do not infer real-window adoption from pure geometry tes
 presentation files and connection-scoped Notes archives; do not transplant local
 leases/content across connections using only a matching socket path or object ID.
 
-`prototypes/attachment-runtime` is the retired self-built Rust runtime. It and
+`src/prototypes/attachment-runtime` is the retired self-built Rust runtime. It and
 the root Ghostty submodule/patches are retained experiments, not a second
 production backend. Do not add new product behavior or compatibility aliases
 there. Remove superseded adapters when their replacement integration lands.
@@ -95,8 +104,8 @@ one `Teaser.app`, not a separate demo app.
 
 ## Build and test
 
-Runtime: Rust 1.96.1 and Zig 0.16.0. Native: Swift 6.2+, Xcode, and a stable
-signing identity for App packaging. From the repository root:
+Runtime: Rust 1.96.1 and Zig 0.16.0. Native: Swift 6.2+, Xcode, XcodeGen 2.46.0+,
+direnv, and a stable signing identity for App packaging. From the repository root:
 
 ```fish
 cargo build --locked -p herdr
@@ -104,14 +113,26 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --locked
 swift run TeaserWindowAdoptionTests
-fish scripts/app.fish --build-only
+swift run TeaserBundleTests
+xcodegen generate --no-env
+direnv exec . xcodebuild -workspace Teaser.xcworkspace -scheme Teaser \
+    -configuration Debug -destination 'platform=macOS' \
+    -derivedDataPath target/xcode -clonedSourcePackagesDirPath .build \
+    -disableAutomaticPackageResolution -skipPackageUpdates build
+codesign --verify --deep --strict \
+    -R '=anchor apple generic and identifier "com.acture.teaser"' \
+    target/xcode/Build/Products/Debug/Teaser.app
+target/xcode/Build/Products/Debug/Teaser.app/Contents/MacOS/Teaser --check-bundle-resources
 pre-commit run --all-files --hook-stage pre-push
 ```
 
 Install both Git hook stages with `pre-commit install`. Swift tests are executable
-harnesses, not `swift test` targets. `--build-only` creates
-`target/macos/Teaser.app` without launching it and requires
-`TEASER_CODESIGN_IDENTITY`. Do not claim a manifest check proves compilation.
+harnesses, not `swift test` targets. Xcode owns the App bundle and signing, using
+`TEASER_CODESIGN_IDENTITY` loaded by direnv from the ignored `.env`. Never select
+another identity automatically or accept ad-hoc/disabled signing as a passed
+packaging gate. Generated `Teaser.xcodeproj` and `target/xcode` stay ignored.
+No build command opens the App. Do not claim project generation or build-settings
+inspection proves compilation, signing, or resource validation.
 Give long toolchain/dependency downloads and full-build commands to the user to
 run manually; do not launch them implicitly during a migration check.
 

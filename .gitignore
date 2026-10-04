@@ -19,6 +19,9 @@ target/
 zig-out/
 
 # Xcode / Swift
+/Teaser.xcodeproj/
+/Teaser.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+/Teaser.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
 DerivedData/
 .build/
 *.xcuserstate
