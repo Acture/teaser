@@ -211,6 +211,10 @@ second editable copy at the retired document paths.
 The runtime requires **Rust 1.96.1 and Zig 0.16.0**. Swift harnesses require
 Swift 6.2 or newer; App packaging also needs Xcode, XcodeGen 2.46.0 or newer,
 direnv, and a stable Apple Development or Developer ID signing identity.
+Runtime tests use Herdr's process-isolated nextest runner; install it with
+`brew install cargo-nextest`. Plain `cargo test` shares process-global signal
+state between tests and is not the full runtime gate. The gate limits concurrency
+to four cases because integration tests spawn their own subprocesses.
 
 Run production Cargo commands from the repository root:
 
@@ -218,7 +222,7 @@ Run production Cargo commands from the repository root:
 cargo build --locked -p herdr
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-targets --locked
+cargo nextest run --workspace --all-targets --locked --test-threads 4
 ```
 
 The inherited binary is still named `herdr`. Its configuration, session names,

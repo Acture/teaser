@@ -44,8 +44,11 @@ repos:
         files: (\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)
 
       - id: cargo-test
-        name: cargo test
-        entry: cargo test --workspace --all-targets --locked
+        name: cargo nextest
+        # Herdr tests exercise process-global signal state; use its upstream
+        # process-per-test runner, not a shared cargo test process.
+        # Bound subprocess-heavy integration tests to four concurrent cases.
+        entry: cargo nextest run --workspace --all-targets --locked --test-threads 4 --status-level fail --final-status-level fail --failure-output final --success-output never
         language: system
         pass_filenames: false
         files: (\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)

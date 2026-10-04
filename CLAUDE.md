@@ -104,14 +104,18 @@ one `Teaser.app`, not a separate demo app.
 
 ## Build and test
 
-Runtime: Rust 1.96.1 and Zig 0.16.0. Native: Swift 6.2+, Xcode, XcodeGen 2.46.0+,
-direnv, and a stable signing identity for App packaging. From the repository root:
+Runtime: Rust 1.96.1, Zig 0.16.0, and cargo-nextest. Native: Swift 6.2+, Xcode,
+XcodeGen 2.46.0+, direnv, and a stable signing identity for App packaging.
+Use Herdr's process-per-test runner: its tests exercise process-global signal
+state, so a shared `cargo test` process is not the full runtime gate.
+Bound its subprocess-heavy integration suite to four concurrent tests.
+From the repository root:
 
 ```fish
 cargo build --locked -p herdr
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-targets --locked
+cargo nextest run --workspace --all-targets --locked --test-threads 4
 swift run TeaserWindowAdoptionTests
 swift run TeaserBundleTests
 xcodegen generate --no-env
